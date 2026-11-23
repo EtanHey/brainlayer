@@ -159,7 +159,7 @@ class DriveRetentionPolicy:
 
 
 DAILY_RETENTION = DriveRetentionPolicy(keep_latest=DEFAULT_DRIVE_KEEP)
-# Daily and weekly jobs share one Drive folder, so both use the same opt-in Drive cap.
+# Daily and weekly jobs share the same per-machine verified-daily Drive cap.
 WEEKLY_RETENTION = DriveRetentionPolicy(keep_latest=DEFAULT_DRIVE_KEEP)
 
 
@@ -2766,7 +2766,7 @@ def _list_drive_backup_files(service: Any, folder_id: str) -> list[dict[str, Any
             .list(
                 q=f"'{_escape_drive_query_value(folder_id)}' in parents and trashed = false",
                 spaces="drive",
-                fields="nextPageToken,files(id,name,appProperties)",
+                fields="nextPageToken,files(id,name,size,md5Checksum,parents,trashed,appProperties)",
                 pageSize=1000,
                 pageToken=page_token,
                 supportsAllDrives=True,
@@ -3207,42 +3207,13 @@ def prune_local_compressed_snapshots(
     verified_drive_names: set[str] | None = None,
     protected_names: set[str] | None = None,
 ) -> list[str]:
-    """Cap local .db.zst/.db.gz snapshots without deleting an archive lacking remote coverage.
+    """Legacy filename-only evidence cannot authorize local deletion.
 
-    The newest Drive-verified archive of EACH format is always kept, so switching
-    compressors (or rolling back) never deletes the last verified copy of either kind.
+    The receipt-and-live-inventory sweep in run_backup owns local retention.
     """
     if keep_latest < 1:
         raise ValueError("keep_latest must be at least 1")
-    output_dir = Path(output_dir).expanduser()
-    if not output_dir.exists():
-        return []
-
-    verified_names = verified_drive_names or set()
-    dated: list[tuple[dt.date, Path]] = []
-    for path in output_dir.iterdir():
-        parsed = _parse_snapshot_date(path.name)
-        if parsed and path.is_file():
-            dated.append((parsed, path))
-
-    dated.sort(key=lambda pair: (pair[0], pair[1].name), reverse=True)
-    newest_verified_per_kind: dict[str, str] = {}
-    for _, path in dated:
-        kind = _snapshot_suffix(path.name)
-        if kind is not None and path.name in verified_names:
-            newest_verified_per_kind.setdefault(kind, path.name)
-    deleted: list[str] = []
-    for index, (snapshot_date, path) in enumerate(dated):
-        if index < keep_latest or path.name in newest_verified_per_kind.values():
-            continue
-        if path.name in (protected_names if protected_names is not None else _protected_snapshot_names(output_dir)):
-            continue
-        newer_verified = sum(name > path.name for name in verified_names)
-        if path.name not in verified_names and newer_verified < keep_latest:
-            continue
-        path.unlink(missing_ok=True)
-        deleted.append(path.name)
-    return deleted
+    return []
 
 
 # Pre-zstd name, kept for callers and tests that still import it.
@@ -3272,10 +3243,22 @@ def _env_flag_enabled(name: str) -> bool:
 
 
 def _drive_retention_enabled() -> bool:
-    return DRIVE_RETENTION_ENABLED or os.environ.get(BACKUP_DRIVE_RETENTION_ENV, "").strip().lower() in {
-        "1",
-        "true",
-    }
+    return False  # Orc/Etan 2026-11-22: environment flags cannot authorize Drive changes.
+
+
+def _retention_count(name: str, default: int) -> int:
+    value = int(os.environ.get(name, default))
+    if value < 1:
+        raise ValueError(f"{name} must be at least 1")
+    return value
+
+
+def _local_retention_keep() -> int:
+    from .backup_heavy_gate import _host
+
+    if _host(strict=True) == "m4":
+        return _retention_count("BRAINLAYER_BACKUP_LOCAL_KEEP_M4", 1)
+    return _retention_count("BRAINLAYER_BACKUP_LOCAL_KEEP", DEFAULT_LOCAL_COMPRESSED_KEEP)
 
 
 def _should_run_full_verify(date_stamp: str | None) -> bool:
@@ -3416,55 +3399,15 @@ def prune_drive_backups(
     selected_folder_id: str | None = None,
     retention_policy: DriveRetentionPolicy = DAILY_RETENTION,
     verified_file_ids: set[str] | frozenset[str] | None = None,
+    verified_receipts: list[Mapping[str, Any]] | None = None,
+    protected_names: set[str] | None = None,
 ) -> list[str]:
-    """Trash Drive snapshots older than the explicitly enabled retention window.
+    """Compatibility no-op: Drive changes require Etan's separate authorization.
 
-    `verified_file_ids` is receipt evidence (see `_verified_drive_file_ids`) naming the
-    exact Drive objects whose upload verified. For each format (.db.zst / .db.gz) the
-    newest object in that set is never trashed; a format with no verified object in the
-    listing has nothing trashed at all. No evidence (None or empty) trashes nothing.
+    Neither an environment opt-in nor verified receipts authorize remote cleanup.
+    Pure reporting lives in backup_retention; this function never contacts Drive.
     """
-    if machine_id is not None and folder_parts is None:
-        folder_id = selected_folder_id or ensure_drive_folder_chain(service, default_drive_folder_parts(machine_id))
-        files = _list_machine_retention_backups(service, folder_id=folder_id, machine_id=machine_id)
-    else:
-        folder_id = ensure_drive_folder_chain(
-            service, folder_parts if folder_parts is not None else DEFAULT_FOLDER_PARTS
-        )
-        files = _list_drive_backup_files(service, folder_id)
-    dated = []
-    for item in files:
-        parsed = _parse_snapshot_date(
-            item.get("name", ""),
-            prefix=retention_policy.filename_prefix,
-            suffix=retention_policy.filename_suffix,
-        )
-        if parsed:
-            dated.append((parsed, item))
-
-    dated.sort(key=lambda pair: (pair[0], pair[1].get("name", "")), reverse=True)
-    keep_ids = {item["id"] for _, item in dated[: retention_policy.keep_latest]}
-    # Never trash the newest VERIFIED object of either format, bound to its Drive file ID.
-    # The listing carries no verification evidence, so a newer upload that failed
-    # verification must not stand in for the last good copy (r1 review, #1421).
-    verified = verified_file_ids or frozenset()
-    newest_verified_per_kind: dict[str | None, str] = {}
-    for _, item in dated:
-        if item["id"] in verified:
-            newest_verified_per_kind.setdefault(_snapshot_suffix(item.get("name", "")), item["id"])
-    keep_ids |= set(newest_verified_per_kind.values())
-
-    trashed: list[str] = []
-    for _, item in dated:
-        if item["id"] in keep_ids or _snapshot_suffix(item.get("name", "")) not in newest_verified_per_kind:
-            continue
-        service.files().update(
-            fileId=item["id"],
-            body={"trashed": True},
-            supportsAllDrives=True,
-        ).execute()
-        trashed.append(item["name"])
-    return trashed
+    return []
 
 
 def _verified_drive_file_ids(log_path: Path) -> set[str] | None:
@@ -3628,12 +3571,12 @@ def _recent_local_verified_backup(
 
 
 def _weekly_pin_protection(staging_dir: Path) -> tuple[set[str], str | None]:
-    """No snapshot-bound completion receipt exists; weekly custody expires the next day."""
+    """A recorded weekly pin remains protected until its owner replaces/removes it."""
     pin = staging_dir / ".weekly-backup-pin.json"
     try:
         payload = json.loads(pin.read_text())
-        if dt.date.fromisoformat(payload["date"]) == local_backup_date():
-            return {Path(payload["snapshot"]).name}, "weekly_pin_pending"
+        dt.date.fromisoformat(payload["date"])
+        return {Path(payload["snapshot"]).name}, "weekly_pin_pending"
     except FileNotFoundError:
         pass
     except (OSError, ValueError, KeyError, TypeError):
@@ -3645,6 +3588,21 @@ def _weekly_pin_protection(staging_dir: Path) -> tuple[set[str], str | None]:
 
 def _protected_snapshot_names(staging_dir: Path) -> set[str]:
     return _weekly_pin_protection(staging_dir)[0]
+
+
+def _one_off_copies(staging_dir: Path, receipt: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Report superseded migration copies using metadata only; never delete them."""
+    created = _snapshot_created_time(receipt)
+    if receipt.get("verified") is not True or created is None:
+        return []
+    copies = []
+    for path in sorted(staging_dir.glob("*-pre-*.db")):
+        if path.is_symlink() or not path.is_file():
+            continue
+        stat = path.stat()
+        if stat.st_mtime < created.timestamp():
+            copies.append({"path": str(path), "bytes": stat.st_size, "superseded_by": receipt["snapshot"]})
+    return copies
 
 
 def _archive_drive_md5_matches(receipt: Mapping[str, Any]) -> bool:
@@ -3659,10 +3617,40 @@ def _archive_drive_md5_matches(receipt: Mapping[str, Any]) -> bool:
     )
 
 
+def _local_retention_deferred(context: Mapping[str, Any], error: Exception) -> None:
+    from . import job_alerts
+
+    reason = _redact_upload_secrets(str(error))
+    if isinstance(context, dict):
+        context.update(
+            local_retention_inventory="unmeasurable", retention_error_type=type(error).__name__, retention_error=reason
+        )
+    print(f"Local retention deferred; archives kept: {reason}", flush=True)
+    try:
+        job_alerts.report(
+            "backup-retention",
+            "Local retention deferred: " + reason,
+            path=job_alerts.alert_path(db_path=Path(context["db"])),
+            replace_reason=True,
+        )
+    except Exception as exc:
+        if isinstance(context, dict):
+            context["retention_alert_error"] = _redact_upload_secrets(str(exc))
+
+
 def _sweep_verified_local_archives(
-    log_path: Path, staging_dir: Path, context: Mapping[str, Any], *, remove_local: bool
+    log_path: Path,
+    staging_dir: Path,
+    context: Mapping[str, Any],
+    *,
+    remove_local: bool,
+    live_files: list[Mapping[str, Any]] | None = None,
+    folder_id: str | None = None,
 ) -> list[str]:
-    """Remove older archives only with latest, matching Drive proof, under the job's lock."""
+    """Local-only cleanup requires this same snapshot live in a fresh Drive listing."""
+    if live_files is None or folder_id is None or not isinstance(context.get("machine_id"), str):
+        print("Local retention deferred: live Drive evidence unavailable; keeping archives", flush=True)
+        return []
     if not log_path.exists():
         return []
     try:
@@ -3676,8 +3664,39 @@ def _sweep_verified_local_archives(
     last_sweep = {
         r["archive"]: r for r in receipts if r.get("event") == "local_sweep" and isinstance(r.get("archive"), str)
     }
-    verified_ids = _verified_drive_file_ids(log_path) or set()
+    from .backup_retention import matching_verified_dailies
+
+    verified_ids = {
+        item["id"]
+        for item in matching_verified_dailies(
+            live_files, receipts, machine_id=context["machine_id"], folder_id=folder_id
+        )
+    }
     protected, pin_reason = _weekly_pin_protection(staging_dir)
+    from .backup_retention import local_keep_names
+
+    if pin_reason == "pin_unreadable":
+        _local_retention_deferred(context, ValueError("Cannot read weekly pin; retaining all local archives"))
+        return []
+    try:
+        verified_names = {
+            Path(r["snapshot"]).name
+            for r in latest.values()
+            if r.get("db") == context.get("db")
+            and Path(r["snapshot"]).parent.resolve() == staging_dir.resolve()
+            and Path(r["snapshot"]).is_file()
+            and not Path(r["snapshot"]).is_symlink()
+            and r.get("uploaded") is True
+            and r.get("verified") is True
+            and _archive_drive_md5_matches(r)
+            and r["drive_file"].get("id") in verified_ids
+            and r["drive_file"].get("name") == Path(r["snapshot"]).name
+            and str(r["drive_file"].get("size")) == str(Path(r["snapshot"]).stat().st_size)
+        }
+        keep = local_keep_names(verified_names, verified_names, keep_latest=_local_retention_keep())
+    except (ValueError, OSError, subprocess.SubprocessError) as exc:
+        _local_retention_deferred(context, exc)
+        return []
     removed = []
     for receipt in latest.values():
         path = Path(receipt["snapshot"])
@@ -3712,14 +3731,25 @@ def _sweep_verified_local_archives(
             if not remove_local
             else pin_reason
             if path.name in protected
+            else "retention_keep"
+            if path.name in keep
             else None
         )
         if reason is None:
             try:
+                before_hash = path.stat(follow_symlinks=False)
                 if _md5_file(path) != drive["md5Checksum"]:
                     reason = "md5_current_mismatch"
                 else:
-                    path.unlink()
+                    after_hash = path.stat(follow_symlinks=False)
+
+                    def identity(st):
+                        return st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns
+
+                    if identity(before_hash) != identity(after_hash):
+                        reason = "local_identity_changed"
+                    else:
+                        path.unlink()
             except OSError as exc:
                 print(f"Cannot delete local archive {path}: {exc}", flush=True)
                 reason = "delete_failed"
@@ -3740,44 +3770,46 @@ def _sweep_verified_local_archives(
 
 
 def _reclaim_superseded_local(log_path: Path, result: dict[str, Any], staging_dir: Path) -> None:
-    if not (result.get("uploaded") is True and result.get("verified") is True):
+    """Close an abandoned upload's alert after new proof, retaining its local bytes."""
+    if result.get("uploaded") is not True or result.get("verified") is not True:
         return
     try:
         receipts = _read_backup_receipts(log_path, strict=True)
     except (OSError, ValueError):
-        print("Cannot validate local receipts; retaining all superseded artifacts", flush=True)
         return
     latest = {r["snapshot"]: r for r in receipts if isinstance(r.get("snapshot"), str)}
-    protected = _protected_snapshot_names(staging_dir) | {
-        Path(r["snapshot"]).name for r in receipts if r.get("verified") is True and isinstance(r.get("snapshot"), str)
-    }
+    protected = _protected_snapshot_names(staging_dir)
     for receipt in latest.values():
         path = Path(receipt["snapshot"])
         created, newer = _snapshot_created_time(receipt), _snapshot_created_time(result)
         if (
-            any(receipt.get(k) != result.get(k) for k in ("db", "machine_id", "drive_folder", "backup_log_provenance"))
+            receipt.get("upload_state") != "abandoned"
+            or receipt.get("local_verified") is True
+            or any(
+                receipt.get(k) != result.get(k) for k in ("db", "machine_id", "drive_folder", "backup_log_provenance")
+            )
             or path.parent.resolve() != staging_dir.resolve()
             or path.name in protected
             or created is None
             or newer is None
             or created >= newer
-            or receipt.get("uploaded") is True
-            and receipt.get("verified") is True
         ):
             continue
-        abandoned = receipt.get("upload_state") == "abandoned"
-        if not abandoned and not _local_snapshot_intact(receipt):
-            continue
-        if not abandoned:
-            path.unlink()
-            result.setdefault("superseded_stalled_deleted", []).append(path.name)
         terminal = {
             k: v for k, v in receipt.items() if k not in {"error", "error_type", "error_code", "verification_error"}
         }
         _append_json_log(
             log_path,
-            {**terminal, "local_verified": False, "upload_state": "superseded", "superseded_by": result["snapshot"]},
+            {
+                **terminal,
+                "local_verified": False,
+                "upload_state": "superseded",
+                "superseded_by": result["snapshot"],
+                "local_removed": False,
+                "local_removed_skip_reason": "unverified_retained",
+            },
         )
+        result.setdefault("superseded_stalled_retained", []).append(path.name)
 
 
 def _local_upload_receipt(
@@ -4031,29 +4063,8 @@ def _retained_target_collision(log_path: Path, target: Path) -> bool:
 
 
 def _remove_superseded_stalls(receipts: list[dict[str, Any]], result: dict[str, Any], date_stamp: str) -> None:
-    for receipt in receipts:
-        path = Path(receipt["snapshot"])
-        if not path.exists():
-            continue
-        try:
-            if (
-                path.name[:10] >= date_stamp
-                or _snapshot_created_time(receipt) is None
-                or _snapshot_created_time(result) is None
-                or _snapshot_created_time(receipt) >= _snapshot_created_time(result)
-                or path.is_symlink()
-                or path.stat().st_nlink != 1
-                or not _stalled_identity_confirmed(receipt)
-            ):
-                print(f"Retaining stalled backup without proof it is superseded: {path.name}", flush=True)
-                continue
-            if path.name in _protected_snapshot_names(path.parent):
-                continue
-            path.unlink()
-            result.setdefault("superseded_stalled_deleted", []).append(path.name)
-            print(f"Removed superseded stalled backup: {path.name}", flush=True)
-        except OSError:
-            print(f"Could not reclaim stalled backup: {path.name}; retaining it", flush=True)
+    """Unverified stalled archives stay; only the live-backed sweep may remove one."""
+    return None
 
 
 @_serialized_backup_run
@@ -4084,7 +4095,7 @@ def run_backup(
     resolved_db_path = db_path or get_db_path()
     resolved_date_stamp = date_stamp or _today()
     resolved_log_path = _backup_log_path(log_path, db_path=resolved_db_path)
-    retention_enabled = _drive_retention_enabled()
+    live_folder_id, live_files = None, None
     result: dict[str, Any] = {
         "attempted_at": dt.datetime.now(dt.UTC).isoformat(),
         "db": str(resolved_db_path),
@@ -4095,8 +4106,8 @@ def run_backup(
         "backup_log_provenance": _backup_log_provenance(),
         "attempt_reclamation": "unknown",
         "writer_probe_error": None,
-        "drive_retention": "enabled" if retention_enabled else "disabled",
-        "retention_mode": "trash",
+        "drive_retention": "disabled",
+        "retention_mode": "report-only",
         "retention_deleted": [],
         "local_gzip_retention_deleted": [],
     }
@@ -4141,6 +4152,67 @@ def run_backup(
             }
         )
 
+    def refresh_drive_inventory() -> tuple[str | None, list[Mapping[str, Any]] | None]:
+        """Read a fresh existing folder; this path has no Drive mutation API."""
+        from . import job_alerts
+        from .backup_retention import daily_date, drive_retention_report, verified_drive_receipts
+
+        try:
+            if not remove_local_after_upload:
+                result["local_retention_inventory"] = "opt_out"
+                return None, None
+            keep_latest = _local_retention_keep()
+            if _weekly_pin_protection(Path(staging_dir))[1] == "pin_unreadable":
+                raise ValueError("Cannot read weekly pin; retaining all local archives")
+            receipts = _read_backup_receipts(resolved_log_path, strict=True) if resolved_log_path.exists() else []
+            proven_names = {
+                Path(r["snapshot"]).name
+                for r in verified_drive_receipts(receipts).values()
+                if r.get("db") == str(resolved_db_path)
+                and isinstance(r.get("snapshot"), str)
+                and Path(r["snapshot"]).parent.resolve() == Path(staging_dir).resolve()
+                and daily_date(Path(r["snapshot"]).name) is not None
+                and Path(r["snapshot"]).is_file()
+                and not Path(r["snapshot"]).is_symlink()
+            }
+            if len(proven_names) <= keep_latest:
+                result["local_retention_inventory"] = "within_cap"
+                return None, None  # A live listing cannot authorize deleting the kept cohort.
+            inventory_service = build_drive_service()
+            folders = _find_drive_folder_ids(inventory_service, resolved_folder_parts)
+            if len(folders) != 1:
+                raise ValueError("Cannot establish one existing machine backup folder")
+            inventory = _list_drive_backup_files(inventory_service, folders[0])
+            result["drive_retention_report"] = drive_retention_report(
+                inventory, machine_id=result["machine_id"], folder_id=folders[0], as_of=local_backup_date()
+            )
+            result["local_retention_inventory"] = "measured"
+        except (BackupStoppedError, BackupTimeoutError):
+            raise
+        except Exception as exc:
+            result.pop("drive_retention_report", None)
+            result.update(
+                local_retention_inventory="unmeasurable",
+                retention_error_type=type(exc).__name__,
+                retention_error=_redact_upload_secrets(str(exc)),
+            )
+            print(f"Local retention deferred; archives kept: {result['retention_error']}", flush=True)
+            try:
+                job_alerts.report(
+                    "backup-retention",
+                    "Local retention deferred: " + result["retention_error"],
+                    path=job_alerts.alert_path(db_path=Path(resolved_db_path)),
+                    replace_reason=True,
+                )
+            except Exception as alert_exc:
+                result["retention_alert_error"] = _redact_upload_secrets(str(alert_exc))
+            return None, None
+        try:
+            job_alerts.report("backup-retention", None, path=job_alerts.alert_path(db_path=Path(resolved_db_path)))
+        except Exception as alert_exc:
+            result["retention_alert_error"] = _redact_upload_secrets(str(alert_exc))
+        return folders[0], inventory
+
     def reuse(receipt: Mapping[str, Any]) -> dict[str, Any]:
         # Probe before copying historical success flags: an auth failure must be a
         # current failure receipt, not a newly dated claim that Drive worked.
@@ -4148,10 +4220,18 @@ def run_backup(
             get_drive_credentials()
         attempted_at = result["attempted_at"]
         # The receipt records THIS run's process policy (S3); an earlier run's must not leak in.
-        dropped = {"backup_invocation_id", "drive_auth_probe", *_POLICY_RECEIPT_KEYS}
+        dropped = {
+            "backup_invocation_id",
+            "drive_auth_probe",
+            "drive_retention_report",
+            "retention_error",
+            "retention_error_type",
+            *_POLICY_RECEIPT_KEYS,
+        }
         result.update({k: v for k, v in receipt.items() if k not in dropped})
         result.update(io_policy or {"io_policy": "unknown"})
         result.update(status="reused", attempted_at=attempted_at)
+        result.update(drive_retention="disabled", retention_mode="report-only", retention_deleted=[])
         if upload:
             result["drive_auth_probe"] = "ok"
         return result
@@ -4181,8 +4261,19 @@ def run_backup(
         )
         if remote is not None and phase == "all":
             return reuse(remote)
-        result["local_gzip_retention_deleted"] = _sweep_verified_local_archives(
-            resolved_log_path, Path(staging_dir), result, remove_local=remove_local_after_upload
+        if upload and resolved_log_path.exists():
+            live_folder_id, live_files = refresh_drive_inventory()
+        result["local_gzip_retention_deleted"] = (
+            _sweep_verified_local_archives(
+                resolved_log_path,
+                Path(staging_dir),
+                result,
+                remove_local=remove_local_after_upload,
+                live_files=live_files,
+                folder_id=live_folder_id,
+            )
+            if live_files is not None
+            else []
         )
         result["consumed_raw_crash_leftovers_deleted"] = _cleanup_consumed_raw_remnants(Path(staging_dir))
         if resolved_log_path.exists():
@@ -4604,7 +4695,7 @@ def run_backup(
                     if not remove_local_after_upload
                     else pin_reason
                     if snapshot.name in protected
-                    else None
+                    else "retention_keep"
                 )
                 _append_json_log(resolved_log_path, result)  # remote proof precedes reclamation
                 _reclaim_superseded_local(resolved_log_path, result, snapshot.parent)
@@ -4616,35 +4707,13 @@ def run_backup(
                 result["temp_dirs_removed_after_verification"] = _prune_owned_temps_after_verified(
                     snapshot.parent, snapshot
                 )
-                if result["local_removed_skip_reason"] is None:
-                    try:
-                        snapshot.unlink()
-                    except OSError as exc:
-                        print(f"Cannot delete local archive {snapshot}: {exc}", flush=True)
-                        result["local_removed_skip_reason"] = "delete_failed"
-                    else:
-                        result["local_removed"] = True
+                try:
+                    result["one_off_copies"] = _one_off_copies(snapshot.parent, result)
+                except OSError as exc:
+                    result["one_off_copies_error"] = _redact_upload_secrets(str(exc))
+                    print(f"Cannot inventory migration copies: {result['one_off_copies_error']}", flush=True)
                 if resume is None:
                     _remove_superseded_stalls(stalled, result, snapshot.name[:10])
-                if retention_enabled:
-                    try:
-                        result["retention_deleted"] = prune_drive_backups(
-                            service,
-                            folder_parts=resolved_folder_parts if folder_parts is not None else None,
-                            machine_id=resolved_machine_id,
-                            selected_folder_id=folder_id,
-                            retention_policy=retention_policy,
-                            verified_file_ids=_verified_drive_file_ids(resolved_log_path),
-                        )
-                    except Exception as exc:
-                        result.update(
-                            {
-                                "retention_error_type": type(exc).__name__,
-                                "retention_error": _redact_upload_secrets(str(exc)),
-                            }
-                        )
-                        raise
-
     except BackupStoppedError as exc:
         result.update(
             {
@@ -4698,13 +4767,29 @@ def run_backup(
             result.setdefault("error_code", "drive_upload_interrupted")
         if not nothing_pending:
             _append_json_log(resolved_log_path, result)
-        swept = _sweep_verified_local_archives(
-            resolved_log_path, Path(staging_dir), result, remove_local=remove_local_after_upload
+        before_retention = dict(result)
+        if upload and result["uploaded"] and result["verified"] and not nothing_pending:
+            live_folder_id, live_files = refresh_drive_inventory()
+        else:
+            live_folder_id, live_files = None, None
+        swept = (
+            _sweep_verified_local_archives(
+                resolved_log_path,
+                Path(staging_dir),
+                result,
+                remove_local=remove_local_after_upload,
+                live_files=live_files,
+                folder_id=live_folder_id,
+            )
+            if live_files is not None
+            else []
         )
         if swept:
             result["local_gzip_retention_deleted"].extend(swept)
-            if not nothing_pending:
-                _append_json_log(resolved_log_path, result)
+            if isinstance(result.get("snapshot"), str) and Path(result["snapshot"]).name in swept:
+                result.update(local_removed=True, local_removed_skip_reason=None)
+        if not nothing_pending and (swept or result != before_retention):
+            _append_json_log(resolved_log_path, result)
     return result
 
 

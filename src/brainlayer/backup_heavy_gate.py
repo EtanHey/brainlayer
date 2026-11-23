@@ -29,16 +29,23 @@ def _sysctl(key: str) -> str:
     return subprocess.run(["/usr/sbin/sysctl", "-n", key], capture_output=True, text=True, check=True, timeout=5).stdout
 
 
-def _host() -> str:
+def _host(*, strict: bool = False) -> str:
     configured = os.environ.get("BRAINLAYER_BACKUP_HEAVY_HOST")
     if configured is not None:
         if configured not in {"m1", "m4"}:
             raise ValueError("BRAINLAYER_BACKUP_HEAVY_HOST must be m1 or m4")
         return configured
     if sys.platform != "darwin":
+        if strict:
+            raise ValueError("Unknown backup retention host: platform is not darwin; keeping everything")
         return "m4"
     # Same CPU-brand detection as mcp._shared's M1 read-pool default.
-    return "m1" if "Apple M1" in _sysctl("machdep.cpu.brand_string") else "m4"
+    brand = _sysctl("machdep.cpu.brand_string").strip()
+    if re.fullmatch(r"Apple M1(?: Pro| Max| Ultra)?", brand):
+        return "m1"
+    if strict and not re.fullmatch(r"Apple M4(?: Pro| Max| Ultra)?", brand):
+        raise ValueError(f"Unknown backup retention host: {brand!r}; keeping everything")
+    return "m4"
 
 
 def _pressure_reason(swap_limit: float, load_limit: float) -> str | None:

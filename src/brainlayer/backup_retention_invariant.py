@@ -296,8 +296,19 @@ def _module_assigns_false(tree: ast.Module, name: str) -> bool:
     )
 
 
-def inspect_backup_daily_retention_invariant(source: str) -> list[str]:
-    """Return violations of backup-daily's fail-closed Drive retention contract."""
+def _drive_resource_reference(node: ast.AST, aliases: set[str]) -> bool:
+    return (
+        _is_drive_files_resource(node)
+        or isinstance(node, ast.Name)
+        and node.id in aliases
+        or isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id in aliases
+    )
+
+
+def inspect_backup_daily_retention_invariant(source: str, *, policy_module: bool = False) -> list[str]:
+    """Orc 2026-11-22: database retention has no Drive mutation authority."""
     try:
         tree = ast.parse(source)
     except SyntaxError as exc:
@@ -305,14 +316,89 @@ def inspect_backup_daily_retention_invariant(source: str) -> list[str]:
 
     errors: list[str] = []
     pruner = _function(tree, "prune_drive_backups")
-    if pruner is None:
+    if pruner is None and not policy_module:
         return ["required retention function is missing: prune_drive_backups"]
     if drive_hard_delete_lines(tree, strict_backup_module=True):
         errors.append("backup_daily retention must not hard-delete Drive objects")
-    if not _has_trash_update(pruner):
-        errors.append("backup_daily retention must trash Drive objects with update(body={'trashed': True})")
+    # Track resource aliases as well as direct references, including method aliases
+    # and getattr. This is a deliberately conservative shape guard, not arbitrary
+    # Python data-flow analysis; the write-refusing service fixtures cover execution.
+    resources = {
+        node.arg
+        for node in ast.walk(tree)
+        if isinstance(node, ast.arg) and node.arg in {"files", "resource", "drive_files"}
+    }
+    for _ in range(len(list(ast.walk(tree)))):
+        before = resources.copy()
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.Assign, ast.AnnAssign, ast.NamedExpr)):
+                value = node.value
+                if (
+                    _drive_resource_reference(value, resources)
+                    or isinstance(value, ast.Attribute)
+                    and value.attr == "files"
+                ):
+                    targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+                    resources.update(target.id for target in targets if isinstance(target, ast.Name))
+        if resources == before:
+            break
+    for node in ast.walk(tree):
+        # Cross-lane retention helpers are outside this module's authority. Reject
+        # imports/references too, so renaming the imported function cannot hide it.
+        if (
+            isinstance(node, ast.ImportFrom)
+            and "jsonl_backup" in (node.module or "")
+            or isinstance(node, ast.alias)
+            and "jsonl_backup" in node.name
+            or isinstance(node, ast.Attribute)
+            and node.attr == "_prune_drive_backups_to_trash"
+            or isinstance(node, ast.Name)
+            and node.id == "_prune_drive_backups_to_trash"
+        ):
+            errors.append(f"database retention must not reference JSONL Drive helpers (line {node.lineno})")
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+            if node.func.attr in {"update", "patch", "delete", "emptyTrash"} and any(
+                keyword.arg in {"fileId", "supportsAllDrives", "addParents", "removeParents", "body"}
+                for keyword in node.keywords
+            ):
+                errors.append(
+                    f"database retention must not write through a Drive resource parameter (line {node.lineno})"
+                )
+        if isinstance(node, ast.Attribute) and node.attr in {"update", "delete", "patch", "emptyTrash"}:
+            if _drive_resource_reference(node.value, resources):
+                errors.append(f"backup_daily must not mutate Drive objects (line {node.lineno})")
+        elif (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "getattr"
+            and len(node.args) >= 2
+        ):
+            target, operation = node.args[:2]
+            if (
+                _drive_resource_reference(target, resources)
+                and isinstance(operation, ast.Constant)
+                and operation.value in {"update", "delete", "patch", "emptyTrash"}
+            ):
+                errors.append(f"backup_daily must not reference Drive writes (line {node.lineno})")
+        if isinstance(node, ast.Call) and _mentions_drive_files_endpoint(node):
+            if isinstance(node.func, ast.Attribute) and node.func.attr in {"patch", "delete"}:
+                errors.append(f"backup_daily must not send Drive mutation HTTP methods (line {node.lineno})")
+            method = node.args[0] if _call_name(node) == "request" and node.args else _keyword_value(node, "method")
+            if isinstance(method, ast.Constant) and str(method.value).upper() in {"DELETE", "PATCH", "PUT"}:
+                errors.append(f"backup_daily must not send Drive mutation HTTP methods (line {node.lineno})")
+    if policy_module:
+        return errors
     if not _module_assigns_false(tree, "DRIVE_RETENTION_ENABLED"):
-        errors.append("backup_daily Drive retention must be disabled by default")
+        errors.append("backup_daily Drive retention must stay disabled")
+    enabled = _function(tree, "_drive_retention_enabled")
+    if (
+        enabled is None
+        or len(enabled.body) != 1
+        or not isinstance(enabled.body[0], ast.Return)
+        or not isinstance(enabled.body[0].value, ast.Constant)
+        or enabled.body[0].value.value is not False
+    ):
+        errors.append("environment flags must not enable backup_daily Drive retention")
     return errors
 
 
@@ -553,6 +639,13 @@ def main(argv: list[str] | None = None) -> int:
         path.read_text(encoding="utf-8"),
         backup_daily_source=backup_daily_path.read_text(encoding="utf-8"),
     )
+    policy_path = path.with_name("backup_retention.py")
+    if not policy_path.exists():
+        errors.append(f"required retention policy source is missing: {policy_path}")
+    else:
+        errors.extend(
+            inspect_backup_daily_retention_invariant(policy_path.read_text(encoding="utf-8"), policy_module=True)
+        )
     if errors:
         for error in errors:
             print(f"FAIL: {error}")

@@ -1,4 +1,5 @@
 import ast
+import textwrap
 from pathlib import Path
 
 DRIVE_HARD_DELETE_ALLOWLIST: frozenset[str] = frozenset()
@@ -40,8 +41,9 @@ def test_repo_scan_rejects_a_multiline_drive_files_delete(tmp_path: Path) -> Non
 
 def _backup_daily_with_pruner_statement(statement: str) -> str:
     source = Path("src/brainlayer/backup_daily.py").read_text(encoding="utf-8")
-    marker = "        service.files().update(\n"
-    mutated = source.replace(marker, f"{statement}{marker}", 1)
+    mutated = (
+        source + "\ndef forbidden(service, requests, item):\n" + textwrap.indent(textwrap.dedent(statement), "    ")
+    )
     assert mutated != source
     return mutated
 
@@ -57,14 +59,7 @@ def _assert_backup_daily_hard_delete_rejected(source: str) -> None:
 def test_backup_daily_invariant_rejects_an_injected_drive_hard_delete() -> None:
     from brainlayer.backup_retention_invariant import inspect_backup_daily_retention_invariant
 
-    source = Path("src/brainlayer/backup_daily.py").read_text(encoding="utf-8")
-    mutated = source.replace(
-        '        service.files().update(\n            fileId=item["id"],\n            body={"trashed": True},\n',
-        '        service.files().delete(\n            fileId=item["id"],\n',
-        1,
-    )
-
-    assert mutated != source
+    mutated = _backup_daily_with_pruner_statement('service.files().delete(fileId=item["id"])\n')
     assert "backup_daily retention must not hard-delete Drive objects" in inspect_backup_daily_retention_invariant(
         mutated
     )
@@ -73,14 +68,7 @@ def test_backup_daily_invariant_rejects_an_injected_drive_hard_delete() -> None:
 def test_backup_daily_invariant_rejects_a_files_resource_alias_delete() -> None:
     from brainlayer.backup_retention_invariant import inspect_backup_daily_retention_invariant
 
-    source = Path("src/brainlayer/backup_daily.py").read_text(encoding="utf-8")
-    mutated = source.replace(
-        '        service.files().update(\n            fileId=item["id"],\n            body={"trashed": True},\n',
-        '        files = service.files()\n        files.delete(\n            fileId=item["id"],\n',
-        1,
-    )
-
-    assert mutated != source
+    mutated = _backup_daily_with_pruner_statement('files = service.files()\nfiles.delete(fileId=item["id"])\n')
     assert "backup_daily retention must not hard-delete Drive objects" in inspect_backup_daily_retention_invariant(
         mutated
     )

@@ -115,11 +115,11 @@ def test_missing_prior_folder_is_not_created():
 def test_discovery_rejects_foreign_machine_in_prior_folder():
     service = _drive_fixture(foreign_owner=True)
     with pytest.raises(backup_daily.DriveFolderOwnedByOtherMachineError):
-        backup_daily.prune_drive_backups(service, machine_id="Locals-MacBook-Pro")
+        backup_daily.list_machine_drive_backups(service, machine_id="Locals-MacBook-Pro")
     service.files.return_value.update.assert_not_called()
 
 
-def test_opt_in_retention_sees_prior_ids_without_creating_or_moving_folders():
+def test_retention_without_md5_evidence_never_discovers_prior_ids():
     service = _drive_fixture()
     removed = backup_daily.prune_drive_backups(
         service,
@@ -127,11 +127,9 @@ def test_opt_in_retention_sees_prior_ids_without_creating_or_moving_folders():
         retention_policy=backup_daily.DriveRetentionPolicy(keep_latest=1),
         verified_file_ids={"new"},
     )
-    assert removed == ["2026-10-17.db.gz"]
-    service.files.return_value.get.assert_called_once_with(fileId="stable", fields="parents", supportsAllDrives=True)
-    service.files.return_value.update.assert_called_once_with(
-        fileId="old", body={"trashed": True}, supportsAllDrives=True
-    )
+    assert removed == []
+    service.files.return_value.get.assert_not_called()
+    service.files.return_value.update.assert_not_called()
     service.files.return_value.create.assert_not_called()
     service.files.return_value.delete.assert_not_called()
 
@@ -162,9 +160,9 @@ def test_verified_backup_routes_opt_in_retention_to_prior_folder_inventory(tmp_p
         retention_policy=backup_daily.DriveRetentionPolicy(keep_latest=1),
     )
     assert result["uploaded"] and result["verified"]
-    assert result["retention_deleted"] == (["2026-10-17.db.gz"] if enabled else [])
+    assert result["retention_deleted"] == []  # Prior-ID folders are recovery-only; no MD5 proof here.
     assert result["drive_folder"].endswith("brainlayer-db-Locals-MacBook-Pro")
-    assert service.files.return_value.update.call_count == int(enabled)
+    assert service.files.return_value.update.call_count == 0
 
 
 def test_discovery_paginates_folder_and_snapshot_results_and_deduplicates():
