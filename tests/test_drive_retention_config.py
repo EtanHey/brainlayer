@@ -35,6 +35,7 @@ def item(day, *, machine="m4", name=None):
         "id": f"{machine}-{name or day}",
         "name": name or f"{day}.db.zst",
         "size": "10",
+        "md5Checksum": "a" * 32,
         "appProperties": {"brainlayer_machine": machine},
         "parents": ["folder"],
     }
@@ -59,9 +60,18 @@ def listing():
     )
 
 
+def proofs(files):
+    return [
+        {"uploaded": True, "verified": True, "machine_id": row["appProperties"]["brainlayer_machine"],
+         "local_md5": row.get("md5Checksum"), "drive_file": dict(row)}
+        for row in files
+    ]
+
+
 def report(*, rule=None, machine="m4", files=None):
+    files = listing() if files is None else files
     return policy.drive_retention_report(
-        listing() if files is None else files, machine_id=machine, folder_id="folder", as_of=NOW.date(), rule=rule
+        files, machine_id=machine, folder_id="folder", as_of=NOW.date(), rule=rule, receipts=proofs(files)
     )
 
 
@@ -110,6 +120,42 @@ def test_runtime_config_drives_actual_selection(monkeypatch):
     monkeypatch.setenv("BRAINLAYER_BACKUP_DRIVE_MONTHLY_KEEP", "1")
     assert report()["configured"]["kept"]["count"] == 3
     assert report()["configured"]["would_remove"]["count"] == 18
+
+
+def test_real_dated_pin_and_unverified_daily_are_never_candidates():
+    files = [item(f"2026-11-{day:02}") for day in range(1, 11)]
+    selected = policy.drive_retention_report(
+        files, machine_id="m4", folder_id="folder", as_of=NOW.date()
+    )["configured"]
+    assert selected["would_remove"]["count"] == 0
+    selected = policy.drive_retention_report(
+        files, machine_id="m4", folder_id="folder", as_of=NOW.date(),
+        receipts=proofs([row for row in files if row["name"] != "2026-11-02.db.zst"]),
+        protected_names={"2026-11-01.db.zst"},
+    )["configured"]
+    assert selected["would_remove"] == {"count": 1, "bytes": 10, "oldest": "2026-11-03", "newest": "2026-11-03"}
+    assert selected["kept"]["count"] == 9
+
+
+def test_gap_month_does_not_backfill_an_older_month():
+    files = [item(f"2026-11-{day:02}", machine="m1") for day in range(1, 11)]
+    files += [item(day, machine="m1") for day in ("2026-10-15", "2026-08-20", "2026-07-31")]
+    selected = report(machine="m1", files=files)["configured"]
+    assert [row["date"] for row in selected["monthly_representatives"]] == ["2026-10-15", "2026-08-20"]
+    assert selected["kept"]["count"] == 9
+
+
+def test_bad_drive_config_does_not_pause_local_cleanup(removal_lane, monkeypatch):
+    target = _old_receipt(removal_lane)
+    _write(removal_lane, [target])
+    monkeypatch.setenv("BRAINLAYER_BACKUP_DRIVE_DAILY_KEEP", "invalid")
+    result = backup.run_backup(**removal_lane)
+    assert result["local_retention_inventory"] == "measured"
+    assert not Path(target["snapshot"]).exists()
+    selected = result["drive_retention_selection"]
+    assert selected["state"] == "unmeasurable" and selected["selected_at"]
+    assert "DAILY_KEEP" in selected["error"]
+    assert projected([record(selected)], {"BRAINLAYER_BACKUP_DRIVE_DAILY_KEEP": "invalid"})["config_error"]
 
 
 def test_months_cross_year_boundary_and_overlap_is_not_double_counted():
@@ -211,7 +257,7 @@ def test_month_window_uses_same_local_calendar_as_backup_selection(monkeypatch):
 
 
 @pytest.mark.parametrize(
-    "key,value", [("selected_at", "2999-01-01T00:00:00Z"), ("on_drive", {}), ("named_one_offs_count", -1)]
+    "key,value", [("selected_at", "2999-01-01T00:00:00Z"), ("selected_at", None), ("on_drive", {}), ("named_one_offs_count", -1)]
 )
 def test_invalid_receipt_never_becomes_measured(key, value):
     row = observation()
@@ -275,6 +321,20 @@ def test_listing_failure_has_timestamp_and_durable_error(removal_lane, monkeypat
     assert selected["state"] == "unmeasurable" and selected["selected_at"]
     assert "cannot list" in selected["error"] and selected["on_drive"] is None
     assert json.loads(removal_lane["log_path"].read_text().splitlines()[-1])["drive_retention_selection"] == selected
+
+
+def test_run_selection_receives_the_real_weekly_pin(removal_lane, monkeypatch):
+    target = _old_receipt(removal_lane)
+    _write(removal_lane, [target])
+    (removal_lane["staging_dir"] / ".weekly-backup-pin.json").write_text(
+        json.dumps({"date": "2026-10-21", "snapshot": target["snapshot"]})
+    )
+    monkeypatch.setenv("BRAINLAYER_BACKUP_DRIVE_DAILY_KEEP", "1")
+    monkeypatch.setenv("BRAINLAYER_BACKUP_DRIVE_MONTHLY_KEEP", "0")
+    selected = backup.run_backup(**removal_lane)["drive_retention_selection"]
+    assert selected["state"] == "measured" and selected["selected_at"]
+    assert selected["would_remove"]["oldest"] != "2026-10-21"
+    assert Path(target["snapshot"]).exists()
 
 
 def test_settings_config_survives_unmeasurable_backup_health_in_real_document(tmp_path, monkeypatch):

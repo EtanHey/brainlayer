@@ -159,9 +159,17 @@ def drive_retention_report(
     folder_id: str,
     as_of: dt.date,
     rule: DriveRetentionRule | None = None,
+    receipts: Iterable[Mapping[str, Any]] = (),
+    protected_names: set[str] | frozenset[str] = frozenset(),
 ) -> dict[str, Any]:
     """Metadata-only choices, including historical raw dated .db files; no action API."""
     rule = configured_drive_rule() if rule is None else rule
+    files = list(files)
+    eligible_ids = {
+        item["id"]
+        for item in matching_verified_dailies(files, receipts, machine_id=machine_id, folder_id=folder_id)
+        if item["name"] not in protected_names
+    }
     dated, one_offs, seen = [], set(), {}
     for item in files:
         name = item.get("name", "")
@@ -218,7 +226,9 @@ def drive_retention_report(
                 representatives.append(representative)
         extra = [item for item in representatives if item["id"] not in daily_ids]
         kept_ids = daily_ids | {item["id"] for item in extra}
-        return months, representatives, extra, daily + extra, [item for item in dated if item["id"] not in kept_ids]
+        removed = [item for item in dated if item["id"] not in kept_ids and item["id"] in eligible_ids]
+        removed_ids = {item["id"] for item in removed}
+        return months, representatives, extra, [item for item in dated if item["id"] not in removed_ids], removed
 
     months, _, monthly, kept, removed = select(DriveRetentionRule())
     _, representatives, _, configured_kept, configured_removed = select(rule)
@@ -226,7 +236,10 @@ def drive_retention_report(
         "mode": "report-only",
         "machine": machine_id,
         "daily": summary(dated),
-        "keep_7": {"kept": summary(dated[:7]), "would_remove": summary(dated[7:])},
+        "keep_7": {
+            "kept": summary(select(DriveRetentionRule(monthly_keep=0))[3]),
+            "would_remove": summary(select(DriveRetentionRule(monthly_keep=0))[4]),
+        },
         "keep_7_plus_monthly": {
             "months": months,
             "extra": summary(monthly),

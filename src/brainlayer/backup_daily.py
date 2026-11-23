@@ -3819,7 +3819,8 @@ def run_backup(
                 result["local_retention_inventory"] = "opt_out"
                 return None, None
             keep_latest = _local_retention_keep()
-            if _weekly_pin_protection(Path(staging_dir))[1] == "pin_unreadable":
+            protected_names, pin_reason = _weekly_pin_protection(Path(staging_dir))
+            if pin_reason == "pin_unreadable":
                 raise ValueError("Cannot read weekly pin; retaining all local archives")
             receipts = _read_backup_receipts(resolved_log_path, strict=True) if resolved_log_path.exists() else []
             proven_names = {
@@ -3836,22 +3837,31 @@ def run_backup(
                 result["local_retention_inventory"] = "within_cap"
                 return None, None  # A live listing cannot authorize deleting the kept cohort.
             selected_at = dt.datetime.now(dt.UTC).isoformat()
-            rule = configured_drive_rule()
             inventory_service = build_drive_service()
             folders = _find_drive_folder_ids(inventory_service, resolved_folder_parts)
             if len(folders) != 1:
                 raise ValueError("Cannot establish one existing machine backup folder")
             inventory = _list_drive_backup_files(inventory_service, folders[0])
-            result["drive_retention_report"] = drive_retention_report(
-                inventory, machine_id=result["machine_id"], folder_id=folders[0], as_of=local_backup_date(), rule=rule
-            )
-            result["drive_retention_selection"] = {
-                "machine_id": result["machine_id"],
-                "state": "measured",
-                "selected_at": selected_at,
-                "error": None,
-                **result["drive_retention_report"]["configured"],
-            }
+            try:
+                result["drive_retention_report"] = drive_retention_report(
+                    inventory, machine_id=result["machine_id"], folder_id=folders[0], as_of=local_backup_date(),
+                    rule=configured_drive_rule(), receipts=receipts, protected_names=protected_names,
+                )
+                result["drive_retention_selection"] = {
+                    "machine_id": result["machine_id"],
+                    "state": "measured",
+                    "selected_at": selected_at,
+                    "error": None,
+                    **result["drive_retention_report"]["configured"],
+                }
+            except (BackupStoppedError, BackupTimeoutError):
+                raise
+            except Exception as exc:
+                result.pop("drive_retention_report", None)
+                result["drive_retention_selection"] = empty_drive_selection(
+                    result["machine_id"], state="unmeasurable", selected_at=selected_at,
+                    error=_redact_upload_secrets(f"{type(exc).__name__}: {exc}"),
+                )
             result["local_retention_inventory"] = "measured"
         except (BackupStoppedError, BackupTimeoutError):
             raise
