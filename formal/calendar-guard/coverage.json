@@ -7,8 +7,8 @@
       "sha256": "5a307852afec90364eb48bbfca534d0e85e07c35c09503b24d57e3b72bbe91ac"
     },
     "src/brainlayer/supervisor_guard.py": {
-      "sha": "5a24d4b9",
-      "sha256": "51aedbfed3f8772b4af63875293c4d1c673f2ba43dec5e5de8f7f86c7ae9bc11"
+      "sha": "f9af18c8",
+      "sha256": "05fab7d328651dde3e63d737250c4fd34723faffa7cb4065b36ff470883307a5"
     },
     "src/brainlayer/supervisor_child.py": {
       "sha": "5a24d4b9",
@@ -182,5 +182,6 @@
     "sha256": "9ad28230d86cb3f8e279c773c56e1afc68a18323ea42b1acba0a5b64661b7e8d",
     "note": "Full real module copy, only pulse overdue condition removed; runtime paths unchanged."
   },
-  "sync_note": "Re-pinned at main 5a24d4b9 (2026-11-05, lead): CalendarGuard now models the supervisor_guard stall-grace extensions (ab3e525e..07e98435; MaxExtensions 3, cap, heartbeat reset; NoPrematureTimeout/GraceWithinCap) in b8f47957. maintenance_calendar.py now skips the summary only when recovery failed before the runner started (runner_started_at None): outside CalendarJournal.Summary's started-run scope, not a violation. supervisor_child.py gained only Darwin thread-priority/QoS and I/O-policy measurement helpers (#1597 S3, #1612 S28): telemetry, no guard transition; its mapped range shifted and was not re-audited."
+  "sync_note": "Re-pinned at main 5a24d4b9 (2026-11-05, lead): CalendarGuard now models the supervisor_guard stall-grace extensions (ab3e525e..07e98435; MaxExtensions 3, cap, heartbeat reset; NoPrematureTimeout/GraceWithinCap) in b8f47957. maintenance_calendar.py now skips the summary only when recovery failed before the runner started (runner_started_at None): outside CalendarJournal.Summary's started-run scope, not a violation. supervisor_child.py gained only Darwin thread-priority/QoS and I/O-policy measurement helpers (#1597 S3, #1612 S28): telemetry, no guard transition; its mapped range shifted and was not re-audited.",
+  "procfs_exit_note": "2026-11-23: guard source re-pinned at f9af18c8 for start_time treating Linux procfs read ESRCH as absent, alongside ENOENT. Model unchanged: process disappearance is already an environment fault and reap abstracts ESRCH. Existing numeric guard pointers predate this pin; use named functions. Deterministic read-seam regression fails on base and passes on fix, preserving permission errors. Full checker cannot complete: --prepare-only already rejects maintenance_calendar.py checkout drift on base ce9086e9; this checker has no --require-sync option. Other source pins remain untouched; no TLC-pass claim."
 }
