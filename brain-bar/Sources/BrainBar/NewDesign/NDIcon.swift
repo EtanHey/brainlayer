@@ -20,6 +20,7 @@ import AppKit
 
     static func state(_ model: NDModel, _ r1: NDR1) -> State {
         if r1.redCount > 0 { return .red(r1.redCount) }
+        if r1.wakeStatusUnconfirmed { return .amber }
         if noReadingYet(model) || r1.pipeline.allUnconfirmed { return .unconfirmed }
         if r1.amberDot { return .amber }
         return .rest
