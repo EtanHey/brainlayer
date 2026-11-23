@@ -103,3 +103,33 @@ the three changed source-file hashes were asserted before and after the run).
 The sampled peak includes unrelated volume activity and excludes the separate restore check.
 This proves the copy path with an active writer on M1; it does not measure M4 production peak or
 Drive transport. The owned DB copies and archive were removed after recording the receipt.
+
+### M4 copy acceptance, 2026-11-23
+
+The renewed check used source `47cd54db12620381142049d78ae8537b9d93e052`, asserting the daily, clone, gate and
+sleep module hashes before and after. Bootstrap used only `cp -c` of the canonical DB and WAL;
+both files' identity, size, mtime and ctime stayed unchanged across those copies. The proof process
+rejected SQLite connections outside its owned scratch directory. All recovery, snapshotting,
+writing, integrity checks and queries used owned copies.
+
+| Observation | Result |
+| --- | --- |
+| Owned source, including writer table | 28,334,350,336 bytes |
+| Compressed archive | 12,693,817,094 bytes |
+| Sampled backup-phase volume delta peak | 15,364,497,408 bytes |
+| Snapshot / restored full integrity | Both `ok` |
+| Per-table row counts | All 114 equal |
+| Restored writer sequence/payload invariant | Passed |
+| Concurrent writer | 82,309 commits, 1,348,550,656 payload bytes in 604.714 s |
+| Writer schedule | 2 MiB/s sustained; first five seconds at 18,175,039 B/s |
+| Writer busy results | 0 |
+| Local archive proof | SHA-256 matches the integrity-checked snapshot |
+
+The peak includes other volume activity and excludes bootstrap and the separate restore acceptance.
+Restore enforced a 42 GiB free-space reserve. The run began with 105 GiB free; after all owned DBs,
+WAL/SHM files, the archive and scratch directory were removed, the measured free space was 107 GiB.
+Deletion used one named file per command. This is a copy-only proof, not a scheduled backup or a
+Drive upload. Small numerical receipts remain; no copied database or archive remains.
+
+Clone-specific race tests require SQLite's checkpoint-on-close control. Runtimes without that
+control use the explicit VACUUM fallback, which has its own test rather than claiming clone coverage.

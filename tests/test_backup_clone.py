@@ -13,6 +13,12 @@ import pytest
 
 from brainlayer import backup_clone as clone
 
+needs_clone_control = pytest.mark.skipif(
+    not (hasattr(sqlite3.Connection, "setconfig") and hasattr(sqlite3, "SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE")),
+    reason="Clone snapshots require checkpoint-on-close control; this runtime uses VACUUM fallback",
+)
+
+
 ACTOR = """
 import sqlite3,sys,json
 c=sqlite3.connect(sys.argv[1], isolation_level=None, timeout=0)
@@ -104,6 +110,7 @@ def external_copy(source, target):
     )
 
 
+@needs_clone_control
 def test_writer_and_checkpoint_between_file_clones_cannot_tear_snapshot(source_actor, monkeypatch):
     source, target, actor = source_actor
     events = []
@@ -128,6 +135,7 @@ def test_writer_and_checkpoint_between_file_clones_cannot_tear_snapshot(source_a
     assert not Path(f"{target}-wal").exists()
 
 
+@needs_clone_control
 def test_broken_barrier_torn_pair_is_rejected_not_published(source_actor, monkeypatch):
     source, target, actor = source_actor
     connect = sqlite3.connect
@@ -158,6 +166,7 @@ def test_broken_barrier_torn_pair_is_rejected_not_published(source_actor, monkey
     assert not target.exists()
 
 
+@needs_clone_control
 def test_copy_failure_releases_barrier_and_removes_private_attempt(source_actor, monkeypatch):
     source, target, actor = source_actor
 
@@ -180,6 +189,7 @@ def test_non_apfs_never_opens_source(source_actor, monkeypatch):
         clone.snapshot(source, target)
 
 
+@needs_clone_control
 def test_large_wal_falls_back_without_copying(source_actor, monkeypatch):
     source, target, actor = source_actor
     monkeypatch.setattr(clone, "_copy", lambda *a: pytest.fail("unbounded WAL cloned"))
@@ -196,6 +206,7 @@ def test_existing_target_is_never_replaced(source_actor):
     assert target.read_bytes() == b"peer"
 
 
+@needs_clone_control
 def test_last_source_connection_does_not_checkpoint_on_close(source_actor, monkeypatch):
     source, target, _ = source_actor
     orphan = source.parent / "orphan.db"
@@ -208,6 +219,7 @@ def test_last_source_connection_does_not_checkpoint_on_close(source_actor, monke
     assert clone._identity(wal) == before
 
 
+@needs_clone_control
 def test_stop_during_clone_releases_writer_and_private_files(source_actor, monkeypatch):
     source, target, actor = source_actor
 
@@ -258,6 +270,7 @@ def test_clone_peak_does_not_charge_a_raw_database_or_restore():
         assert peak < backup._peak_backup_required_bytes(db_size, compressed, full=full)
 
 
+@needs_clone_control
 def test_clone_artifact_integrity_and_streaming_full_verify_without_restore(artifact_lane, monkeypatch):
     backup, source, output, _ = artifact_lane
     artifact = backup.create_sqlite_backup_artifact(source, output, socket_path=source.parent / "unused.sock")
@@ -281,6 +294,7 @@ def test_clone_artifact_integrity_and_streaming_full_verify_without_restore(arti
     assert result["verification_proof"] == "stream_sha256_of_integrity_checked_raw"
 
 
+@needs_clone_control
 def test_clone_archive_publication_cannot_replace_a_peer_file(artifact_lane, monkeypatch):
     backup, source, output, _ = artifact_lane
     copy = backup._copy_with_raw_floor
@@ -299,6 +313,7 @@ def test_clone_archive_publication_cannot_replace_a_peer_file(artifact_lane, mon
     assert not list(output.glob("*.db"))
 
 
+@needs_clone_control
 def test_clone_failure_falls_back_to_vacuum_with_reason(artifact_lane, monkeypatch):
     backup, source, output, _ = artifact_lane
 
@@ -337,6 +352,7 @@ def test_non_apfs_uses_vacuum_and_logs_reason(artifact_lane, monkeypatch, capsys
     assert "APFS clone support not confirmed" in capsys.readouterr().out
 
 
+@needs_clone_control
 def test_clone_integrity_failure_is_not_published_and_uses_fallback(artifact_lane, monkeypatch):
     backup, source, output, _ = artifact_lane
     check = backup._sqlite_pragma_check
@@ -403,6 +419,7 @@ def test_divergence_budget_is_write_rate_times_expected_snapshot_seconds(source_
     assert budget["clone_wal_bytes"] == Path(f"{source}-wal").stat().st_size + clone.WAL_GROWTH_SLACK_BYTES
 
 
+@needs_clone_control
 def test_floor_trip_during_compression_retries_capacity_checked_vacuum(artifact_lane, monkeypatch):
     backup, source, output, _ = artifact_lane
     copy = backup._copy_with_raw_floor
@@ -422,6 +439,7 @@ def test_floor_trip_during_compression_retries_capacity_checked_vacuum(artifact_
     assert backup.verify_sqlite_backup_artifact(artifact)["verified"] is True
 
 
+@needs_clone_control
 def test_floor_trip_without_fallback_capacity_defers(artifact_lane, monkeypatch):
     from types import SimpleNamespace
 
@@ -449,6 +467,7 @@ def test_floor_trip_without_fallback_capacity_defers(artifact_lane, monkeypatch)
     assert not list(output.glob("*.db"))
 
 
+@needs_clone_control
 def test_clone_floor_fallback_keeps_cumulative_sleep_and_observer(artifact_lane, monkeypatch):
     backup, source, output, _ = artifact_lane
     clocks = {"inclusive": 0, "awake": 0}
@@ -486,6 +505,7 @@ def test_clone_floor_fallback_keeps_cumulative_sleep_and_observer(artifact_lane,
     assert observations[-1]["snapshot_slept_seconds"] == 3720
 
 
+@needs_clone_control
 def test_clone_observer_failure_after_publication_still_cleans_owned_raw(artifact_lane):
     backup, source, output, _ = artifact_lane
 
@@ -518,3 +538,14 @@ def test_supervised_capacity_deferral_keeps_durable_job_alert(artifact_lane, mon
     monkeypatch.setattr(backup, "run_backup", deferred)
     assert backup._run_backup_process(100) == 75
     assert "needs 66 GiB, has 60 GiB" in job_alerts.active_alerts()["backup-daily"]
+
+
+def test_missing_checkpoint_control_uses_vacuum_without_cloning(artifact_lane, monkeypatch):
+    backup, source, output, _ = artifact_lane
+    monkeypatch.delattr(clone.sqlite3, "SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE", raising=False)
+    monkeypatch.setattr(clone, "_copy", lambda *args: pytest.fail("cloning without source close protection"))
+    artifact = backup.create_sqlite_backup_artifact(source, output, socket_path=source.parent / "unused.sock")
+    assert artifact.snapshot_method == "vacuum"
+    assert "cannot disable source checkpoint on close" in artifact.clone_fallback
+    assert artifact.local_integrity == "ok"
+    assert backup.verify_sqlite_backup_artifact(artifact)["verified"] is True
