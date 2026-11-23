@@ -100,7 +100,7 @@ backup health is unmeasurable.
 `drive_retention.rule` contains `daily_keep`, `monthly_keep`, `per_machine: true`
 and `description`; `writes_enabled` is false and `config_error` is null or an
 explanation. `machines[]` contains `machine_id`, `state`, `selected_at`, `error`,
-`on_drive`, `named_one_offs_count`, `kept`, `would_remove` and
+`on_drive`, `named_one_offs_count`, `kept`, `kept_by_rule`, `unverified`, `would_remove` and
 `monthly_representatives`. Each summary contains `count`, `bytes`, `oldest` and
 `newest`; dates are ISO dates, and `selected_at` is the last selection attempt's
 ISO timestamp. `on_drive` describes dated daily `.db`, `.db.gz` and `.db.zst`
@@ -116,7 +116,15 @@ when settings opened.
 Only receipt-verified dailies matching the live listing's exact ID, name, size,
 machine, folder and MD5 can enter `would_remove`. The weekly pin and unverified
 daily objects stay in `kept`; historical raw `.db` files without this proof also
-stay kept. A missing monthly cohort is skipped, never backfilled from an older month.
+stay kept. Only verified dailies fill the newest-N or monthly slots, using the same
+receipt eligibility and ordering as the deletion selector. An unverified newest or
+month-end object cannot displace the Mac's verified copy. `kept` is total retained,
+including pins and unverified files; `kept_by_rule` is only the verified daily/monthly
+cohort, and `unverified` separately describes the unverified dated objects. These two
+summaries are subsets of `kept`, not additional files in the total. Old cached reports
+without these summaries are unmeasurable until inventory refreshes. The unused legacy
+`keep_7` comparison was removed; configured selection is the preview consumers use.
+A missing monthly cohort is skipped, never backfilled from an older month.
 An invalid Drive setting or report-only error records a timestamped selection
 failure and `config_error` where applicable; it does not pause local cleanup.
 `selected_at` is required on every measured or failed selection so BrainBar can

@@ -127,6 +127,29 @@ def test_runtime_config_drives_actual_selection(monkeypatch):
     assert report()["configured"]["would_remove"]["count"] == 18
 
 
+@pytest.mark.parametrize("monthly", [False, True])
+def test_unverified_newest_does_not_displace_the_only_verified_copy(monthly):
+    files = [
+        item(day) for day in (("2026-11-22", "2026-10-31", "2026-10-15") if monthly else ("2026-11-22", "2026-11-21"))
+    ]
+    receipts = proofs([files[0], files[-1]] if monthly else [files[-1]])
+    rule = policy.DriveRetentionRule(daily_keep=1, monthly_keep=int(monthly))
+    selected = policy.drive_retention_report(
+        files, receipts=receipts, machine_id="m4", folder_id="folder", as_of=NOW.date(), rule=rule
+    )["configured"]
+    assert selected["would_remove"]["count"] == 0
+    assert selected["kept_by_rule"]["count"] == (2 if monthly else 1)
+    assert selected["unverified"]["count"] == 1
+    assert selected["kept"]["count"] == len(files)
+    wire = {"machine_id": "m4", "state": "measured", "selected_at": NOW.isoformat(), "error": None, **selected}
+    env = {"BRAINLAYER_BACKUP_DRIVE_DAILY_KEEP": "1", "BRAINLAYER_BACKUP_DRIVE_MONTHLY_KEEP": str(int(monthly))}
+    assert projected([record(wire)], env)["machines"][0]["unverified"]["count"] == 1
+    if not monthly:
+        assert policy.select_drive_dailies(files, receipts, machine_id="m4", folder_id="folder", keep_latest=1) == []
+    else:
+        assert selected["monthly_representatives"][0]["date"] == "2026-10-15"
+
+
 def test_real_dated_pin_and_unverified_daily_are_never_candidates():
     files = [item(f"2026-11-{day:02}") for day in range(1, 11)]
     selected = policy.drive_retention_report(files, machine_id="m4", folder_id="folder", as_of=NOW.date())["configured"]
@@ -166,9 +189,9 @@ def test_bad_drive_config_does_not_pause_local_cleanup(removal_lane, monkeypatch
 
 def test_months_cross_year_boundary_and_overlap_is_not_double_counted():
     files = [item(day) for day in ("2026-01-01", "2025-12-31", "2025-11-30", "2025-10-31", "2025-10-01")]
-    selected = policy.drive_retention_report(files, machine_id="m4", folder_id="folder", as_of=dt.date(2026, 1, 2))[
-        "configured"
-    ]
+    selected = policy.drive_retention_report(
+        files, receipts=proofs(files), machine_id="m4", folder_id="folder", as_of=dt.date(2026, 1, 2)
+    )["configured"]
     assert [row["date"] for row in selected["monthly_representatives"]] == ["2025-12-31", "2025-11-30", "2025-10-31"]
     assert selected["kept"]["count"] == 5
 
@@ -274,12 +297,45 @@ def test_invalid_receipt_never_becomes_measured(key, value):
     assert selected["kept"] is None
 
 
-def test_inconsistent_recorded_totals_are_unmeasurable():
+@pytest.mark.parametrize("summary", ["would_remove", "kept_by_rule", "unverified"])
+def test_inconsistent_recorded_totals_are_unmeasurable(summary):
     row = observation()
-    row["would_remove"]["count"] += 1
+    row[summary]["count"] += 1
     selected = projected([record(row)])["machines"][0]
     assert selected["state"] == "unmeasurable"
     assert selected["would_remove"] is None
+
+
+def test_old_selection_without_verified_cohorts_withholds_unsafe_preview():
+    row = observation()
+    del row["kept_by_rule"]
+    del row["unverified"]
+    selected = projected([record(row)])["machines"][0]
+    assert selected["state"] == "unmeasurable" and "refresh inventory" in selected["error"]
+    assert selected["would_remove"] is None and selected["unverified"] is None
+
+
+@pytest.mark.parametrize("keep", [1, 2, 7])
+def test_preview_daily_candidates_match_the_verified_deletion_selector(keep):
+    files = [item(f"2026-11-{day:02}") for day in range(1, 11)]
+    receipts = proofs(files[::2])
+    protected = {files[0]["name"]}
+    expected = policy.select_drive_dailies(
+        files, receipts, machine_id="m4", folder_id="folder", keep_latest=keep, protected_names=protected
+    )
+    selected = policy.drive_retention_report(
+        files,
+        receipts=receipts,
+        machine_id="m4",
+        folder_id="folder",
+        as_of=NOW.date(),
+        rule=policy.DriveRetentionRule(keep, 0),
+        protected_names=protected,
+    )["configured"]
+    assert selected["would_remove"]["count"] == len(expected)
+    assert selected["would_remove"]["bytes"] == sum(int(row["size"]) for row in expected)
+    assert selected["would_remove"]["oldest"] == min((row["name"][:10] for row in expected), default=None)
+    assert selected["would_remove"]["newest"] == max((row["name"][:10] for row in expected), default=None)
 
 
 def test_report_deduplicates_pages_and_refuses_unmeasurable_daily_size():

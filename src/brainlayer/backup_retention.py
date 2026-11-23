@@ -59,6 +59,8 @@ def empty_drive_selection(machine_id: str, *, state: str = "not_run", selected_a
         "on_drive": None,
         "named_one_offs_count": None,
         "kept": None,
+        "kept_by_rule": None,
+        "unverified": None,
         "would_remove": None,
         "monthly_representatives": [],
     }
@@ -165,10 +167,8 @@ def drive_retention_report(
     """Metadata-only choices, including historical raw dated .db files; no action API."""
     rule = configured_drive_rule() if rule is None else rule
     files = list(files)
-    eligible_ids = {
-        item["id"]
-        for item in matching_verified_dailies(files, receipts, machine_id=machine_id, folder_id=folder_id)
-        if item["name"] not in protected_names
+    verified_ids = {
+        item["id"] for item in matching_verified_dailies(files, receipts, machine_id=machine_id, folder_id=folder_id)
     }
     dated, one_offs, seen = [], set(), {}
     for item in files:
@@ -204,6 +204,8 @@ def drive_retention_report(
             dated.append(row)
             seen[item["id"]] = row
     dated.sort(key=lambda item: (item["date"], item["name"], item["id"]), reverse=True)
+    verified = [item for item in dated if item["id"] in verified_ids]
+    unverified = [item for item in dated if item["id"] not in verified_ids]
 
     def summary(rows):
         return {
@@ -214,32 +216,35 @@ def drive_retention_report(
         }
 
     def select(policy):
-        daily = dated[: policy.daily_keep]
+        daily = verified[: policy.daily_keep]
         daily_ids = {item["id"] for item in daily}
         representatives, months = [], []
         for offset in range(1, policy.monthly_keep + 1):
             year, month0 = divmod(as_of.year * 12 + as_of.month - 1 - offset, 12)
             month = f"{year:04}-{month0 + 1:02}"
             months.append(month)
-            representative = next((item for item in dated if item["date"].startswith(month)), None)
+            representative = next((item for item in verified if item["date"].startswith(month)), None)
             if representative is not None:
                 representatives.append(representative)
         extra = [item for item in representatives if item["id"] not in daily_ids]
         kept_ids = daily_ids | {item["id"] for item in extra}
-        removed = [item for item in dated if item["id"] not in kept_ids and item["id"] in eligible_ids]
+        removed = [item for item in verified if item["id"] not in kept_ids and item["name"] not in protected_names]
         removed_ids = {item["id"] for item in removed}
-        return months, representatives, extra, [item for item in dated if item["id"] not in removed_ids], removed
+        return (
+            months,
+            representatives,
+            extra,
+            [item for item in dated if item["id"] not in removed_ids],
+            removed,
+            daily + extra,
+        )
 
-    months, _, monthly, kept, removed = select(DriveRetentionRule())
-    _, representatives, _, configured_kept, configured_removed = select(rule)
+    months, _, monthly, kept, removed, _ = select(DriveRetentionRule())
+    _, representatives, _, configured_kept, configured_removed, kept_by_rule = select(rule)
     return {
         "mode": "report-only",
         "machine": machine_id,
         "daily": summary(dated),
-        "keep_7": {
-            "kept": summary(select(DriveRetentionRule(monthly_keep=0))[3]),
-            "would_remove": summary(select(DriveRetentionRule(monthly_keep=0))[4]),
-        },
         "keep_7_plus_monthly": {
             "months": months,
             "extra": summary(monthly),
@@ -253,6 +258,8 @@ def drive_retention_report(
             "on_drive": summary(dated),
             "named_one_offs_count": len(one_offs),
             "kept": summary(configured_kept),
+            "kept_by_rule": summary(kept_by_rule),
+            "unverified": summary(unverified),
             "would_remove": summary(configured_removed),
             "monthly_representatives": [
                 {key: item[key] for key in ("name", "date", "bytes")} for item in representatives

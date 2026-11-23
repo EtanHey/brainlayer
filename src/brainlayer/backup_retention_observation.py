@@ -72,11 +72,15 @@ def drive_retention_observation(
                 result.update(state="stale", error="Monthly retention window changed since the last selection")
                 machines.append(result)
                 continue
-            for key in ("on_drive", "kept", "would_remove"):
+            if "kept_by_rule" not in observation or "unverified" not in observation:
+                raise ValueError("Recorded selection predates verified-cohort reporting; refresh inventory")
+            for key in ("on_drive", "kept", "kept_by_rule", "unverified", "would_remove"):
                 result[key] = _summary(observation[key])
             for key in ("count", "bytes"):
                 if result["on_drive"][key] != result["kept"][key] + result["would_remove"][key]:
                     raise ValueError("recorded selection totals are inconsistent")
+                if result["kept_by_rule"][key] + result["unverified"][key] > result["kept"][key]:
+                    raise ValueError("recorded kept subsets are inconsistent")
             count = observation["named_one_offs_count"]
             if type(count) is not int or count < 0:
                 raise ValueError("invalid named one-off count")

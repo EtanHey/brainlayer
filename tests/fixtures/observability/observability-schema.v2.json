@@ -915,7 +915,9 @@
               "named_one_offs_count",
               "kept",
               "would_remove",
-              "monthly_representatives"
+              "monthly_representatives",
+              "kept_by_rule",
+              "unverified"
             ],
             "properties": {
               "machine_id": {
@@ -1079,6 +1081,76 @@
                     }
                   }
                 }
+              },
+              "kept_by_rule": {
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "additionalProperties": false,
+                "required": [
+                  "count",
+                  "bytes",
+                  "oldest",
+                  "newest"
+                ],
+                "properties": {
+                  "count": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "bytes": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "oldest": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "newest": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                }
+              },
+              "unverified": {
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "additionalProperties": false,
+                "required": [
+                  "count",
+                  "bytes",
+                  "oldest",
+                  "newest"
+                ],
+                "properties": {
+                  "count": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "bytes": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "oldest": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "newest": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                }
               }
             },
             "allOf": [
@@ -1109,6 +1181,12 @@
                     },
                     "error": {
                       "type": "null"
+                    },
+                    "kept_by_rule": {
+                      "type": "object"
+                    },
+                    "unverified": {
+                      "type": "object"
                     }
                   }
                 },
@@ -1128,6 +1206,12 @@
                     },
                     "monthly_representatives": {
                       "maxItems": 0
+                    },
+                    "kept_by_rule": {
+                      "type": "null"
+                    },
+                    "unverified": {
+                      "type": "null"
                     }
                   }
                 }

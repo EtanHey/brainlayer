@@ -287,8 +287,8 @@ def test_report_is_pure_and_compares_both_policies():
     before = json.dumps(files, sort_keys=True)
     report = drive_retention_report(files, machine_id="MacBook-Pro", folder_id="folder", as_of=dt.date(2026, 11, 22))
     assert report["mode"] == "report-only" and report["daily"]["count"] == 13
-    assert report["keep_7"]["would_remove"]["count"] == 0  # No verified receipts authorize candidates.
-    assert report["keep_7"]["kept"]["count"] == 13
-    assert report["keep_7_plus_monthly"]["extra"]["count"] == 3
-    assert report["keep_7_plus_monthly"]["extra"]["bytes"] == 60
+    assert "keep_7" not in report  # Removed unused comparison; configured selection is authoritative.
+    assert report["configured"]["unverified"]["count"] == 13
+    assert report["configured"]["kept_by_rule"]["count"] == 0
+    assert report["keep_7_plus_monthly"]["extra"]["count"] == 0
     assert json.dumps(files, sort_keys=True) == before
