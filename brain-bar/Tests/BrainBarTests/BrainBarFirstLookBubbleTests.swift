@@ -118,8 +118,8 @@ import XCTest
         let chart = NDPipelineChart(state: store.r1.pipeline, memories: store.model.memories,
                                     items: store.r1.stationItems, backupProgress: inputs.backupProgress)
         let row = NDPipelineChart.progressFrame(store.r1.pipeline)
-        XCTAssertEqual(row.minY, 117)
-        XCTAssertEqual(row.maxY, 150)
+        XCTAssertEqual(row.minY, 81)
+        XCTAssertEqual(row.maxY, 114)
         XCTAssertTrue(chart.displayedPanelWords[.drive]?.contains(row) == true)
         let panel = chart.panel(.drive, content: AnyView(NDStationPopover(store: store, station: .drive)))
         XCTAssertFalse(panel.outer.intersects(row), "the notch and body must clear the words actually drawn")
@@ -135,7 +135,7 @@ import XCTest
         let L = NDPipelineLayout.self
         let store = NDStore(fixture: BrainBarDesignFixture.inputs(.calm), page: .overview)
         let chart = NDPipelineChart(state: store.r1.pipeline, memories: store.model.memories, items: store.r1.stationItems)
-        for station: NDStation in [.agents, .read, .memory, .mac, .drive] {
+        for station: NDStation in [.agents, .read, .mac, .drive] {
             let content = AnyView(NDStationPopover(store: store, station: station))
             let normal = L.panelSide(station, hasAction: false).width
             func candidate(_ edge: Edge, width: CGFloat, overlap: Bool = false) -> NDPipelineLayout.Panel? {

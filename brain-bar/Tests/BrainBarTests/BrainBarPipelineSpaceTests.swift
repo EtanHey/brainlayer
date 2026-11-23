@@ -5,6 +5,41 @@ import XCTest
 
 /// L63 geometry through the same measured panel path used by the offscreen hover renderer.
 @MainActor final class BrainBarPipelineSpaceTests: XCTestCase {
+    func testStationRowsAndActivityGapStayAtTheOriginalPositions() {
+        let L = NDPipelineLayout.self
+        XCTAssertEqual(L.yTop, 44)
+        XCTAssertEqual(L.ySaves, 114)
+        XCTAssertEqual(L.hub.minY, 24)
+        XCTAssertEqual(L.keptSafe.minY, 18)
+        XCTAssertEqual(L.point(.jobs).y, 138)
+        XCTAssertEqual(L.point(.weekly).y, 138)
+        XCTAssertEqual(NDGrid.activityToPipeline, 0)
+    }
+
+    func testWholeOverviewIsShorterThanTheOriginalWindow() {
+        for (name, baseline): (BrainBarDesignFixture.Name, CGFloat) in [(.calm, 791), (.driveSignedOut, 841)] {
+            let store = NDStore(fixture: BrainBarDesignFixture.inputs(name), page: .overview)
+            let height = NDPageHeight.window(store, page: .overview, screen: 2000, titleBarHeight: 52)
+            XCTAssertLessThan(height, baseline, name.rawValue)
+        }
+    }
+
+    func testMemoryPrefersTheClearPocketBelowItsBox() {
+        for name in BrainBarDesignFixture.Name.allCases {
+            let store = NDStore(fixture: BrainBarDesignFixture.inputs(name), page: .overview)
+            let chart = NDPipelineChart(state: store.r1.pipeline, memories: store.model.memories,
+                items: store.r1.stationItems, backupProgress: store.inputs.backupProgress)
+            let panel = chart.panel(.memory, content: AnyView(NDStationPopover(store: store, station: .memory)))
+            XCTAssertEqual(panel.edge, .bottom, name.rawValue)
+            XCTAssertLessThan(panel.body.width, 300)
+            let left = NDPipelineLayout.labelRects(.jobs, store.r1.pipeline).map(\.maxX).max()! + 4
+            let right = NDPipelineLayout.labelRects(.weekly, store.r1.pipeline).map(\.minX).min()! - 4
+            XCTAssertGreaterThanOrEqual(panel.body.minX, left, name.rawValue)
+            XCTAssertLessThanOrEqual(panel.body.maxX, right, name.rawValue)
+            XCTAssertFalse(panel.scrolls, name.rawValue)
+        }
+    }
+
     func testReturnLaneFollowsTheLowestDrawnWords() throws {
         for name in BrainBarDesignFixture.Name.allCases {
             let state = NDPipelineState.make(BrainBarDesignFixture.inputs(name))
@@ -118,6 +153,16 @@ import XCTest
             }
             let faulty = NDStore(fixture: BrainBarDesignFixture.inputs(.driveSignedOut), page: .overview)
             _ = try NDRenderHarness.window(faulty, name: "faulty-\(suffix)", appearance: appearance, in: directory)
+            if let widePath = ProcessInfo.processInfo.environment["PIPELINE_SPACE_WIDE_PROOF"] {
+                let wide = URL(fileURLWithPath: widePath, isDirectory: true)
+                try FileManager.default.createDirectory(at: wide, withIntermediateDirectories: true)
+                for (fixture, station, label): (BrainBarDesignFixture.Name, NDStation, String) in [
+                    (.calm, .mac, "mac"), (.driveSignedOut, .drive, "drive-fault"), (.lagStalled, .read, "read-lag"),
+                ] {
+                    let store = NDStore(fixture: BrainBarDesignFixture.inputs(fixture), page: .overview)
+                    _ = try NDRenderHarness.hover(store, station: station, name: "hover-\(label)-\(suffix)", appearance: appearance, in: wide)
+                }
+            }
         }
     }
 }

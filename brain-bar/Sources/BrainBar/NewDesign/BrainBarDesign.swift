@@ -259,7 +259,7 @@ enum NDGrid {
     /// R1.12 (changes 4 and B): the Overview's vertical rhythm.
     static let headlineToRows: CGFloat = 14
     static let toActivity: CGFloat = 24
-    static let activityToPipeline: CGFloat = 32  // L54: keep hover bodies below the Activity labels.
+    static let activityToPipeline: CGFloat = 0  // L63b: retain the original gap; fit bubbles within the diagram.
     static let footer: CGFloat = 28
     static let pageSide: CGFloat = 24
     static let pageTop: CGFloat = 20

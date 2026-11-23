@@ -9,12 +9,12 @@ enum NDPipelineLayout {
     /// L63: the return caption clears the lowest status by 32 pt; Search finishes the card.
     static let nameOffset: CGFloat = 17, purposeOffset: CGFloat = 37
     static let statusOffset: CGFloat = 33, purposeStatusOffset: CGFloat = 57, statusHeight: CGFloat = 13
-    static let yJobs: CGFloat = 167
+    static let yJobs: CGFloat = 138
     static let yAnswers: CGFloat = yJobs + purposeStatusOffset + statusHeight + 32 + 8
     static let size = CGSize(width: 820, height: yAnswers + statusOffset + statusHeight + 2)
     static let verticalPadding: CGFloat = 4
     static let drawWidth: CGFloat = 832
-    static let yTop: CGFloat = 80, ySaves: CGFloat = 150, yRail: CGFloat = 8
+    static let yTop: CGFloat = 44, ySaves: CGFloat = 114, yRail: CGFloat = 8
     static let stationRadius: CGFloat = 13
     /// The fault ring's radius (R1.4 change 16).
     static let ringRadius: CGFloat = 15.5
@@ -34,7 +34,7 @@ enum NDPipelineLayout {
     /// left (the long first-row lines are shorter).
     /// R1.10 (L49): 140 wide, so the two job stations hang under it with straight links. R1.10.4: everything right of the
     /// agents moved 15 pt left (the first-row lines are 15 pt shorter), so the diagram is 32 pt from each side again.
-    static let hub = CGRect(x: 365, y: 60, width: 140, height: 83)
+    static let hub = CGRect(x: 365, y: 24, width: 140, height: 83)
     /// "Kept safe" hugs its two stations (L5), widened by the lead so the two text blocks keep 16 pt between them and
     /// 12 pt to the frame at their widest statuses ("last backup 27 h ago" in Semibold): Copy on this Mac moves to x 630.
     /// R1.5: Copy on this Mac's status grew ("3 kept, newest 30 h ago"), so it moves to x 622 and the frame starts at x 544.
@@ -45,7 +45,7 @@ enum NDPipelineLayout {
     /// statuses ran into each other) and the frame 283 wide: the designer's 140 apart in a 262 frame, at 1.10.4's 32 pt
     /// insets, would leave the widest statuses ("3 kept, newest 30 h ago", "last upload 27 h ago", Semibold) 2.5 and
     /// −1.5 pt from the frame, against the lead's 12 pt rule (testKeptSafeTextKeepsItsSpacing).
-    static let keptSafe = CGRect(x: 521, y: 54, width: 283, height: 84)
+    static let keptSafe = CGRect(x: 521, y: 18, width: 283, height: 84)
 
     /// R1.12 change 6: Search moves under Google Drive, to the loop's bottom-right corner; Memory → Search runs right
     /// along the copies' lower edge and down, and the answers return straight along yAnswers (gap 79 / L56).
@@ -104,9 +104,9 @@ enum NDPipelineLayout {
         var out: [Connection] = []
         out.append(Connection(pipe: .sessions, line: NDPolyline(points: [CGPoint(x: agentsFrame.maxX + g, y: yTop), read]).trimmed(end: e)))
         out.append(Connection(pipe: .readMemory, line: NDPolyline(points: [read, CGPoint(x: hub.minX - g, y: yTop)]).trimmed(start: e)))
-        out.append(Connection(pipe: .saves, line: NDPolyline(points: [CGPoint(x: agentsFrame.maxX + g, y: 114), CGPoint(x: 100, y: 114), CGPoint(x: 100, y: ySaves), queue]).trimmed(end: e)))
+        out.append(Connection(pipe: .saves, line: NDPolyline(points: [CGPoint(x: agentsFrame.maxX + g, y: ySaves), queue]).trimmed(end: e)))
         out.append(Connection(pipe: .queueMemory, line: NDPolyline(points: [queue, CGPoint(x: 280, y: ySaves),
-                    CGPoint(x: 280, y: 108), CGPoint(x: hub.minX - g, y: 108)]).trimmed(start: e)))
+                    CGPoint(x: 280, y: 88), CGPoint(x: hub.minX - g, y: 88)]).trimmed(start: e)))
         // R14: leave the lower Memory port 8 pt below Kept-safe, then turn once into Search.
         // The hub ends 3 pt above the port, preserving the endpoint gap and its bottom text padding.
         let searchLaneY = keptSafe.maxY + 8
@@ -314,7 +314,10 @@ enum NDPipelineLayout {
         var obstacles = [pipelineHeading] + footerTexts + panelWords(s, state: state, displayedWords: displayedWords) + [circle(s).insetBy(dx: 1, dy: 1)]
         if interior {
             for other in NDStation.allCases where other != s {
-                obstacles += panelWords(other, state: state, displayedWords: displayedWords)
+                let words = panelWords(other, state: state, displayedWords: displayedWords)
+                // L63b: Memory uses the pocket between the jobs, with 4 pt clear of their words.
+                obstacles += s == .memory && (other == .jobs || other == .weekly || other == .queue)
+                    ? words.map { $0.insetBy(dx: -4, dy: -4) } : words
             }
             // R13: the two job panels clear the native caption fields, including their drawing insets.
             if s == .jobs || s == .weekly {
@@ -388,13 +391,22 @@ enum NDPipelineLayout {
         let normal = panelSide(s, hasAction: false).width
         let limit = windowInside.maxX - windowInside.minX
         guard normal < limit else { return [] }
-        return stride(from: normal + 40, to: limit, by: 40).map { $0 } + [limit]
+        let widths = stride(from: normal + 40, to: limit, by: 40).map { $0 }
+        return Array(Set(widths + [800, limit])).filter { $0 > normal && $0 <= limit }.sorted()
     }
 
     @MainActor static func measuredPanel(_ s: NDStation, state: NDPipelineState, displayedWords: [NDStation: [CGRect]] = [:],
                               heightAtWidth: (CGFloat) -> CGFloat) -> Panel {
         let normal = panelSide(s, hasAction: false).width
         let height = heightAtWidth(normal)
+        if s == .memory {
+            let left = [.jobs, .queue].flatMap { panelWords($0, state: state, displayedWords: displayedWords) }.map(\.maxX).max()! + 4
+            let right = panelWords(.weekly, state: state, displayedWords: displayedWords).map(\.minX).min()! - 4
+            let width = min(normal, right - left)
+            if width >= 2 * arrowInset,
+               let below = panelCandidate(s, edge: .bottom, state: state, actions: [], height: heightAtWidth(width),
+                                          width: width, displayedWords: displayedWords) { return below }
+        }
         if topRowPanels.contains(s) {
             if let above = panelCandidate(s, edge: .top, state: state, actions: [], height: height,
                                           width: normal, displayedWords: displayedWords) { return above }

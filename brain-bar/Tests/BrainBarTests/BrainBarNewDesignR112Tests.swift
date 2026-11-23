@@ -46,7 +46,7 @@ final class BrainBarNewDesignR112Tests: XCTestCase {
         XCTAssertTrue(window.contains("Text(title).font(NDType.section).foregroundStyle(ND.t2)"), "Activity and Pipeline")
         XCTAssertEqual(NDGrid.headlineToRows, 14)
         XCTAssertEqual(NDGrid.toActivity, 24)
-        XCTAssertEqual(NDGrid.activityToPipeline, 32)  // L54 clearance, retained by L63.
+        XCTAssertEqual(NDGrid.activityToPipeline, 0)  // L63b retains the original gap.
     }
 
     // MARK: C. one wording per fault

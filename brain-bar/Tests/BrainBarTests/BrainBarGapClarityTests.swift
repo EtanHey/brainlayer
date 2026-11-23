@@ -24,7 +24,7 @@ final class BrainBarGapClarityTests: XCTestCase {
             }
         }
         // The compact M1 layout still fits the lowest station's complete status line.
-        XCTAssertEqual(L.size.height, 325) // L63: Search follows the drawn job statuses with 32 pt clearance.
+        XCTAssertEqual(L.size.height, 296) // L63: Search follows the drawn job statuses with 32 pt clearance.
         for fixture in BrainBarDesignFixture.Name.allCases {
             let p = NDPipelineState.make(BrainBarDesignFixture.inputs(fixture))
             for station in NDStation.allCases {
