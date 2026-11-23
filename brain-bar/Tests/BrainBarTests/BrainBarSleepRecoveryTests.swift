@@ -19,7 +19,9 @@ final class BrainBarSleepRecoveryTests: XCTestCase {
                 store: BrainLayerConfigStore(configURL: URL(fileURLWithPath: "/fixture/config"),
                     loadDocumentOverride: { BrainLayerEnvDocument(config: .defaultConfig) }),
                 launchdStatusProvider: StaticBrainLayerLaunchdStatusProvider(states: [:]),
+                embeddingResidencyProbe: StaticBrainBarEmbeddingResidencyProbe(state: .unmeasurable),
                 initialLaunchdStates: [.watch: .running], refreshStatusOnLoad: false, now: { clock.date },
+                observabilityCadence: .known(300),
                 initialWatcherHealth: .readable(.init(updatedAt: base, pollCount: 1)),
                 awakeClock: { clock.uptime }, sleepHistory: history,
                 statusDeadlineScheduler: { _, action in deadlines.append(action) })
@@ -30,7 +32,8 @@ final class BrainBarSleepRecoveryTests: XCTestCase {
             clock.date = base.addingTimeInterval(855); clock.uptime = 1035
             model.republishStatus()
             XCTAssertFalse(model.publishedStatus.needsAttention)
-            XCTAssertEqual(model.publishedStatus.dashboardStatus.headline, "Checking…")
+            XCTAssertEqual(model.publishedStatus.dashboardStatus.headline,
+                           deliveredWake ? "Checking after sleep…" : "Checking…")
             if deliveredWake {
                 var fault = BadgeStatePresentation(badgeOn: false, reason: "", activeCodes: [])
                 fault.healthVerdict = .init(dot: .red, checks: [

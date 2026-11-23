@@ -23,6 +23,9 @@ enum BrainBarMenuLiveCapture {
         c.verdictAwakeAgeS = verdictAwakeAgeS ?? .infinity
         c.isChecking = status.isChecking
         c.wakeCatchUpPending = wakeCatchUpPending
+        c.wakeStatusUnconfirmed = status.wakeStatusUnconfirmed
+        c.wakeStatusReason = status.wakeStatusUnconfirmed
+            ? status.issues.first { $0.id == "verdict.stale" }?.text : nil
         c.driveAuthModel = driveAuth?.state
         c.backupsMeasured = false
         if case let .measured(value) = backups {

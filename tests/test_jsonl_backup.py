@@ -199,7 +199,10 @@ def test_invalid_jsonl_machine_id_writes_error_receipt_without_upload(tmp_path, 
     assert result["verified"] is False
     assert result["error_code"] == "invalid_machine_id"
     assert uploads == []
-    assert json.loads(log_path.read_text(encoding="utf-8"))["error_code"] == "invalid_machine_id"
+    rows = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()]
+    assert [row for row in rows if "attempted_at" in row] == [result]
+    assert rows[-1]["error_code"] == "invalid_machine_id"
+    assert sum(row.get("event") == "local_retention_summary" for row in rows) == 1
 
 
 def test_jsonl_retention_is_disabled_by_default_and_keeps_local_archives(tmp_path, monkeypatch):
@@ -1088,7 +1091,10 @@ def test_run_jsonl_backup_uploads_incremental_bundle_verifies_and_enqueues_summa
     assert active.as_posix() not in (tmp_path / "state.json").read_text()
     state = json.loads((tmp_path / "state.json").read_text())
     assert sorted(state["files"]) == sorted(path.as_posix() for path in old_files)
-    assert len((tmp_path / "jsonl-backup.log").read_text().strip().splitlines()) == 1
+    rows = [json.loads(line) for line in (tmp_path / "jsonl-backup.log").read_text().splitlines()]
+    assert [row for row in rows if "attempted_at" in row] == [result]
+    assert rows[-1] == result
+    assert sum(row.get("event") == "local_retention_summary" for row in rows) == 1
     queued = list((tmp_path / "queue").glob("jsonl_backup-*.jsonl"))
     assert len(queued) == 1
     assert "JSONL backup uploaded 3 files" in queued[0].read_text()
@@ -3215,7 +3221,43 @@ def test_run_jsonl_backup_second_run_noops_when_state_covers_files(tmp_path, mon
     assert second["already_covered_files"] == 1
     assert second["message"] == "no-op, 1 files already covered"
     assert len(uploads) == 1
-    assert len((tmp_path / "jsonl-backup.log").read_text().strip().splitlines()) == 2
+    rows = [json.loads(line) for line in (tmp_path / "jsonl-backup.log").read_text().splitlines()]
+    assert [row for row in rows if "attempted_at" in row] == [first, second]
+    assert rows[-1] == second
+    assert sum(row.get("event") == "local_retention_summary" for row in rows) == 2
+
+
+def test_retention_metadata_cannot_replace_transcript_last_run(tmp_path, monkeypatch):
+    from brainlayer import jsonl_backup
+
+    now = time.time()
+    source = tmp_path / "sessions"
+    _write_jsonl(source / "changed.jsonl", mtime=now - 3600)
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    old = staging / "claude-jsonl-2026-01-01.tar.gz"
+    old.write_bytes(b"protected legacy archive")
+    os.utime(old, (now - 30 * 86400, now - 30 * 86400))
+    uploads = []
+    _mock_drive_success(jsonl_backup, monkeypatch, uploads)
+    log = tmp_path / "log"
+    result = jsonl_backup.run_backup(
+        source_roots=[source],
+        staging_dir=staging,
+        state_path=tmp_path / "state",
+        log_path=log,
+        queue_dir=tmp_path / "queue",
+        now=now,
+    )
+    rows = [json.loads(line) for line in log.read_text().splitlines()]
+    reporting = [row for row in rows if row.get("event") in {"local_retention_kept", "local_retention_summary"}]
+    assert len(reporting) == 1
+    assert reporting[0]["event"] == "local_retention_summary"
+    assert reporting[0]["kept"]
+    assert sum(row["event"] == "local_retention_summary" for row in reporting) == 1
+    assert all(not {"attempted_at", "uploaded", "verified", "status", "error"}.intersection(row) for row in reporting)
+    assert [row for row in rows if "attempted_at" in row] == [result]
+    assert next(row for row in reversed(rows) if "attempted_at" in row) == result
 
 
 def test_local_only_jsonl_bundle_does_not_advance_upload_state(tmp_path, monkeypatch):
@@ -3388,7 +3430,10 @@ def test_jsonl_backup_main_persists_terminal_failure_to_attempt_log(tmp_path, mo
     assert jsonl_backup.main() == 1
 
     stdout_payload = json.loads(capsys.readouterr().out)
-    logged_payload = json.loads(log_path.read_text(encoding="utf-8"))
+    rows = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()]
+    # run_backup is mocked to raise: only main's fallback writer runs, without a sweep.
+    assert len(rows) == 1
+    logged_payload = rows[0]
     assert logged_payload == stdout_payload
     assert logged_payload["status"] == "failed"
     assert logged_payload["verified"] is False

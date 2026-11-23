@@ -201,3 +201,9 @@ def test_purge_last_outcome_and_failed_helper_polling(tmp_path, monkeypatch, las
     assert ("urgency 4 failed" if last_fails else "macOS reclaimed too little purgeable space") in str(error.value)
     assert len(sleeps) == (0 if last_fails else 60)
     assert clock.monotonic() == (0 if last_fails else 30)
+
+
+@pytest.fixture(autouse=True)
+def _vacuum_snapshot_backend_for_legacy_contracts(monkeypatch):
+    """These cases pin VACUUM/reclaim behavior; clone-specific races have their own suite."""
+    monkeypatch.setenv("BRAINLAYER_BACKUP_SNAPSHOT_METHOD", "vacuum")

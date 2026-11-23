@@ -22,6 +22,16 @@
         "target": "ctypes.c_int"
       }
     },
+    "006c5487a5c37ff7176bb0e58dce0bab1b3c11e48f5866a903a24a8bd74844f4": {
+      "non_cloud_purpose": "Local SQLite read-only connection (mode=ro and query_only) for T3 session ownership or text coverage; no network or model sender.",
+      "site": {
+        "call_sha256": "b62be6aff7f5df3cc93f9b1e146eda88037ef0c05fd9abc73d09ee2a18edaa07",
+        "kind": "generic_send",
+        "owner": "<module>.audit_t3",
+        "path": "src/brainlayer/ingest/t3_audit.py",
+        "target": "sqlite3.connect"
+      }
+    },
     "00db5ec85f9abd52c6d5d9ff6ed45c08d7a6b8cc3151b4371a1965a59c0c6dc3": {
       "non_cloud_purpose": "Private retirement guard/probe: capture original callables or blocked controls, local package metadata, and synthetic SQLite only; no candidate send admitted. Site: scripts/retirement_probe.py <module>.controls socket.socket.",
       "site": {
@@ -92,6 +102,16 @@
         "target": "sqlite3.connect"
       }
     },
+    "048d6ba7d139c9a30d6034e8cf7793b74257ba76bd56c739e0e13eaa85a51a4c": {
+      "non_cloud_purpose": "Local APFS volume detection and separate-process cp-c snapshot copying, including subprocess exception/import metadata; no network or model sender.",
+      "site": {
+        "call_sha256": "cc683a58fabd9cf77fdd68bfe74e2a582706ccd4edb71e3d47fa4b6254b91911",
+        "kind": "callable_reference",
+        "owner": "<module>.snapshot",
+        "path": "src/brainlayer/backup_clone.py",
+        "target": "subprocess.SubprocessError"
+      }
+    },
     "062e096a44e8f63c1d329c9ec3500133905d9747ed03d5afac4e26d632cc13c4": {
       "non_cloud_purpose": "Private retirement build/probe/validation harness; positive controls are blocked before sending",
       "site": {
@@ -130,16 +150,6 @@
         "owner": "<module>.resolve_machine_id",
         "path": "src/brainlayer/backup_daily.py",
         "target": "subprocess.run"
-      }
-    },
-    "0ab7f79347ca25c3b4dba2b5e569eb33f51ac2b6cd02f060dc1761724f78eb1b": {
-      "non_cloud_purpose": "Existing local hostname metadata or AF_UNIX BrainBar/MCP helper transport; not an Internet model endpoint. Site: src/brainlayer/health_check.py <module>.send_brainbar_search_canary socket.socket.",
-      "site": {
-        "call_sha256": "30305b95b691736882fade0c8f51cbfc591af0793d1a915d2582c4cc3234ab5a",
-        "kind": "transport_call",
-        "owner": "<module>.send_brainbar_search_canary",
-        "path": "src/brainlayer/health_check.py",
-        "target": "socket.socket"
       }
     },
     "0ad54d5618bb7e08a643fd888f526d43a46f6135d905928dade354e4fbda0d02": {
@@ -182,6 +192,16 @@
         "target": "import subprocess"
       }
     },
+    "0cae249235c5c27570d18a939c4b5eb04463c75502e59d934725923d49a188ac": {
+      "non_cloud_purpose": "Local APFS volume detection and separate-process cp-c snapshot copying, including subprocess exception/import metadata; no network or model sender.",
+      "site": {
+        "call_sha256": "f328e9fdb44e7ac888ce4aa1def195a181a8e567b6eef0adca46520220898743",
+        "kind": "child_process",
+        "owner": "<module>._copy",
+        "path": "src/brainlayer/backup_clone.py",
+        "target": "subprocess.run"
+      }
+    },
     "0ce1685ff2d27f4076683cba27d56b195536959f7f13b099e092631af9fa6749": {
       "non_cloud_purpose": "Local Git shallow-checkout inspection for the dispatch-only Golems approval-helper build; bounded rev-parse with explicit argv. No model provider or conversation payload.",
       "site": {
@@ -210,6 +230,16 @@
         "owner": "<module>._run_split_cycle",
         "path": "scripts/hotlane_brainbar_daemon.py",
         "target": "carryover.put"
+      }
+    },
+    "0db5ff7d50739292c7954469e31bc646cc3c1e134eca2e414d968dcfd91d8491": {
+      "non_cloud_purpose": "Read local macOS CPU brand and swap usage with bounded /usr/sbin/sysctl for fleet backup admission; no network or model sender.",
+      "site": {
+        "call_sha256": "7846e3a3654744b4886ac80fc3abfb0e619551927275b88c0d0c71f8f962aa00",
+        "kind": "child_process",
+        "owner": "<module>._sysctl",
+        "path": "src/brainlayer/backup_heavy_gate.py",
+        "target": "subprocess.run"
       }
     },
     "0e8c13e6830758247d49a3f3c1336f20000b2a1d2e5c2c95f5c12619d07c412c": {
@@ -532,6 +562,16 @@
         "target": "subprocess.check_output"
       }
     },
+    "1a40b1463feba507e12eb5e47a4c09144eb92d46b69af2f0343bccb8cca3ec33": {
+      "non_cloud_purpose": "Existing local hostname metadata or AF_UNIX BrainBar/MCP helper transport; not an Internet model endpoint. Site: src/brainlayer/health_check.py <module>._brainbar_request socket.socket.",
+      "site": {
+        "call_sha256": "30305b95b691736882fade0c8f51cbfc591af0793d1a915d2582c4cc3234ab5a",
+        "kind": "transport_call",
+        "owner": "<module>._brainbar_request",
+        "path": "src/brainlayer/health_check.py",
+        "target": "socket.socket"
+      }
+    },
     "1a5301f219bb9cd40dea485d1b3cb7ddb83c801a5c5615d9cb7a06b49db8bb03": {
       "non_cloud_purpose": "Operator-only native harness connectivity diagnostic. Uses the installed T3 stdio ACP MCP bridge only with existing caller credentials and a loopback endpoint matching the installed runtime; native events, strong read-only provider linkage and bounded metadata prove connectivity. No server, token minting, or BrainLayer production cloud-model backend. The external agent retains its provider and may invoke that provider. Helper timeout changes only own-probe cleanup timing. Site: scripts/harness_probe_t3.py <module> import subprocess.",
       "site": {
@@ -830,6 +870,16 @@
         "owner": "<module>.controls",
         "path": "scripts/retirement_probe.py",
         "target": "socket.getaddrinfo"
+      }
+    },
+    "24b2b86540dddd7f9cb4f33f03766db3a7c9cdb450a9e23a0a44edc982fbb7c2": {
+      "non_cloud_purpose": "Local APFS volume detection and separate-process cp-c snapshot copying, including subprocess exception/import metadata; no network or model sender.",
+      "site": {
+        "call_sha256": "993b4ddbed9f1cf8956f18fdee541eda8910cd86d15b0b526a4c0b2bb2c722a2",
+        "kind": "child_process",
+        "owner": "<module>.supported",
+        "path": "src/brainlayer/backup_clone.py",
+        "target": "subprocess.run"
       }
     },
     "24dd1ce1e18348f57da42cee504971386e395583fc3f2229ff6ced4bfd02989e": {
@@ -1138,16 +1188,6 @@
         "target": "subprocess.check_output"
       }
     },
-    "2fe5979937b5065a836430b205b2756767f2c90ee0da167f49759cd58fbfd1f8": {
-      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/health_check.py <module>.send_brainbar_search_canary",
-      "site": {
-        "call_sha256": "376f80442594e8524cbfa22e160cafb6ecd60687503f971cf503081dce36cb42",
-        "kind": "generic_send",
-        "owner": "<module>.send_brainbar_search_canary",
-        "path": "src/brainlayer/health_check.py",
-        "target": "client.sendall"
-      }
-    },
     "30ac96d42bb27eb338d14a8cd3dd08306576ac820ff4e5928159708f1c961e3a": {
       "non_cloud_purpose": "Existing local command/type metadata: Git, process inspection, launchctl, backup supervision or installed helper; no cloud model subprocess. Site: src/brainlayer/jsonl_backup.py <module>.copy_archive_to_icloud subprocess.TimeoutExpired.",
       "site": {
@@ -1426,6 +1466,16 @@
         "owner": "<module>.peer_uid",
         "path": "src/brainlayer/supervisor_guard.py",
         "target": "ctypes.c_uint"
+      }
+    },
+    "3978338979427d9022da1e8794e49ebdd9efbf228825b00dcdda9eff63b13475": {
+      "non_cloud_purpose": "Local SQLite read-only connection (mode=ro and query_only) for T3 session ownership or text coverage; no network or model sender.",
+      "site": {
+        "call_sha256": "c7f7d622519aeae7f00c7607a3cc72b12f1fe9c0bf93f69de48a49f61f190957",
+        "kind": "generic_send",
+        "owner": "<module>.ingest_t3",
+        "path": "src/brainlayer/ingest/t3.py",
+        "target": "sqlite3.connect"
       }
     },
     "39a53c940c32fe39a821bee7ddcf5a7e8c61ce296ce2e6300e2bd4887c304fa3": {
@@ -2176,6 +2226,16 @@
         "target": "importlib.import_module"
       }
     },
+    "5479d4b001c030c981d718e51445fccdd6f9be77546a9f09817a89756b054dc0": {
+      "non_cloud_purpose": "Local APFS volume detection and separate-process cp-c snapshot copying, including subprocess exception/import metadata; no network or model sender.",
+      "site": {
+        "call_sha256": "cc683a58fabd9cf77fdd68bfe74e2a582706ccd4edb71e3d47fa4b6254b91911",
+        "kind": "callable_reference",
+        "owner": "<module>.supported",
+        "path": "src/brainlayer/backup_clone.py",
+        "target": "subprocess.SubprocessError"
+      }
+    },
     "5509aa9d4767c5a43cc7629c3f622ca8a1830db170fef66c0c1dfffaa289158c": {
       "non_cloud_purpose": "Existing local command/type metadata: Git, process inspection, launchctl, backup supervision or installed helper; no cloud model subprocess. Site: src/brainlayer/backup_daily.py <module>.resolve_machine_id subprocess.TimeoutExpired.",
       "site": {
@@ -2663,6 +2723,16 @@
         "kind": "import_binding",
         "owner": "<module>",
         "path": "src/brainlayer/kg_session_finish.py",
+        "target": "import subprocess"
+      }
+    },
+    "69509250383d686916b65e253841cd69f4e5b5d55c8943527058ac45442c0b5a": {
+      "non_cloud_purpose": "Local APFS volume detection and separate-process cp-c snapshot copying, including subprocess exception/import metadata; no network or model sender.",
+      "site": {
+        "call_sha256": "9d97d469cf8d66465563e1e22c6dab3b6107819aba2d9956c7080016c1ab9c1b",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "src/brainlayer/backup_clone.py",
         "target": "import subprocess"
       }
     },
@@ -3382,16 +3452,6 @@
         "target": "subprocess.TimeoutExpired"
       }
     },
-    "82bc6bba3e265d016166f33ed43cce08dd2c340fe04ca0c0a95abfb7a1ff5006": {
-      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/health_check.py <module>.send_brainbar_search_canary",
-      "site": {
-        "call_sha256": "68175084ac5364b03c4a4b2cd860cc4fcc5c8542060f34e26339c1ce11ffc217",
-        "kind": "generic_send",
-        "owner": "<module>.send_brainbar_search_canary",
-        "path": "src/brainlayer/health_check.py",
-        "target": "client.connect"
-      }
-    },
     "837ee23c48881860478e8eba3c32f0d355e453611a742f9b559903f3d3eefa58": {
       "non_cloud_purpose": "Stdlib-only best-effort Darwin current-process thread scheduling observation: resolve symbols from the current process with ctypes.CDLL(None), read QoS, thread ID and curpri via libSystem APIs, and build ctypes structs and pointers; no library path, model, cloud or network sender.",
       "site": {
@@ -3500,6 +3560,16 @@
         "owner": "<module>",
         "path": "scripts/retirement_probe.py",
         "target": "import importlib.util"
+      }
+    },
+    "86f844b4f555f7b73d86bbb0a0c02cda43b7d5444dabf568b995368fcdf25017": {
+      "non_cloud_purpose": "Local SQLite writer barrier and private APFS clone recovery only; no network or model sender.",
+      "site": {
+        "call_sha256": "381b60781e3898929b593335bbfed2ba1e34c335a640ce26d143684fc1faaa52",
+        "kind": "generic_send",
+        "owner": "<module>.snapshot",
+        "path": "src/brainlayer/backup_clone.py",
+        "target": "sqlite3.connect"
       }
     },
     "8708a353ddf10321addbc158724b332ce8620dbac497c11e2700e5faf7e5132d": {
@@ -3820,6 +3890,16 @@
         "target": "subprocess.TimeoutExpired"
       }
     },
+    "927a85f3b3d2368b5579918e4e1d51caa3da82ceedb1f3d40c5f73423e0cba5e": {
+      "non_cloud_purpose": "Catch local sysctl probe failures and defer backup admission; exception type metadata only, no model sender.",
+      "site": {
+        "call_sha256": "cc683a58fabd9cf77fdd68bfe74e2a582706ccd4edb71e3d47fa4b6254b91911",
+        "kind": "callable_reference",
+        "owner": "<module>._pressure_reason",
+        "path": "src/brainlayer/backup_heavy_gate.py",
+        "target": "subprocess.SubprocessError"
+      }
+    },
     "92b07f75026c1fce9819d5c17a8a2ade7435aa5af21ecd2ffa45c60ed74b7d71": {
       "non_cloud_purpose": "Existing local hostname metadata or AF_UNIX BrainBar/MCP helper transport; not an Internet model endpoint. Site: src/brainlayer/brainbar_hybrid_helper.py <module>.HybridSearchHelper.serve_forever socket.socket().listen.",
       "site": {
@@ -3848,6 +3928,16 @@
         "owner": "<module>.gated_spawn",
         "path": "src/brainlayer/supervisor_guard.py",
         "target": "subprocess.Popen"
+      }
+    },
+    "932765cca120e7c15654ccd4602c9220aa12d228c16a73d400d8d09266b34ec1": {
+      "non_cloud_purpose": "Local APFS volume detection and separate-process cp-c snapshot copying, including subprocess exception/import metadata; no network or model sender.",
+      "site": {
+        "call_sha256": "4827f989ae384e24e8fce97497601d0f2bf543667c136113f2114b290a49e086",
+        "kind": "child_process",
+        "owner": "<module>.supported",
+        "path": "src/brainlayer/backup_clone.py",
+        "target": "subprocess.run"
       }
     },
     "93b0dcb16c7188b3190271eb1f1af530f46e40b1b02afec61e67fa068e40699a": {
@@ -4240,6 +4330,16 @@
         "target": "socket.socket"
       }
     },
+    "a215ba911720cbc15b8673d52018b43f7e9a7940c009bbba53530f634c34024a": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/health_check.py <module>._brainbar_request",
+      "site": {
+        "call_sha256": "68175084ac5364b03c4a4b2cd860cc4fcc5c8542060f34e26339c1ce11ffc217",
+        "kind": "generic_send",
+        "owner": "<module>._brainbar_request",
+        "path": "src/brainlayer/health_check.py",
+        "target": "client.connect"
+      }
+    },
     "a307dcc8458988ecf547cc5fa24f62df86734596ba3ca9d14896ea2dddbf4df1": {
       "non_cloud_purpose": "Retained media ingestion and local processing, not a cloud model sender",
       "site": {
@@ -4466,6 +4566,16 @@
         "owner": "<module>._important_usage_capacity_bytes",
         "path": "src/brainlayer/disk_space.py",
         "target": "subprocess.CalledProcessError"
+      }
+    },
+    "ac158754f006e99d885492851d88f17a1e54a6e9049c9e3d68b762a1e7c6244b": {
+      "non_cloud_purpose": "Bind local subprocess support for bounded sysctl backup-admission resource probes; no network or model sender.",
+      "site": {
+        "call_sha256": "9d97d469cf8d66465563e1e22c6dab3b6107819aba2d9956c7080016c1ab9c1b",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "src/brainlayer/backup_heavy_gate.py",
+        "target": "import subprocess"
       }
     },
     "ac2c7a44e2c20b4aa1592d8d661eb4f4b5d58784942df7da893c2ff106ee47b7": {
@@ -5438,6 +5548,16 @@
         "target": "subprocess.run"
       }
     },
+    "c6a3ff5efc8d88d4b732100301298b1f6bd76d3351ea8073331feb71627892e4": {
+      "non_cloud_purpose": "Local SQLite writer barrier and private APFS clone recovery only; no network or model sender.",
+      "site": {
+        "call_sha256": "848522c1b78fbf9727777c406d9ba292d99fc07b72d1a24c02e5508cc89be259",
+        "kind": "generic_send",
+        "owner": "<module>.snapshot",
+        "path": "src/brainlayer/backup_clone.py",
+        "target": "sqlite3.connect"
+      }
+    },
     "c6f0b0807a8ae7e386027d5f545fa11096663b1f747da1a9a3993cdbaed84cbf": {
       "non_cloud_purpose": "Existing local command/type metadata: Git, process inspection, launchctl, backup supervision or installed helper; no cloud model subprocess. Site: src/brainlayer/backup_daily.py <module>._request_macos_purge subprocess.TimeoutExpired.",
       "site": {
@@ -5516,6 +5636,16 @@
         "owner": "<module>.environment_ready.get",
         "path": "scripts/golems_approve_release.py",
         "target": "subprocess.run"
+      }
+    },
+    "c98f29f793d01a0164f4089f416fa6d96e10df46b28f8226a6f8ce46006cdf95": {
+      "non_cloud_purpose": "Catch local CPU-brand sysctl failures and identify the backup heavy-work gate in its durable alert; exception metadata only, no network/model sender.",
+      "site": {
+        "call_sha256": "cc683a58fabd9cf77fdd68bfe74e2a582706ccd4edb71e3d47fa4b6254b91911",
+        "kind": "callable_reference",
+        "owner": "<module>.backup_heavy_gate",
+        "path": "src/brainlayer/backup_heavy_gate.py",
+        "target": "subprocess.SubprocessError"
       }
     },
     "c9be6ca583916b8f68108e8a702dcf053ed8e58484f9d3d9c55845080ff6a294": {
@@ -5666,6 +5796,16 @@
         "owner": "<module>.MaintenanceHold._restore",
         "path": "src/brainlayer/maintenance_control.py",
         "target": "self.client.request"
+      }
+    },
+    "d0a0faf117ea1c5e7002b75b3295c942aa892164c483198c93b78f85d604b8b0": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/health_check.py <module>._brainbar_request",
+      "site": {
+        "call_sha256": "376f80442594e8524cbfa22e160cafb6ecd60687503f971cf503081dce36cb42",
+        "kind": "generic_send",
+        "owner": "<module>._brainbar_request",
+        "path": "src/brainlayer/health_check.py",
+        "target": "client.sendall"
       }
     },
     "d1360496ed5dbe116f92b78f65693d01c4bba6419f45df01e9b9b8c5c6ed01ca": {

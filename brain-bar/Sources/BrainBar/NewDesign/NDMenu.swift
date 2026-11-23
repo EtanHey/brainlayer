@@ -201,6 +201,8 @@ struct NDMenuHeadline: View {
     /// The one line under a headline: an amber state's own line; not confirmed, "Nothing is known to be broken." only when
     /// the last confirmed verdict had no red check (L26).
     static func detail(_ r1: NDR1, lastVerdictHadRed: Bool) -> String? {
+        if r1.headline == BrainBarMenuPresenter.Say.checkingSleep.text { return nil }
+        if r1.wakeStatusUnconfirmed, r1.redCount == 0 { return r1.headlineDetail }
         if r1.pipeline.allUnconfirmed { return lastVerdictHadRed ? nil : Say.nothingKnownBrokenShort }
         return r1.redCount == 0 ? r1.headlineDetail : nil
     }
@@ -214,7 +216,8 @@ struct NDMenuHeadline: View {
             } else if !r1.items.isEmpty {
                 Image(systemName: "exclamationmark.triangle.fill").font(.system(size: 15)).foregroundStyle(ND.orange)
             } else if let symbol = r1.headlineSymbol {
-                Image(systemName: symbol).font(.system(size: 15)).foregroundStyle(ND.menuText2)
+                Image(systemName: symbol).font(.system(size: 15))
+                    .foregroundStyle(r1.headlineTone == .warn ? ND.orange : ND.menuText2)
             }
             VStack(alignment: .leading, spacing: 2) {
                 Text(Self.text(r1)).font(NDType.title).tracking(-0.25).foregroundStyle(ND.menuText1)

@@ -390,7 +390,18 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--list", action="store_true")
     ap.add_argument("--write-configs", action="store_true")
     ap.add_argument("--require-sync", action="store_true", help="fail when a covered source changed")
+    ap.add_argument("--pin-source", help="after reviewing model conformance, update one covered source's sha256")
     args = ap.parse_args(argv)
+    if args.pin_source:
+        coverage_path = HERE / "coverage.json"
+        coverage = json.loads(coverage_path.read_text())
+        source = next((src for src in coverage["sources"] if src["path"] == args.pin_source), None)
+        if source is None:
+            ap.error("--pin-source must name a source already listed in coverage.json")
+        source["sha256"] = sha256(ROOT / source["path"])
+        coverage_path.write_text(json.dumps(coverage, indent=2) + "\n")
+        print(f"pinned {source['path']} sha256 {source['sha256']}; run --require-sync to verify")
+        return 0
     cfg_dir = HERE / "configs"
     if args.list:
         for c in CASES:

@@ -33,6 +33,9 @@ struct BrainBarMenuCapture: Sendable {
     var verdictAwakeAgeS: TimeInterval = 0
     var isChecking = false
     var wakeCatchUpPending = false
+    /// Published by the shared wake sampler; presentation never computes its own deadline.
+    var wakeStatusUnconfirmed = false
+    var wakeStatusReason: String? = nil
     /// The app's backups observation: measured (true) or unavailable (false).
     var backupsMeasured = true
     /// The newest verified copy time from the last measured observation (S4). No kept value today.

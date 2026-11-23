@@ -243,6 +243,7 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
 
     /// The menu's first row from the shared snapshot (S5).
     nonisolated static func statusLineTitle(for verdict: BrainBarStatusVerdict) -> String {
+        if verdict.wakeCatchUpPending, !verdict.needsAttention { return "Checking after sleep…" }
         if let dot = verdict.dotOverride { return verdict.overrideHeadline(dot) }
         if verdict.needsAttention {
             let reason = verdict.attention.joined(separator: "; ")
