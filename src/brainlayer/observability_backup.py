@@ -360,6 +360,41 @@ def _maintenance_schedule_error(path: Path) -> str | None:
     return f"maintenance_schedule_unavailable: {path}: {reason}"
 
 
+def build_drive_retention_section(
+    *, env: Mapping[str, str], record_input: Callable[..., dict], now: datetime, inputs: list[dict]
+) -> dict:
+    """Expose current config and cached listing evidence without contacting Drive."""
+    from .backup_retention_observation import drive_retention_observation
+
+    db_path = Path(env["BRAINLAYER_DB"]).expanduser() if env.get("BRAINLAYER_DB") else get_db_path()
+    path = _path(env, "BRAINLAYER_OBSERVABILITY_BACKUP_DAILY_LOG", db_path=db_path)
+    records, status, skipped = _read_json_lines(path, mixed=True)
+    evidence = record_input(path, status=status, rows_or_bytes=None, skipped_lines=skipped, in_section_inputs=False)
+    if evidence not in inputs:
+        inputs.append(evidence)
+    current_machine = env.get(backup_daily.BACKUP_MACHINE_ID_ENV)
+    if not current_machine:
+        current_machine = next(
+            (
+                row["machine_id"]
+                for row in reversed(records)
+                if row.get("backup_log_provenance") == "real" and isinstance(row.get("machine_id"), str)
+            ),
+            "unknown",
+        )
+    input_error = None
+    if evidence.get("status") in {"malformed", "future"}:
+        input_error = "Drive selection receipt input is " + evidence["status"]
+    return drive_retention_observation(
+        records,
+        env=env,
+        now=now,
+        machine_id=current_machine,
+        writes_enabled=backup_daily._drive_retention_enabled(),
+        input_error=input_error,
+    )
+
+
 def build_backups_section(
     *,
     env: Mapping[str, str],

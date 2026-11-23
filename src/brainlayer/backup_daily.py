@@ -3805,8 +3805,15 @@ def run_backup(
     def refresh_drive_inventory() -> tuple[str | None, list[Mapping[str, Any]] | None]:
         """Read a fresh existing folder; this path has no Drive mutation API."""
         from . import job_alerts
-        from .backup_retention import daily_date, drive_retention_report, verified_drive_receipts
+        from .backup_retention import (
+            configured_drive_rule,
+            daily_date,
+            drive_retention_report,
+            empty_drive_selection,
+            verified_drive_receipts,
+        )
 
+        selected_at = None
         try:
             if not remove_local_after_upload:
                 result["local_retention_inventory"] = "opt_out"
@@ -3828,19 +3835,35 @@ def run_backup(
             if len(proven_names) <= keep_latest:
                 result["local_retention_inventory"] = "within_cap"
                 return None, None  # A live listing cannot authorize deleting the kept cohort.
+            selected_at = dt.datetime.now(dt.UTC).isoformat()
+            rule = configured_drive_rule()
             inventory_service = build_drive_service()
             folders = _find_drive_folder_ids(inventory_service, resolved_folder_parts)
             if len(folders) != 1:
                 raise ValueError("Cannot establish one existing machine backup folder")
             inventory = _list_drive_backup_files(inventory_service, folders[0])
             result["drive_retention_report"] = drive_retention_report(
-                inventory, machine_id=result["machine_id"], folder_id=folders[0], as_of=local_backup_date()
+                inventory, machine_id=result["machine_id"], folder_id=folders[0], as_of=local_backup_date(), rule=rule
             )
+            result["drive_retention_selection"] = {
+                "machine_id": result["machine_id"],
+                "state": "measured",
+                "selected_at": selected_at,
+                "error": None,
+                **result["drive_retention_report"]["configured"],
+            }
             result["local_retention_inventory"] = "measured"
         except (BackupStoppedError, BackupTimeoutError):
             raise
         except Exception as exc:
             result.pop("drive_retention_report", None)
+            if selected_at is not None:
+                result["drive_retention_selection"] = empty_drive_selection(
+                    result["machine_id"],
+                    state="unmeasurable",
+                    selected_at=selected_at,
+                    error=_redact_upload_secrets(f"{type(exc).__name__}: {exc}"),
+                )
             result.update(
                 local_retention_inventory="unmeasurable",
                 retention_error_type=type(exc).__name__,

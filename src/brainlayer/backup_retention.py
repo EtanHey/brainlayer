@@ -3,12 +3,65 @@
 from __future__ import annotations
 
 import datetime as dt
+import os
 import re
 from collections.abc import Iterable, Mapping
+from dataclasses import dataclass
 from typing import Any
 
 _DAILY = re.compile(r"(\d{4}-\d{2}-\d{2})\.db\.(?:gz|zst)\Z")
 _MD5 = re.compile(r"[a-fA-F0-9]{32}\Z")
+
+
+@dataclass(frozen=True)
+class DriveRetentionRule:
+    daily_keep: int = 7
+    monthly_keep: int = 3
+
+    def __post_init__(self):
+        if type(self.daily_keep) is not int or self.daily_keep < 1:
+            raise ValueError("BRAINLAYER_BACKUP_DRIVE_DAILY_KEEP must be a positive integer")
+        if type(self.monthly_keep) is not int or not 0 <= self.monthly_keep <= 120:
+            raise ValueError("BRAINLAYER_BACKUP_DRIVE_MONTHLY_KEEP must be an integer from 0 to 120")
+
+    def data(self) -> dict[str, Any]:
+        return {
+            "daily_keep": self.daily_keep,
+            "monthly_keep": self.monthly_keep,
+            "per_machine": True,
+            "description": (
+                f"{self.daily_keep} daily + one per month for {self.monthly_keep} months, per Mac"
+                if self.monthly_keep
+                else f"{self.daily_keep} daily, per Mac"
+            ),
+        }
+
+
+def configured_drive_rule(env: Mapping[str, str] | None = None) -> DriveRetentionRule:
+    """Runtime configuration affects read-only selection, never Drive-write authority."""
+    env = os.environ if env is None else env
+    values = []
+    for name, default in (("DAILY", 7), ("MONTHLY", 3)):
+        key = f"BRAINLAYER_BACKUP_DRIVE_{name}_KEEP"
+        raw = env.get(key, str(default))
+        if not re.fullmatch(r"[0-9]+", raw):
+            raise ValueError(f"{key} must be an integer")
+        values.append(int(raw))
+    return DriveRetentionRule(*values)
+
+
+def empty_drive_selection(machine_id: str, *, state: str = "not_run", selected_at=None, error=None) -> dict:
+    return {
+        "machine_id": machine_id,
+        "state": state,
+        "selected_at": selected_at,
+        "error": error,
+        "on_drive": None,
+        "named_one_offs_count": None,
+        "kept": None,
+        "would_remove": None,
+        "monthly_representatives": [],
+    }
 
 
 def daily_date(name: str) -> dt.date | None:
@@ -105,23 +158,43 @@ def drive_retention_report(
     machine_id: str,
     folder_id: str,
     as_of: dt.date,
+    rule: DriveRetentionRule | None = None,
 ) -> dict[str, Any]:
     """Metadata-only choices, including historical raw dated .db files; no action API."""
-    dated = []
+    rule = configured_drive_rule() if rule is None else rule
+    dated, one_offs, seen = [], set(), {}
     for item in files:
         name = item.get("name", "")
-        match = re.fullmatch(r"(\d{4}-\d{2}-\d{2})\.db(?:\.(?:gz|zst))?", name)
-        if not match or item.get("parents") != [folder_id] or item.get("trashed"):
+        if item.get("parents") != [folder_id] or item.get("trashed"):
             continue
-        if item.get("appProperties", {}).get("brainlayer_machine") != machine_id:
+        properties = item.get("appProperties")
+        if not isinstance(properties, dict) or properties.get("brainlayer_machine") != machine_id:
+            continue
+        if not isinstance(item.get("id"), str) or not item["id"] or not isinstance(name, str):
+            continue
+        if item.get("mimeType") == "application/vnd.google-apps.folder":
+            continue
+        match = re.fullmatch(r"(\d{4}-\d{2}-\d{2})\.db(?:\.(?:gz|zst))?", name)
+        if not match:
+            one_offs.add(item["id"])
             continue
         try:
             day = dt.date.fromisoformat(match[1])
-            size = int(item["size"])
-        except (ValueError, TypeError, KeyError):
+        except ValueError:
+            one_offs.add(item["id"])
             continue
-        if size >= 0:
-            dated.append({"id": item["id"], "name": name, "bytes": size, "date": day.isoformat()})
+        try:
+            size = int(item["size"])
+        except (ValueError, TypeError, KeyError) as exc:
+            raise ValueError("Drive daily backup has no measurable size") from exc
+        if size < 0 or isinstance(item["size"], bool):
+            raise ValueError("Drive daily backup size is invalid")
+        row = {"id": item["id"], "name": name, "bytes": size, "date": day.isoformat()}
+        if item["id"] in seen and seen[item["id"]] != row:
+            raise ValueError("Drive listing repeats an object with conflicting metadata")
+        if item["id"] not in seen:
+            dated.append(row)
+            seen[item["id"]] = row
     dated.sort(key=lambda item: (item["date"], item["name"], item["id"]), reverse=True)
 
     def summary(rows):
@@ -132,29 +205,45 @@ def drive_retention_report(
             "newest": max((row["date"] for row in rows), default=None),
         }
 
-    keep = dated[:7]
-    keep_ids = {item["id"] for item in keep}
-    monthly = []
-    months = []
-    for offset in (1, 2, 3):
-        year, month0 = divmod(as_of.year * 12 + as_of.month - 1 - offset, 12)
-        month = f"{year:04}-{month0 + 1:02}"
-        months.append(month)
-        representative = next((item for item in dated if item["date"].startswith(month)), None)
-        if representative is not None and representative["id"] not in keep_ids:
-            monthly.append(representative)
-    extra_ids = {item["id"] for item in monthly}
+    def select(policy):
+        daily = dated[: policy.daily_keep]
+        daily_ids = {item["id"] for item in daily}
+        representatives, months = [], []
+        for offset in range(1, policy.monthly_keep + 1):
+            year, month0 = divmod(as_of.year * 12 + as_of.month - 1 - offset, 12)
+            month = f"{year:04}-{month0 + 1:02}"
+            months.append(month)
+            representative = next((item for item in dated if item["date"].startswith(month)), None)
+            if representative is not None:
+                representatives.append(representative)
+        extra = [item for item in representatives if item["id"] not in daily_ids]
+        kept_ids = daily_ids | {item["id"] for item in extra}
+        return months, representatives, extra, daily + extra, [item for item in dated if item["id"] not in kept_ids]
+
+    months, _, monthly, kept, removed = select(DriveRetentionRule())
+    _, representatives, _, configured_kept, configured_removed = select(rule)
     return {
         "mode": "report-only",
         "machine": machine_id,
         "daily": summary(dated),
-        "keep_7": {"kept": summary(keep), "would_remove": summary(dated[7:])},
+        "keep_7": {"kept": summary(dated[:7]), "would_remove": summary(dated[7:])},
         "keep_7_plus_monthly": {
             "months": months,
             "extra": summary(monthly),
             "extra_files": monthly,
-            "kept": summary(keep + monthly),
-            "would_remove": summary([item for item in dated if item["id"] not in keep_ids | extra_ids]),
+            "kept": summary(kept),
+            "would_remove": summary(removed),
+        },
+        "configured": {
+            "as_of": as_of.isoformat(),
+            "rule": rule.data(),
+            "on_drive": summary(dated),
+            "named_one_offs_count": len(one_offs),
+            "kept": summary(configured_kept),
+            "would_remove": summary(configured_removed),
+            "monthly_representatives": [
+                {key: item[key] for key in ("name", "date", "bytes")} for item in representatives
+            ],
         },
     }
 

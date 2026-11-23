@@ -6,18 +6,19 @@
   "backup_host_floor_note": "2026-11-22 lead/orc floor ruling: gate checks the existing non-reclaiming peak plus host reserve against raw free_now_bytes before/under custody, including past the soft pressure window. Disk refusal maps to existing Run failed. job_alerts.report gains opt-in replace_reason: an already-present alert stays present with refreshed text and no repeated notification; the model tracks alert membership, so this is a stutter, not recovery. Default set/clear and success-only recovery unchanged. Both gate and job-alert source pins refer to committed implementation 40f6e6da; report line range re-read at that source. No model transition change; floor refusal/override/recovery tests use actual gate/alert code with synthetic metadata only.",
   "backup_gate_r2_note": "2026-11-22 final R2: phase-aware peak (snapshot, all, and metadata-selected upload verification), current-cause reason refresh, and phase-specific expected-time admission. No allocation/verification/receipt writer changed. Time/disk refusal, including an initially exhausted snapshot deadline, maps to existing Run failed; cause refresh preserves alert membership. Admission timing changes when work starts, never snapshot or verified facts. Source pins reference committed R2 implementation 9fd83723; lead verifies this final fix without a third review round. TLC remains CI proof.",
   "backup_retention_note": "2026-11-22 19:32 owner ruling supersedes Drive cleanup: Drive pruning is a no-op even under legacy env opt-in, and the shared database inspector rejects Drive update/trash/delete/patch references. Local cleanup requires the SAME snapshot's latest MD5 receipt AND a fresh exact-folder/machine listing, preserves the local verified cohort/pins/unknowns, and rechecks local identity across hashing. An unverified older stall is never unlinked; abandoned receipt episodes may close after a newer verified backup while retaining their bytes explicitly. Optional local-retention observations are appended after the core verified/failure receipt, so inventory failure cannot erase it. Read-only report options do not authorize mutations. BackupVerdict over-approximates removal eligibility; production narrows RemoveAfterUpload to stronger same-copy proof, and Supersede no longer unlinks locally verified/unverified archives. Numeric counts, current-listing bounds, no-Drive-write shape and the forced hash-window race are proved by fail-first production-code tests, not claimed as TLC properties. Re-read receipt, same-copy removal, abandoned/superseded and weekly gates. Both covered changed modules must be pinned to the committed local-only source, then current-backup/current-vacuum rerun.",
+  "drive_retention_config_note": "2026-11-23: existing read-only local-retention inventory records a configured daily/monthly selection, time and error. Invalid config or listing metadata uses the existing retention-error alert/keep-all path. No snapshot, upload verification, local removal proof, supervisor custody or receipt-reader truth flag changed. Observability projects advisory cached counts with stale/error states; it does not fetch Drive or authorize mutations. BackupVerdict remains a conservative abstraction of verified/uploaded/removal ordering; configurable counts, cached-evidence validation and the v2 wire contract are proved by production-code tests, not TLA+ properties. Re-pin daily/policy source and run current-backup/current-vacuum with require-sync.",
   "sources": {
     "src/brainlayer/health_verdict.py": {
       "sha": "#1827 watcher-catchup round 1",
       "sha256": "a10214bfcb11b57aa01041f22408ccabd56fa7ef89e1e233ffc9d4b595b872a6"
     },
     "src/brainlayer/backup_daily.py": {
-      "sha": "local-retention R1 (unknown host/pin errors keep all and alert; receipt facts unchanged)",
-      "sha256": "dbee4a373d8ba2eca74439301f8537cdcdfe04fb96adafc5980e041d3de5c31e"
+      "sha": "drive-retention config (advisory selection values/time/error; backup receipt facts unchanged)",
+      "sha256": "e6e374d1c8a9da102c2b9e673f1009614d992a3efd2967cc3f536c9161841c90"
     },
     "src/brainlayer/backup_retention.py": {
-      "sha": "ed6c0d5ec9fd2444ae9b4118b9af1b9a30062f58 (live same-copy proof and report-only policy comparisons)",
-      "sha256": "179c14e88b007dcf5deccceb0a185569f2f1db2d53f55ad7c7019759491f35b8"
+      "sha": "drive-retention config (runtime daily/monthly read-only selection; local deletion proof unchanged)",
+      "sha256": "8213a2eb1fc75c2f2b9df197097872b3c6886e2a6ec7c09033394712610178f5"
     },
     "src/brainlayer/backup_heavy_gate.py": {
       "sha": "local-retention R1 (strict opt-in host resolver; existing heavy admission unchanged)",

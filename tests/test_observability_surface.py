@@ -273,7 +273,7 @@ def test_trace_is_written_when_build_fails(monkeypatch: pytest.MonkeyPatch, tmp_
     }
     trace_items = json.loads(trace.read_text())
     assert trace_items[0] == str(case["inputs"]["db"])
-    assert len(trace_items) == 6
+    assert len(trace_items) == 7  # The independent Drive-rule projection reads the daily journal too.
     assert "db/transport-health.json" in trace_items
 
 
@@ -300,11 +300,13 @@ def test_transitive_backup_import_failure_names_the_missing_dependency(
         }
     )
 
-    assert document["backups"] == {
+    assert {key: value for key, value in document["backups"].items() if key != "drive_retention"} == {
         "state": "unmeasurable",
         "reason": "backups import failed: ModuleNotFoundError: No module named 'idna'",
         "inputs": [],
     }
+    assert document["backups"]["drive_retention"]["writes_enabled"] is False
+    assert "ModuleNotFoundError" in document["backups"]["drive_retention"]["config_error"]
 
 
 def test_trace_only_input_is_excluded_from_recorder_section_inputs(tmp_path: Path) -> None:
@@ -479,6 +481,7 @@ def test_db_query_deadline_still_publishes_backups_transport_and_reason(tmp_path
     assert document["backups"] == baseline["backups"]
     v1 = {key: value for key, value in document.items() if key != "transport"}
     v1["schema_version"] = 1
+    v1["backups"] = {key: value for key, value in v1["backups"].items() if key != "drive_retention"}
     jsonschema.validate(v1, json.loads((FIXTURES / "observability-schema.v1.json").read_text()))
 
 

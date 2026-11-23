@@ -646,3 +646,47 @@ one only when the listing holds exactly one untrashed object of the same name, s
 reconciliation and it cannot delete anything in the run that writes it. An existing
 receipt, including a legacy one, is never replaced. Runs report the names written in
 `local_retention_reconciled`.
+
+## Database Drive backup rule (read-only)
+
+The default rule is **7 daily + one per month for 3 months, per Mac**. The monthly
+representative is the last dated daily backup in each of the previous three full
+calendar months; the current partial month does not count. Daily and monthly
+cohorts are combined without counting the same Drive object twice.
+
+| Runtime setting | Default | Accepted values |
+| --- | --- | --- |
+| `BRAINLAYER_BACKUP_DRIVE_DAILY_KEEP` | `7` | Positive integer |
+| `BRAINLAYER_BACKUP_DRIVE_MONTHLY_KEEP` | `3` | Integer from `0` to `120` |
+
+These settings change the read-only selection report, independently for each Mac's
+owned folder. They do not authorize Drive changes. The separate Drive-write gate
+`backup_daily._drive_retention_enabled()` stays hard-coded **false**. Existing
+`BRAINLAYER_BACKUP_DRIVE_RETENTION`, JSONL retention opt-ins, and a similarly named
+write-enable environment variable cannot turn this database gate on. Enabling a
+future cleanup needs Etan's explicit instruction and a separately reviewed change;
+this implementation has no Drive cleanup actor. Local retention still uses its
+own verified-copy requirements and per-host counts.
+
+The backup records `drive_retention_selection` when its existing local-retention
+inventory path reads Drive. A failed listing records the attempt time and error;
+a missing report is not a zero-file inventory. `observability.json` reads those
+records without contacting Drive and adds optional `backups.drive_retention` in
+schema v2. Schema v1 is unchanged. The configuration remains visible even when
+backup health is unmeasurable.
+
+`drive_retention.rule` contains `daily_keep`, `monthly_keep`, `per_machine: true`
+and `description`; `writes_enabled` is false and `config_error` is null or an
+explanation. `machines[]` contains `machine_id`, `state`, `selected_at`, `error`,
+`on_drive`, `named_one_offs_count`, `kept`, `would_remove` and
+`monthly_representatives`. Each summary contains `count`, `bytes`, `oldest` and
+`newest`; dates are ISO dates, and `selected_at` is the last selection attempt's
+ISO timestamp. `on_drive` describes dated daily `.db`, `.db.gz` and `.db.zst`
+objects only; named one-offs are counted separately and excluded from selection.
+
+States are `measured`, `unmeasurable`, `not_run` and `stale`. Unknown or failed
+selections have null summaries/counts. A rule change or calendar-month rollover makes the old report stale
+until another inventory is read; old candidate counts are withheld. Invalid
+configuration is reported rather than silently falling back. Reports are cached
+observations at `selected_at`, not a claim that a fresh Drive listing was fetched
+when settings opened.
