@@ -212,6 +212,16 @@
         "target": "carryover.put"
       }
     },
+    "0db5ff7d50739292c7954469e31bc646cc3c1e134eca2e414d968dcfd91d8491": {
+      "non_cloud_purpose": "Read local macOS CPU brand and swap usage with bounded /usr/sbin/sysctl for fleet backup admission; no network or model sender.",
+      "site": {
+        "call_sha256": "7846e3a3654744b4886ac80fc3abfb0e619551927275b88c0d0c71f8f962aa00",
+        "kind": "child_process",
+        "owner": "<module>._sysctl",
+        "path": "src/brainlayer/backup_heavy_gate.py",
+        "target": "subprocess.run"
+      }
+    },
     "0e8c13e6830758247d49a3f3c1336f20000b2a1d2e5c2c95f5c12619d07c412c": {
       "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/cli/__init__.py <module>._run_launchctl",
       "site": {
@@ -3820,6 +3830,16 @@
         "target": "subprocess.TimeoutExpired"
       }
     },
+    "927a85f3b3d2368b5579918e4e1d51caa3da82ceedb1f3d40c5f73423e0cba5e": {
+      "non_cloud_purpose": "Catch local sysctl probe failures and defer backup admission; exception type metadata only, no model sender.",
+      "site": {
+        "call_sha256": "cc683a58fabd9cf77fdd68bfe74e2a582706ccd4edb71e3d47fa4b6254b91911",
+        "kind": "callable_reference",
+        "owner": "<module>._pressure_reason",
+        "path": "src/brainlayer/backup_heavy_gate.py",
+        "target": "subprocess.SubprocessError"
+      }
+    },
     "92b07f75026c1fce9819d5c17a8a2ade7435aa5af21ecd2ffa45c60ed74b7d71": {
       "non_cloud_purpose": "Existing local hostname metadata or AF_UNIX BrainBar/MCP helper transport; not an Internet model endpoint. Site: src/brainlayer/brainbar_hybrid_helper.py <module>.HybridSearchHelper.serve_forever socket.socket().listen.",
       "site": {
@@ -4476,6 +4496,16 @@
         "owner": "<module>._important_usage_capacity_bytes",
         "path": "src/brainlayer/disk_space.py",
         "target": "subprocess.CalledProcessError"
+      }
+    },
+    "ac158754f006e99d885492851d88f17a1e54a6e9049c9e3d68b762a1e7c6244b": {
+      "non_cloud_purpose": "Bind local subprocess support for bounded sysctl backup-admission resource probes; no network or model sender.",
+      "site": {
+        "call_sha256": "9d97d469cf8d66465563e1e22c6dab3b6107819aba2d9956c7080016c1ab9c1b",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "src/brainlayer/backup_heavy_gate.py",
+        "target": "import subprocess"
       }
     },
     "ac2c7a44e2c20b4aa1592d8d661eb4f4b5d58784942df7da893c2ff106ee47b7": {
@@ -5526,6 +5556,16 @@
         "owner": "<module>.environment_ready.get",
         "path": "scripts/golems_approve_release.py",
         "target": "subprocess.run"
+      }
+    },
+    "c98f29f793d01a0164f4089f416fa6d96e10df46b28f8226a6f8ce46006cdf95": {
+      "non_cloud_purpose": "Catch local CPU-brand sysctl failures and identify the backup heavy-work gate in its durable alert; exception metadata only, no network/model sender.",
+      "site": {
+        "call_sha256": "cc683a58fabd9cf77fdd68bfe74e2a582706ccd4edb71e3d47fa4b6254b91911",
+        "kind": "callable_reference",
+        "owner": "<module>.backup_heavy_gate",
+        "path": "src/brainlayer/backup_heavy_gate.py",
+        "target": "subprocess.SubprocessError"
       }
     },
     "c9be6ca583916b8f68108e8a702dcf053ed8e58484f9d3d9c55845080ff6a294": {
