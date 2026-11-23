@@ -84,6 +84,28 @@ import XCTest
         }
     }
 
+    func testScreenFitKeepsTheBodyInsideItsClearNaturalFrame() {
+        let L = NDPipelineLayout.self
+        let screen = CGRect(x: -60, y: -200, width: 940, height: L.size.height + 210)
+        for name in BrainBarDesignFixture.Name.allCases {
+            let store = NDStore(fixture: BrainBarDesignFixture.inputs(name), page: .overview)
+            let chart = NDPipelineChart(state: store.r1.pipeline, memories: store.model.memories,
+                items: store.r1.stationItems, backupProgress: store.inputs.backupProgress)
+            for station in NDStation.allCases {
+                let natural = chart.panel(station, content: AnyView(NDStationPopover(store: store, station: station)))
+                let fitted = L.fitted(natural, within: screen)
+                XCTAssertTrue(natural.body.insetBy(dx: -0.01, dy: -0.01).contains(fitted.body), "\(name.rawValue) \(station)")
+                XCTAssertEqual(fitted.tip, natural.tip)
+                for other in NDStation.allCases where other != station {
+                    XCTAssertFalse(fitted.body.intersects(L.circle(other)), "\(station) over \(other)")
+                    for words in chart.displayedPanelWords[other] ?? L.labelRects(other, store.r1.pipeline) {
+                        XCTAssertFalse(fitted.outer.intersects(words), "\(station) over \(other)")
+                    }
+                }
+            }
+        }
+    }
+
     func testRenderRequestedProof() throws {
         guard let path = ProcessInfo.processInfo.environment["PIPELINE_SPACE_PROOF"] else { return }
         let directory = URL(fileURLWithPath: path, isDirectory: true)

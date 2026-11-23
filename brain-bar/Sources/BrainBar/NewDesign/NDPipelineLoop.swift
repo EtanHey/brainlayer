@@ -209,8 +209,17 @@ enum NDPipelineLayout {
                 p.scrolls = true
             }
         case .leading, .trailing:
-            p.body.origin.y = min(max(p.body.minY, limit.minY), limit.maxY - p.body.height)
-            p.body.origin.y = min(max(p.body.minY, p.tip.y - p.body.height + arrowInset), p.tip.y - arrowInset)
+            // L63: clip in place; sliding a side panel onto the screen can cover another station.
+            if p.body.minY < limit.minY {
+                let bottom = p.body.maxY
+                p.body.origin.y = limit.minY
+                p.body.size.height = max(32, bottom - limit.minY)
+                p.scrolls = true
+            }
+            if p.body.maxY > limit.maxY {
+                p.body.size.height = max(32, limit.maxY - p.body.minY)
+                p.scrolls = true
+            }
         }
         let arrowBox: CGRect = switch p.edge {
         case .top: CGRect(x: p.tip.x - arrowHalfWidth, y: p.tip.y - arrowLength, width: 2 * arrowHalfWidth, height: arrowLength)
