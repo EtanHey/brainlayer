@@ -268,9 +268,10 @@ def test_swift_required_gate_has_a_bounded_job_timeout():
     _job_id, job = swift_job
 
     # 2026-11-13: Test BrainBar took 11m29s (PR #1788, run 43438292244; job 14m30s) and was cut off at 11m39s by the 15m limit (PR #1789, run 43459850246). 25 = ~10m headroom over the last passing job; still a finite hang bound.
+    # 2026-11-24 TEMPORARY: main run 45342111801 took 24m04s (2099 tests, 978 s of test time) and #1875 was cut at 25:20 with 0 failures. 35 = ~11m headroom; a tracked row brings the job under 10 minutes (split or parallel) and puts the cap back. Still a finite hang bound.
     value = job.get("timeout-minutes")
-    assert value == 25
-    assert 10 <= value <= 30, "Swift job must retain a finite hang-protection budget"
+    assert value == 35
+    assert 10 <= value <= 35, "Swift job must retain a finite hang-protection budget"
 
 
 def _filter_matches(path: str, pattern: str) -> bool:
