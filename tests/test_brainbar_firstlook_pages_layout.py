@@ -7,9 +7,7 @@ ROOT = Path(__file__).resolve().parents[1] / "brain-bar/Sources/BrainBar"
 
 def test_initial_status_menu_is_populated_before_appkit_can_open_it():
     source = (ROOT / "BrainBarStatusPopoverController.swift").read_text()
-    setup = source.split("private func configureContextMenu() {", 1)[1].split(
-        "@objc private func openDashboard", 1
-    )[0]
+    setup = source.split("private func configureContextMenu() {", 1)[1].split("@objc private func openDashboard", 1)[0]
     assert "newMenuBuilder.populate(contextMenuForTesting)" in setup
     menu = (ROOT / "NewDesign/NDMenu.swift").read_text()
     assert "action: .settings" in menu
