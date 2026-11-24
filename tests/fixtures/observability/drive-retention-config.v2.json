@@ -1,0 +1,122 @@
+{
+  "rule": {
+    "daily_keep": 7,
+    "monthly_keep": 3,
+    "per_machine": true,
+    "description": "7 daily + one per month for 3 months, per Mac"
+  },
+  "writes_enabled": false,
+  "config_error": null,
+  "machines": [
+    {
+      "machine_id": "m1",
+      "state": "measured",
+      "selected_at": "2026-11-22T00:00:00+00:00",
+      "error": null,
+      "on_drive": {
+        "count": 1,
+        "bytes": 10,
+        "oldest": "2026-10-31",
+        "newest": "2026-10-31"
+      },
+      "named_one_offs_count": 0,
+      "kept": {
+        "count": 1,
+        "bytes": 10,
+        "oldest": "2026-10-31",
+        "newest": "2026-10-31"
+      },
+      "would_remove": {
+        "count": 0,
+        "bytes": 0,
+        "oldest": null,
+        "newest": null
+      },
+      "monthly_representatives": [
+        {
+          "name": "2026-10-31.db.zst",
+          "date": "2026-10-31",
+          "bytes": 10
+        }
+      ],
+      "kept_by_rule": {
+        "count": 1,
+        "bytes": 10,
+        "oldest": "2026-10-31",
+        "newest": "2026-10-31"
+      },
+      "unverified": {
+        "count": 0,
+        "bytes": 0,
+        "oldest": null,
+        "newest": null
+      },
+      "pinned": {
+        "count": 0,
+        "bytes": 0,
+        "oldest": null,
+        "newest": null
+      }
+    },
+    {
+      "machine_id": "m4",
+      "state": "measured",
+      "selected_at": "2026-11-22T00:00:00+00:00",
+      "error": null,
+      "on_drive": {
+        "count": 21,
+        "bytes": 210,
+        "oldest": "2026-07-31",
+        "newest": "2026-11-14"
+      },
+      "named_one_offs_count": 2,
+      "kept": {
+        "count": 10,
+        "bytes": 100,
+        "oldest": "2026-08-31",
+        "newest": "2026-11-14"
+      },
+      "would_remove": {
+        "count": 11,
+        "bytes": 110,
+        "oldest": "2026-07-31",
+        "newest": "2026-11-07"
+      },
+      "monthly_representatives": [
+        {
+          "name": "2026-10-31.db.zst",
+          "date": "2026-10-31",
+          "bytes": 10
+        },
+        {
+          "name": "2026-09-30.db.zst",
+          "date": "2026-09-30",
+          "bytes": 10
+        },
+        {
+          "name": "2026-08-31.db.zst",
+          "date": "2026-08-31",
+          "bytes": 10
+        }
+      ],
+      "kept_by_rule": {
+        "count": 10,
+        "bytes": 100,
+        "oldest": "2026-08-31",
+        "newest": "2026-11-14"
+      },
+      "unverified": {
+        "count": 0,
+        "bytes": 0,
+        "oldest": null,
+        "newest": null
+      },
+      "pinned": {
+        "count": 0,
+        "bytes": 0,
+        "oldest": null,
+        "newest": null
+      }
+    }
+  ]
+}
