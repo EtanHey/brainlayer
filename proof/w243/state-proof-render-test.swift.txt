@@ -1,0 +1,158 @@
+import AppKit
+import SwiftUI
+import Vision
+import XCTest
+@testable import BrainBar
+
+/// Proof-only replay: no displayed window/menu, native status item, collector, DB or socket.
+@MainActor final class BrainBarW243StateProofTests: XCTestCase {
+    func testStateMatrixOffscreen() throws {
+        NSApplication.shared.setActivationPolicy(.prohibited)
+        let directory = URL(fileURLWithPath: try XCTUnwrap(ProcessInfo.processInfo.environment["BRAINBAR_W243_STATE_PROOF"]))
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        NDMarkView.captureClock = Date(timeIntervalSinceReferenceDate: 0.3)
+        defer { NDMarkView.captureClock = nil }
+        for (suffix, appearance) in NDRenderHarness.appearances {
+            // Instantiate the production status controller with a private host; capture its attached menu
+            // BEFORE calling any delegate. Neither host nor controller allocates a system status item.
+            setenv(BrainBarDesignFixture.environmentKey, "not-confirmed", 1)
+            let runtime = BrainBarRuntime(launchMode: .menuItemDaemon)
+            let host = TestStatusItemHost()
+            let controller = BrainBarStatusPopoverController(workspace: BrainBarRecordingWorkspace(), runtime: runtime,
+                dashboardPanelController: nil, statusBar: host)
+            unsetenv(BrainBarDesignFixture.environmentKey)
+            defer { controller.stop() }
+            let menu = controller.contextMenuForTesting
+            XCTAssertTrue(host.createdItem?.menu === menu)
+            for action in [BrainBarMenuAction.settings, .quit] {
+                let item = try XCTUnwrap(menu.items.first { ($0.representedObject as? BrainBarMenuAction) == action })
+                XCTAssertTrue(item.isEnabled)
+                XCTAssertNotNil(item.action)
+                XCTAssertNotNil(item.target)
+            }
+            _ = try Self.menu(menu, name: "menu-setup-before-open-" + suffix, appearance: appearance, in: directory)
+            let store = try XCTUnwrap(NDStore.existing(for: runtime))
+            for (state, fixture) in [("fresh", BrainBarDesignFixture.Name.calm), ("signed-out", .driveSignedOut),
+                                      ("waiting", .reconnectWaiting)] {
+                store.setInputsForTesting(BrainBarDesignFixture.inputs(fixture))
+                controller.menuNeedsUpdate(menu)
+                _ = try Self.menu(menu, name: "menu-after-refresh-" + state + "-" + suffix, appearance: appearance, in: directory)
+            }
+            for (state, fixture) in [("long-text", BrainBarDesignFixture.Name.calm), ("signed-out-error", .driveSignedOut),
+                                      ("waiting", .reconnectWaiting), ("unconfirmed", .notConfirmed)] {
+                var inputs = BrainBarDesignFixture.inputs(fixture)
+                if state == "long-text" {
+                    inputs.settingsBackups = BrainBarSettingsBackupSummary(file: URL(fileURLWithPath:
+                        "/fixture/settings/" + String(repeating: "example-project-with-a-long-configuration-folder/", count: 4) + "brainlayer.env"), count: 12345)
+                }
+                let settings = NDStore(fixture: inputs)
+                settings.refreshSettingsFileSummary()
+                let view = NDSettingsView(store: settings)
+                let size = NDSettingsWindowController.contentSize(of: NSHostingView(rootView: view))
+                XCTAssertEqual(size.width, 480)
+                let rep = try NDRenderHarness.host(view, size: size, appearance: appearance)
+                try NDRenderHarness.write(rep, name: "settings-" + state + "-" + suffix, in: directory)
+                let words = try text(rep)
+                XCTAssertTrue(words.contains("Diagnostics"), words)
+                XCTAssertFalse(words.contains("Classic"), words)
+                XCTAssertFalse(words.contains("Design"), words)
+                if state == "signed-out-error" { XCTAssertTrue(words.contains("Signed out"), words) }
+                if state == "waiting" { XCTAssertTrue(words.contains("Waiting"), words) }
+            }
+            for value in ["classic", "new", "garbage", "absent"] {
+                let suite = "BrainBarW243StateProof." + UUID().uuidString
+                let defaults = UserDefaults(suiteName: suite)!
+                defer { defaults.removePersistentDomain(forName: suite) }
+                if value != "absent" { defaults.set(value, forKey: BrainBarDesign.key) }
+                XCTAssertEqual(BrainBarDesign.current(in: defaults), .new)
+                XCTAssertEqual(defaults.string(forKey: BrainBarDesign.key), value == "absent" ? nil : value)
+                // New is installed unconditionally by the production window controller; render that same
+                // initial root at its natural page height without constructing an NSWindow on this Mac.
+                let capture = BrainBarMenuLiveCapture.capture(status: .checking, verdictAwakeAgeS: nil,
+                    wakeCatchUpPending: false, driveAuth: nil, backups: .notRead, backupsNotice: nil,
+                    watcher: nil, watcherAwakeAgeS: nil, observations: nil,
+                    now: BrainBarDesignFixture.fixedNow, timeZone: TimeZone(secondsFromGMT: 0)!)
+                let windowStore = NDStore(fixture: NDInputs(capture: capture))
+                windowStore.preferences = defaults
+                let size = NSSize(width: NDGrid.windowWidth, height: NDPageHeight.window(windowStore, page: .overview, screen: nil))
+                let rep = try NDRenderHarness.host(NDWindowRoot(store: windowStore, drawsTrafficLights: true).defaultAppStorage(defaults), size: size, appearance: appearance)
+                try NDRenderHarness.write(rep, name: "window-stored-" + value + "-" + suffix, in: directory)
+                let words = try text(rep)
+                XCTAssertTrue(words.contains("Overview"), words)
+                XCTAssertFalse(words.contains("Opening database"), words)
+            }
+        }
+    }
+
+    private func text(_ rep: NSBitmapImageRep) throws -> String {
+        let request = VNRecognizeTextRequest()
+        request.recognitionLevel = .accurate
+        try VNImageRequestHandler(cgImage: XCTUnwrap(rep.cgImage)).perform([request])
+        return (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }.joined(separator: "\n")
+    }
+    static func menu(_ menu: NSMenu, name: String, appearance: NSAppearance.Name, in directory: URL) throws -> String {
+        let metrics = NDMenuMetrics.measured()
+        let width = NDGrid.menuWidth
+        let nsAppearance = NSAppearance(named: appearance)
+        var rows: [(NSView, CGFloat)] = []
+        var y: CGFloat = 5
+        for item in menu.items where !item.isHidden && !item.isAlternate {
+            let view: NSView = item.isSeparatorItem ? Separator(frame: NSRect(x: 0, y: 0, width: width, height: metrics.separator))
+                : item.view ?? Standard(item, frame: NSRect(x: 0, y: 0, width: width, height: 22))
+            view.appearance = nsAppearance
+            view.layoutSubtreeIfNeeded()
+            rows.append((view, y))
+            y += view.frame.height
+        }
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
+        let size = NSSize(width: width, height: y + 5)
+        let rep = try NDRenderHarness.bitmap(size)
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+        (nsAppearance ?? .currentDrawing()).performAsCurrentDrawingAppearance {
+            let dark = appearance == .darkAqua
+            let shape = NSBezierPath(roundedRect: NSRect(origin: .zero, size: size).insetBy(dx: 0.25, dy: 0.25), xRadius: 10, yRadius: 10)
+            NDColor.rgb(dark ? 0x26272E : 0xECEDF0).setFill()
+            shape.fill()
+            NSColor(white: dark ? 1 : 0, alpha: 0.12).setStroke()
+            shape.lineWidth = 0.5
+            shape.stroke()
+        }
+        NSGraphicsContext.restoreGraphicsState()
+        for (view, top) in rows {
+            let piece = try NDRenderHarness.bitmap(view.bounds.size)
+            view.cacheDisplay(in: view.bounds, to: piece)
+            NSGraphicsContext.saveGraphicsState()
+            NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+            piece.draw(in: NSRect(x: 0, y: size.height - top - view.bounds.height, width: width, height: view.bounds.height),
+                       from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: false, hints: nil)
+            NSGraphicsContext.restoreGraphicsState()
+        }
+        try NDRenderHarness.write(rep, name: name, in: directory)
+        return name
+    }
+
+    private final class Separator: NSView {
+        override var isFlipped: Bool { true }
+        override func draw(_ dirtyRect: NSRect) {
+            NSColor.separatorColor.setFill()
+            NSRect(x: NDGrid.menuInset, y: floor(bounds.midY), width: bounds.width - 2 * NDGrid.menuInset, height: 1).fill()
+        }
+    }
+
+    private final class Standard: NSView {
+        let item: NSMenuItem
+        init(_ item: NSMenuItem, frame: NSRect) { self.item = item; super.init(frame: frame) }
+        @available(*, unavailable) required init?(coder: NSCoder) { nil }
+        override var isFlipped: Bool { true }
+        override func draw(_ dirtyRect: NSRect) {
+            let font = NSFont.menuFont(ofSize: 0)
+            let title = NSAttributedString(string: item.title, attributes: [.font: font, .foregroundColor: NSColor.labelColor])
+            let key = NSAttributedString(string: item.keyEquivalent.isEmpty ? "" : "⌘" + item.keyEquivalent.uppercased(),
+                                         attributes: [.font: font, .foregroundColor: NSColor.secondaryLabelColor])
+            let y = (bounds.height - title.size().height) / 2
+            title.draw(at: NSPoint(x: NDGrid.menuInset, y: y))
+            key.draw(at: NSPoint(x: bounds.width - NDGrid.menuInset - key.size().width, y: y))
+        }
+    }
+}
