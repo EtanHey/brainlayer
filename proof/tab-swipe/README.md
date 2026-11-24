@@ -17,3 +17,21 @@ data (`calm`). One hosting view per appearance, updated in place: each step send
 
 Before this change no page handles the gesture: the window stays on the page it was on, which is the previous step's
 picture. No motion recording: nothing may be shown on screen on the M4.
+
+## State table (added 24 Nov, owner rule "no state table, no merge")
+
+The control this PR touches is the window's tab control (`NDSegments`, a native `NSSegmentedControl` with drawn labels and
+count pills). Pictures from `BrainBarTabSwipeStateRenderTests.swift` (in this folder; run with
+`BRAINBAR_SWIPE_STATE_DIR=<dir>`), offscreen, at the window's real width (900 pt) and each page's real height (its
+`NDPageHeight.window` on a screen tall enough not to cap it), 2x, dark and light.
+
+| State | Files | What the test asserts |
+|---|---|---|
+| Each page selected after a click vs after a swipe | `state-<page>-from-<page>-by-click/-by-swipe-*.png` | same page, same selected tab, same height, under 0.1% of pixels differ (they are byte-identical) |
+| Keyboard focus on the tab control | `state-focus-<page>-*.png` | the ring is drawn; drawn as AppKit draws it (`NSFocusRingPlacement.only` + the control's own `drawFocusRingMask`), since an offscreen view cannot hold first responder |
+| Count pills on Backups and Jobs (two faults), each page selected | `state-two-faults-<page>-*.png` | the selected tab names the page; the fixture carries counts |
+| Calm, each page selected, after swipes left and right, ends stopping | `swipe-*.png` (above) | the drawn selected tab and the laid-out page follow each swipe |
+
+States the control does not have: disabled (no code path disables it), busy, waiting, saved, confirm, error and empty
+(it always shows the same three tabs). Pressed (mouse held on a segment) is the native control's own tracking highlight
+and cannot be drawn offscreen.
