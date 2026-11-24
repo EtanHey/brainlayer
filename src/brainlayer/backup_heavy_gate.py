@@ -93,7 +93,8 @@ def _disk_reason(host: str) -> str | None:
                 clone_mode=clone_mode,
                 **(backup.backup_clone.budget(backup.get_db_path()) if clone_mode else {}),
             )
-        required = peak + backup._clone_growth_reserve_bytes(staging, 0) + math.ceil(floor_gib * 1024**3)
+        reserves = backup._clone_growth_reserves(staging, 0)
+        required = peak + sum(size for _, size in reserves) + math.ceil(floor_gib * 1024**3)
         volume_path = staging
         while not volume_path.exists():
             volume_path = volume_path.parent
@@ -101,9 +102,10 @@ def _disk_reason(host: str) -> str | None:
     except (OSError, RuntimeError, ValueError) as exc:
         return f"disk space measurement unavailable: {type(exc).__name__}"
     if free < required:
+        reserved = ", ".join(f"{path.relative_to(staging)}={size / 1024**3:.3f} GiB" for path, size in reserves)
         return (
             f"disk space needs {required / 1024**3:.3f} GiB, has {free / 1024**3:.3f} GiB "
-            f"(peak plus {floor_gib:g} GiB host floor)"
+            f"(peak plus {floor_gib:g} GiB host floor)" + (f"; retained COW reserves: {reserved}" if reserved else "")
         )
     return None
 
@@ -111,7 +113,9 @@ def _disk_reason(host: str) -> str | None:
 def _upload_peak_bytes(staging: Path, *, full: bool) -> int:
     """Count only NEW verification files; existing local archives already occupy free space.
 
-    Inspect receipt metadata, never hash payloads or mutate the journal before admission.
+    This estimator only inspects receipt metadata; it never hashes payloads or mutates
+    the journal. The caller first reclaims stale clones and fully verified raws under
+    the staging lock before measuring free space.
     Budget all possible pending candidates because upload-only can drain them sequentially.
     """
     from . import backup_daily as backup

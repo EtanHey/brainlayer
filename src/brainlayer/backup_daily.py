@@ -976,6 +976,7 @@ def _sweep_stale_clones(output_dir: Path) -> list[str]:
 
 
 def _sweep_clones_before_admission(output_dir: Path) -> None:
+    """Reclaim stale clones and archive-bound raws under the staging lock before measuring."""
     if not output_dir.exists() or output_dir.is_symlink():
         return
     fd = os.open(output_dir / ".backup.lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
@@ -985,15 +986,23 @@ def _sweep_clones_before_admission(output_dir: Path) -> None:
         except BlockingIOError:
             return
         _sweep_stale_clones(output_dir)
+        # Use the run's full binding/durability proof, never receipt metadata alone.
+        # Reclaim first so neither occupied blocks nor COW reserve can strand admission.
+        _cleanup_raw_snapshots(output_dir)
     finally:
         os.close(fd)
 
 
 def _clone_growth_reserve_bytes(output_dir: Path, db_size: int) -> int:
     """Existing blocks are in free_now; reserve the full possible COW divergence."""
+    return sum(size for _, size in _clone_growth_reserves(output_dir, db_size))
+
+
+def _clone_growth_reserves(output_dir: Path, db_size: int) -> list[tuple[Path, int]]:
+    """Keep the reservation inventory available for admission diagnostics."""
     paths = list(output_dir.glob(".brainlayer-clone-*/snapshot.db"))
     paths += [p for p in output_dir.glob("*.db") if _parse_uncompressed_snapshot_date(p.name)]
-    total = 0
+    reserves = []
     for path in paths:
         parent = path.parent.lstat()
         info = path.lstat()
@@ -1003,8 +1012,8 @@ def _clone_growth_reserve_bytes(output_dir: Path, db_size: int) -> int:
             and stat.S_ISREG(info.st_mode)
             and info.st_uid == os.getuid()
         ):
-            total += max(db_size, info.st_size)
-    return total
+            reserves.append((path, max(db_size, info.st_size)))
+    return reserves
 
 
 def _owned_temp_inventory(output_dir: Path) -> list[tuple[str, int]]:

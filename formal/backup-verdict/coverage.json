@@ -12,12 +12,12 @@
       "sha256": "a10214bfcb11b57aa01041f22408ccabd56fa7ef89e1e233ffc9d4b595b872a6"
     },
     "src/brainlayer/backup_daily.py": {
-      "sha": "merge #1859 head b2d15b32 into #1862 0c671984: both sides pinned; source merged without conflict",
-      "sha256": "be07e9ab22b67de9552645470c003305f47b41e572c6530e8d9a0f03e57a70a7"
+      "sha": "Track 5: run existing archive-bound raw cleanup under admission staging lock; no receipt/verdict transition change",
+      "sha256": "daf0dc5e3db9aa5a434c116900f91b505fb0913fbb759e89d389aa0fbf619ec7"
     },
     "src/brainlayer/backup_heavy_gate.py": {
-      "sha": "merge #1859 c3db0a18 with main 89eb7417 (#1867 APFS clone R1): both sides pinned with no model change; source hunks merged without conflict",
-      "sha256": "a9b5a9bb373d01ad2bc65519a0f09eeb5891c11aff3abe8d96896e9ae24c88ba"
+      "sha": "Track 5: measure after verified-raw cleanup; name surviving full COW reserves; admission arithmetic tested outside model",
+      "sha256": "59152992bd284996173e948c983789a39c88c7d922cfda292d8211b1fec1cb5e"
     },
     "src/brainlayer/maintenance.py": {
       "sha": "5882de81",
