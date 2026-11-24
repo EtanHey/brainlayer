@@ -17,9 +17,9 @@ import threading
 import time
 from pathlib import Path
 
-# The full suite ends ~1 min before the CI job's 25-minute bound, so a stall near the
-# end must be sampled quickly. A false sample on a slow test only prints stacks.
-STALL_SECONDS = 30
+# Single UI tests legitimately run up to ~51 s on a slow runner (CI, 24 Nov), so a
+# shorter threshold spends the samples before a real hang. A false sample only prints stacks.
+STALL_SECONDS = 75
 MAX_STALL_SAMPLES = 3
 
 
