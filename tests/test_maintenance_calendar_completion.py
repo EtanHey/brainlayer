@@ -300,10 +300,13 @@ def test_index_timeout_slow_report_then_window_wait_and_backup(runner, monkeypat
     rows = runner.rows()
     assert [(r["event"], r.get("step")) for r in rows] == [
         ("runner", None),
+        ("progress", None),
         ("finished", "index"),
         ("wait-start", "maintenance-nightly"),
         ("wait-finished", "maintenance-nightly"),
+        ("progress", None),
         ("finished", "maintenance-nightly"),
+        ("progress", None),
         ("finished", "backup-daily"),
         ("summary", None),
     ]

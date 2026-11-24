@@ -1292,6 +1292,22 @@ async def run_calendar(
                                             else 0
                                         )
                                     )
+                                    # An interim summary must not use event="summary": readers
+                                    # consume that as terminal evidence for this attempt. Persist
+                                    # progress before entering a possibly hours-long backup upload.
+                                    await _blocking(
+                                        record,
+                                        directory,
+                                        event="progress",
+                                        kind=kind,
+                                        complete=False,
+                                        status="running",
+                                        scheduled_date=date.isoformat(),
+                                        runner_started_at=runner_started_at,
+                                        running_step=step.name,
+                                        step_started_at=time.time(),
+                                        results=dict(results),
+                                    )
                                     code = await _execute_step(
                                         step,
                                         held_env,

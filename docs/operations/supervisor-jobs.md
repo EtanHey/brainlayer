@@ -82,6 +82,15 @@ sibling keg CLI and packaged wrappers. Override `--lib-dir`/`--state-dir`/`--log
 `--socket`/`--manifest` select fixtures. Restart honors OFF/disable/pause; env/log actions return paths only.
 JSON traces the legacy label, evidence source and definition; live keg verification remains separate.
 
+The calendar's `runs.jsonl` publishes an interim summary as `event: "progress"`
+before each child starts. It carries `status: "running"`, `complete: false`, the
+`running_step`, its Unix `step_started_at`, the attempt's `runner_started_at` and
+`scheduled_date`, and a `results` map of finished steps. While a backup upload
+runs, health readers can report those completed results and the running backup
+instead of requiring a terminal summary. Progress is an observation at that time,
+not a liveness heartbeat or proof of upload completion. Only `event: "summary"`
+ends the attempt; its existing fields and completion rules are unchanged.
+
 The macOS daemon adds an hourly `transcript-backup-recovery` component when its
 manifest contains the configured observability environment. It runs
 `maintenance-calendar --recover-transcripts` with the same calendar custody directory.
