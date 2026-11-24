@@ -1766,8 +1766,8 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
         for bucket in [0, 30, 59] {
             XCTAssertEqual(try XCTUnwrap(plotFrame(hover: bucket)), rest, "bucket \(bucket)")
         }
-        XCTAssertEqual(Say.upTo("4", minutes: 1), "up to 4 per min")
-        XCTAssertEqual(Say.upTo("83", minutes: 3), "up to 83 per 3 min")
+        XCTAssertEqual(Say.upTo("4", minutes: 1), "up to 4/min")
+        XCTAssertEqual(Say.upTo("83", minutes: 3), "up to 83/3 min")
     }
 
     /// Council r2a finding 4: the Reconnect hand-off never shows both: the line starts when the button's fade has ended,

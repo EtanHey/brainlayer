@@ -478,7 +478,7 @@ struct NDActivitySection: View {
     /// R1.2: the chart is 820 wide inside its surface: a 52 pt gutter and a 768 pt plot.
     static let plotWidth: CGFloat = 768
     static let plotHeight: CGFloat = 112
-    static let headerHeight: CGFloat = 42
+    static let headerHeight: CGFloat = 22
 
     var body: some View {
         let wave = store.inputs.heroWaves[store.range]
@@ -513,12 +513,12 @@ struct NDActivitySection: View {
     @ViewBuilder private func chart(wave: NDWave?, known: Bool, cut: CGFloat?) -> some View {
         let scales = wave.map { Self.scaleLabels($0, minutes: store.range.minutes) }
         VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 24) {
+            HStack(spacing: 6) {
                 legend(color: ND.saved, value: known ? wave.map { NDFormat.integer($0.savesTotal) } : nil,
                        words: Say.savedByAgents, scale: known ? scales?.saves : nil)
                 legend(color: ND.read, value: known ? wave.map { NDFormat.integer($0.readsTotal) } : nil,
                        words: Say.readFromConversations, scale: known ? scales?.reads : nil)
-                legend(color: ND.accent, value: known ? wave?.agentReads.map { NDFormat.integer($0.reduce(0, +)) } : nil,
+                legend(color: ND.agentRead, value: known ? wave?.agentReads.map { NDFormat.integer($0.reduce(0, +)) } : nil,
                        words: Say.readsByAgents, scale: known ? Self.agentReadScale(wave, minutes: store.range.minutes) : nil)
             }
             .lineLimit(1)
@@ -528,7 +528,7 @@ struct NDActivitySection: View {
                 // "saved" just above the baseline, "read" just below it, in the series' text colours (H1).
                 Text(Say.saved).font(NDType.captionMedium).foregroundStyle(ND.savedText)
                     .frame(width: Self.gutter, alignment: .leading).position(x: Self.gutter / 2, y: 53)
-                Text("lines").font(NDType.captionMedium).foregroundStyle(ND.readText)
+                Text(Say.sessionLinesWord).font(NDType.captionMedium).foregroundStyle(ND.readText)
                     .frame(width: Self.gutter, alignment: .leading).position(x: Self.gutter / 2, y: 72)
                 // Council r2a finding 3: the hover reads the pointer in the plot's own coordinates, the same origin the
                 // rule is drawn from (before, an offset moved the drawing but not the hit area, 52 pt apart).
@@ -649,8 +649,13 @@ struct NDActivitySection: View {
     }
 
     static func agentReadScale(_ wave: NDWave?, minutes: Int) -> String? {
-        guard let peak = wave?.agentReadsPeakPerMinute else { return nil }
-        return Say.upTo(NDFormat.integer(peak), minutes: 1)
+        guard let counts = wave?.agentReads, let peak = counts.max(), peak > 0 else { return nil }
+        return Say.upTo(NDFormat.integer(peak), minutes: max(1, minutes / counts.count))
+    }
+
+    static func agentReadY(count: Int, peak: Int, canvas: CGSize) -> CGFloat {
+        let axis = NDWaveform.baseline(canvas, nowTick: true).midY
+        return axis - CGFloat(count) / CGFloat(max(1, peak)) * NDWaveform.halves(.hero).up
     }
 
     /// Read calls use a separate scale and a line, so they cannot be mistaken for ingested session lines.
@@ -663,26 +668,26 @@ struct NDActivitySection: View {
             for (index, count) in counts.enumerated() {
                 if let cut, !Self.hoverable(index, count: counts.count, cut: cut) { break }
                 let point = CGPoint(x: (CGFloat(index) + 0.5) * pitch,
-                                    y: 46 - CGFloat(count) / CGFloat(peak) * 38)
+                                    y: Self.agentReadY(count: count, peak: peak, canvas: size))
                 if index == 0 { path.move(to: point) } else { path.addLine(to: point) }
             }
-            context.stroke(path, with: .color(ND.accent), style: StrokeStyle(lineWidth: 1.5, lineJoin: .round))
+            context.stroke(path, with: .color(ND.agentRead), style: StrokeStyle(lineWidth: 1.5, lineJoin: .round))
         }
     }
 
     private func legend(color: Color, value: String?, words: String, scale: String?) -> some View {
-        // R1.2 change 19: the hour's totals are the calm page's hero numbers, at the title size.
-        VStack(alignment: .leading, spacing: 3) {
-            HStack(alignment: .firstTextBaseline, spacing: 6) {
+        // Keep all three series and their scales on the 22 pt header row.
+        HStack(alignment: .firstTextBaseline, spacing: 3) {
+            HStack(alignment: .firstTextBaseline, spacing: 3) {
                 RoundedRectangle(cornerRadius: 2).fill(color).frame(width: 8, height: 8).alignmentGuide(.firstTextBaseline) { d in d.height }
-                Text(value ?? NDModel.Number.unknown.value).font(NDType.total).foregroundStyle(ND.t1)  // R1.12 change 3
-                Text(words).font(NDType.body).foregroundStyle(ND.t2)
+                Text(value ?? NDModel.Number.unknown.value).font(NDType.numberStrong).foregroundStyle(ND.t1)
+                Text(words).font(NDType.caption).foregroundStyle(ND.t2)
             }
             if let scale {
                 Text(scale).font(NDType.caption).foregroundStyle(ND.t3)
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .fixedSize(horizontal: true, vertical: false)
     }
 }
 
@@ -710,7 +715,7 @@ struct NDActivityReadout: View {
                 .padding(.bottom, 3)
             row(ND.saved, index < wave.saves.count ? wave.saves[index] : 0, Say.savedByAgents)
             row(ND.read, index < wave.reads.count ? wave.reads[index] : 0, Say.readFromConversations)
-            row(ND.accent, wave.agentReads.flatMap { index < $0.count ? $0[index] : nil }, Say.readsByAgents)
+            row(ND.agentRead, wave.agentReads.flatMap { index < $0.count ? $0[index] : nil }, Say.readsByAgents)
         }
         .padding(.horizontal, 9).padding(.vertical, 6)
         .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(ND.pop)

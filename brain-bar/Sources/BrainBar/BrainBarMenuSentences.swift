@@ -676,7 +676,7 @@ extension BrainBarMenuPresenter {
         static let readFromConversations = "session lines ingested"
         static let readsByAgents = "reads by agents"
         static let saved = "saved"
-        static let readWord = "read"
+        static let sessionLinesWord = "lines"
         static let now = "now"
         static let pipeline = "Pipeline"
         static let goesIn = "Goes in"
@@ -827,7 +827,7 @@ extension BrainBarMenuPresenter {
         static func macAgo(_ age: String) -> String { "Local copy \(age) ago" }  // R1.12 (§ C): the dropdown's Backups value
         static let lastKnown = "last known"
         /// Each half's scale names the real bucket span, not a bare number that reads like an axis floor.
-        static func upTo(_ value: String, minutes: Int) -> String { minutes == 1 ? "up to \(value) per min" : "up to \(value) per \(minutes) min" }
+        static func upTo(_ value: String, minutes: Int) -> String { minutes == 1 ? "up to \(value)/min" : "up to \(value)/\(minutes) min" }
         // Revision 1.2 (L23, L24, L26).
         static let checkSoon = "Check soon"
         static func lastDriveUpload(_ age: String) -> String { "Last Drive upload \(age) ago." }

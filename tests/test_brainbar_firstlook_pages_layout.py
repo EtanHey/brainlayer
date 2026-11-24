@@ -96,11 +96,11 @@ def test_queue_and_storage_help_does_not_promise_a_fixed_cadence():
     assert "input?.runsFrequently" in pages.split("static func jobHelp(", 1)[1]
 
 
-def test_scale_wording_uses_per():
+def test_scale_wording_uses_slash_with_bucket_units():
     source = (ROOT / "BrainBarMenuSentences.swift").read_text()
     formatter = source.split("static func upTo(", 1)[1].split("// Revision", 1)[0]
-    assert " per min" in formatter and " per \\(minutes) min" in formatter
-    assert " / " not in formatter
+    assert "/min" in formatter and "/\\(minutes) min" in formatter
+    assert " per " not in formatter
 
 
 def test_classic_keeps_no_new_rows_assertions():

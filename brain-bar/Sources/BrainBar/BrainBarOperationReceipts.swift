@@ -125,7 +125,7 @@ final class BrainBarOperationReceipts: @unchecked Sendable {
         lock.unlock()
         // Persist a search receipt together with its call count in one queued snapshot.
         if receipt.kind == .search { recordAgentRead(toolName: "brain_search", at: receipt.recordedAt) }
-        if shouldSchedule { writeQueue.async { [weak self] in self?.drainWrites() } }
+        if shouldSchedule { scheduleWrite() }
         NotificationCenter.default.post(name: Self.changed, object: nil)
     }
 
@@ -135,20 +135,29 @@ final class BrainBarOperationReceipts: @unchecked Sendable {
         guard toolName == "brain_search" || toolName == "brain_recall" else { return }
         writeQueue.async { [self] in
             lock.lock()
-            let minute = Int(date.timeIntervalSince1970 / 60)
             var counts = agentReads ?? [:]
+            lock.unlock()
+            let minute = Int(date.timeIntervalSince1970 / 60)
             let newest = max(minute, counts.keys.compactMap(Int.init).max() ?? minute)
             // 48 hours plus the current minute: bounded even under sustained traffic.
             counts = counts.filter { (Int($0.key) ?? Int.min) >= newest - 2_880 }
             if minute >= newest - 2_880 { counts[String(minute), default: 0] += 1 }
+            // Only the serial utility queue mutates counts. Keep pruning off the request lock.
+            lock.lock()
             agentReads = counts
+            var shouldSchedule = false
             if url != nil {
                 pendingSnapshot = Snapshot(search: latestSearch, ingest: latestIngest, agentReads: counts)
-                writeScheduled = true
+                if !writeScheduled { writeScheduled = true; shouldSchedule = true }
             }
             lock.unlock()
-            drainWrites()
+            if shouldSchedule { scheduleWrite() }
         }
+    }
+
+    private func scheduleWrite() {
+        // A bounded batching window collapses bursts into one atomic snapshot.
+        writeQueue.asyncAfter(deadline: .now() + .milliseconds(50)) { [self] in drainWrites() }
     }
 
     /// Oldest first, on a fixed minute grid; nil means the producer has not supplied counts.
@@ -199,7 +208,7 @@ final class BrainBarOperationReceipts: @unchecked Sendable {
         }
     }
 
-    func waitForWritesForTesting() { writeQueue.sync {} }
+    func waitForWritesForTesting() { writeQueue.sync { drainWrites() } }
 
     func reload() {
         guard let url, FileManager.default.fileExists(atPath: url.path) else { return }

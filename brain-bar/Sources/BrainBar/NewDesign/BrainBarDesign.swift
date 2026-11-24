@@ -86,6 +86,7 @@ enum NDColor {
     /// R1.2 change 21: dark read bars #8189A0 (4.69:1 on the card); light unchanged.
     static let read = dynamic("read", dark: rgb(0x8189A0), light: rgb(0x7E8598))
     static let readText = dynamic("read.t", dark: rgb(0x9AA1B3), light: rgb(0x5A6275))
+    static let agentRead = dynamic("agent.read", dark: rgb(0x4CB8AC), light: rgb(0x16776F))
     static let red = dynamic("red", dark: rgb(0xFF453A), light: rgb(0xD92D20))
     static let redText = dynamic("red.t", dark: rgb(0xFF6961), light: rgb(0xB8180D))
     static let redTint = dynamic("red.tint", dark: rgb(0xFF453A, alpha: 0.16), light: rgb(0xFF3B30, alpha: 0.12))
@@ -147,6 +148,7 @@ enum ND {
     static let savedText = Color(nsColor: NDColor.savedText)
     static let read = Color(nsColor: NDColor.read)
     static let readText = Color(nsColor: NDColor.readText)
+    static let agentRead = Color(nsColor: NDColor.agentRead)
     static let red = Color(nsColor: NDColor.red)
     static let redText = Color(nsColor: NDColor.redText)
     static let redTint = Color(nsColor: NDColor.redTint)
