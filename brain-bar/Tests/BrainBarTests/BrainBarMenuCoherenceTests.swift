@@ -183,33 +183,7 @@ final class BrainBarMenuCoherenceTests: XCTestCase {
         XCTAssertEqual(snapshot.issues.count, 1, "The reported four lines must describe one problem")
     }
 
-    func testRealMenuOverflowOpensDashboard() throws {
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let runtime = BrainBarRuntime()
-        runtime.install(collector: BrainBarDashboardFixture.makeCollector(), database: nil,
-            databasePath: directory.appendingPathComponent("fixture.db").path)
-        let panel = BrainBarDashboardPanelController(workspace: BrainBarRecordingWorkspace(), runtime: runtime, designDefaults: brainBarLegacyMenuDefaults())
-        let controller = BrainBarStatusPopoverController(workspace: BrainBarRecordingWorkspace(), runtime: runtime,
-            dashboardPanelController: panel, statusBar: TestStatusItemHost(), menuDefaults: brainBarLegacyMenuDefaults())
-        defer { controller.stop() }
-        var badge = BadgeStatePresentation(badgeOn: false, reason: "", activeCodes: [])
-        badge.healthVerdict = .init(dot: .green, checks: [], notes: (1...5).map {
-            .init(code: "fixture_\($0)", message: "Problem \($0)")
-        }, evaluatedAt: Date())
-        controller.setBadgeForTesting(badge, alertsURL: directory.appendingPathComponent("job-alerts.json"))
-        let menu = controller.contextMenuForTesting
-        controller.menuNeedsUpdate(menu)
-        // "+2 more" expands as a submenu holding the hidden rows, then Open Dashboard.
-        let overflow = try XCTUnwrap(menu.items.first { $0.title == "+2 more" })
-        XCTAssertTrue(overflow.isEnabled)
-        XCTAssertFalse(menu.items.contains { $0.title == "Problem 4" || $0.title == "Problem 5" })
-        let submenu = try XCTUnwrap(overflow.submenu)
-        XCTAssertEqual(submenu.items.filter { !$0.isSeparatorItem }.map(\.title), ["Problem 4", "Problem 5", "Open Dashboard"])
-        let open = try XCTUnwrap(submenu.items.last)
-        XCTAssertNotNil(open.action)
-        XCTAssertTrue(open.target === controller)
-    }
+
 
     func testBackupCardUsesActiveFailureAndKeepsOtherCopyGreen() throws {
         let input = inputs()

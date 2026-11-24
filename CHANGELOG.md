@@ -40,6 +40,29 @@
 - Search: hybrid RRF reranking now incorporates importance and recency signals
 - Embeddings: deferred from synchronous to async pipeline
 
+## [1.6.12] - 2026-11-24
+
+### BrainBar can update itself (check, offer, install with backup and restore, relaunch), has one design, swipes between Overview, Backups and Jobs, counts how often agents read from memory, and no longer marks a backup lane unread because of old log rows
+
+- Explain local transcript archive retention holds (#1855)
+- test: allow concurrent origin/main fast-forwards during pytest (#1865)
+- fix(supervisor): handle exited-process ESRCH during Linux procfs reads (#1868)
+- Snapshot daily backups with consistent APFS clones (#1867)
+- test: stop reading an empty orphan PID file (#1843)
+- Run release tag steps in disposable detached worktrees (#1857)
+- fix(BrainBar): tighten Pipeline spacing and clear station hovers (#1869)
+- Keep verified local backup copies without pruning Drive (#1859)
+- feat(brainbar): show the Google Drive backup rule in Settings (per Mac; cleanup off) (#1864)
+- fix(release): sign only from main: signing environment, ratchet gate on the exact release SHA (#1819)
+- test(backup): defuse the 2026-11-24 date bomb in the clone integrity test (#1872)
+- feat(backup): show the configured Drive retention rule (#1862)
+- fix(brainbar): keep old Sessions backup rows from marking history unread (#1874)
+- BrainBar: two-finger swipe moves between Overview, Backups and Jobs (#1870)
+- feat(brainbar): add pinned update control and recoverable installer (#1871)
+- ci(swift): TEMPORARY raise the Swift job cap 25 -> 35 min (row to bring it under 10) (#1882)
+- Remove the Classic app design (#1873)
+- Activity: distinguish session ingestion from agents reading memory (#1875)
+
 ## [1.6.11] - 2026-11-23
 
 ### BrainBar checks its status at once after the Mac wakes and says so while it checks, in both designs, and its backup lanes stay truthful unattended (a retention error is a dated failure; a stalled upload says it stalled)

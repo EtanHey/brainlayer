@@ -203,7 +203,7 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
     static let frameDefaultsKey = "brainbar.window.main-frame"
 
     let windowForTesting: NSWindow
-    let contentViewControllerForTesting: NSViewController
+    var contentViewControllerForTesting: NSViewController { window.contentViewController! }
     var isShownForTesting: Bool { window.isVisible }
     var naturalDashboardHeightForTesting: CGFloat { panelState.dashboardHeight }
 
@@ -216,15 +216,9 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
     private var hasPlacedWindow = false
     private var isClosingWindow = false
 #if BRAINBAR_UI
-    /// L6: the content shown follows `BrainBarDesign`, read live. Classic keeps main's hosting controller untouched;
-    /// the new design swaps in its own and swaps back.
-    private let classicContent: NSViewController
     private var newContent: NSHostingController<NDWindowRoot>?
-    private(set) var shownDesign: BrainBarDesign = .classic
     private let runtimeForDesign: BrainBarRuntime
     private let workspaceForDesign: any BrainBarWorkspaceActing
-    nonisolated(unsafe) private var designObserver: NSObjectProtocol?
-    var designDefaults: UserDefaults = .standard
     private var hasNewDesignStore = false
     private lazy var newDesignToolbar = NDToolbar(store: newDesignStore)
     lazy var newDesignStore: NDStore = {
@@ -244,9 +238,12 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
         runtime: BrainBarRuntime,
         activationPolicy: BrainBarWindowActivationPolicy? = nil,
         frameStore: BrainBarWindowFrameStore = BrainBarWindowFrameStore(key: frameDefaultsKey),
-        screenFrames: @escaping () -> [NSRect] = { NSScreen.screens.map(\.visibleFrame) },
-        designDefaults: UserDefaults = .standard
+        screenFrames: @escaping () -> [NSRect] = { NSScreen.screens.map(\.visibleFrame) }
     ) {
+#if BRAINBAR_UI
+        let hostingController = NSViewController()
+        hostingController.view = NSView(frame: NSRect(origin: .zero, size: Self.defaultSize))
+#else
         let hostingController = NSHostingController(
             rootView: BrainBarWindowRootView(workspace: workspace, runtime: runtime, managesWindowFrame: false, panelState: panelState)
                 .frame(minWidth: Self.minSize.width)
@@ -256,10 +253,9 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
         hostingController.view.frame = NSRect(origin: .zero, size: Self.defaultSize)
         hostingController.view.autoresizingMask = [.width, .height]
 
-        contentViewControllerForTesting = hostingController
+#endif
+
 #if BRAINBAR_UI
-        self.designDefaults = designDefaults
-        classicContent = hostingController
         runtimeForDesign = runtime
         workspaceForDesign = workspace
 #endif
@@ -280,86 +276,43 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
             self?.showSettings()
         }
 #if BRAINBAR_UI
-        applyDesign()
-        designObserver = NotificationCenter.default.addObserver(forName: UserDefaults.didChangeNotification, object: nil,
-                                                                queue: .main) { [weak self] _ in
-            DispatchQueue.main.async { [weak self] in self?.applyDesign() }
-        }
+        installWindowContent()
 #endif
     }
 
 #if BRAINBAR_UI
-    /// Swaps the window's content to the design `BrainBarDesign` names now. No animation: the switch is a setting.
-    func applyDesign() {
-        let design = BrainBarDesign.current(in: designDefaults)
-        guard design != shownDesign else { return }
-        shownDesign = design
-        let frame = window.frame
-        switch design {
-        case .classic:
-            window.contentViewController = classicContent
-            // Main's chrome: no toolbar, the default style.
-            window.toolbar = nil
-            window.toolbarStyle = .automatic
-            window.titlebarSeparatorStyle = .automatic
-            // AppKit shares frame/content limits: a later content limit clears minSize.
-            // Restore Classic's frame limits after removing the new design's fixed content size.
-            window.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
-            window.minSize = Self.minSize
-            pageObserver = nil
-            pageFitObserver = nil
-            fittedFrameSize = nil
-            // F04 and N02: back on Classic, the new design's window work stops and its Settings window closes.
-            if hasNewDesignStore { newDesignStore.setWindowActive(false) }
-            NDSettingsWindowController.closeIfOpen()
-        case .new:
-            let content = newContent ?? {
-                let hosting = NSHostingController(rootView: NDWindowRoot(store: newDesignStore))
-                hosting.sizingOptions = []
-                return hosting
-            }()
-            newContent = content
-            window.contentViewController = content
-            // One unified 52 pt row: traffic lights, the centred pages control and the count (review fix 1). The toolbar
-            // first, then the minimums. With the unified toolbar AppKit holds the frame minimum up to 20 pt above
-            // 560 pt (measured 780 × 580 in a headless test); the page scrolls under the toolbar below its content.
-            window.toolbar = newDesignToolbar.toolbar
-            window.toolbarStyle = .unified
-            window.titlebarSeparatorStyle = .none  // the root draws the one hairline at 52 pt
-            // L17: the window takes each page's own height, width 900, and snaps on a tab switch with the top edge fixed.
-            fitPage(newDesignStore.page)
-            if pageObserver == nil {
-                // D1: after the page is stored (didSet), never from `$page` (willSet).
-                newDesignStore.pageDidChange = { [weak self] page in self?.fitPage(page) }
-                pageObserver = AnyCancellable { [weak store = newDesignStore] in
-                    MainActor.assumeIsolated { store?.pageDidChange = nil }
-                }
-                // L57: inputs can change Jobs and Backups without changing the headline or model.
-                // Coalesce willSet publications; measure only after the complete store update.
-                pageFitObserver = NDPageFitObserver(store: newDesignStore) { [weak self] in
-                    guard let self, self.shownDesign == .new else { return }
-                    self.fitPage(self.newDesignStore.page)
-                }
+    /// Installs the app's only window content once. Old design preferences are ignored.
+    private func installWindowContent() {
+        guard newContent == nil else { return }
+        let content = NSHostingController(rootView: NDWindowRoot(store: newDesignStore))
+        content.sizingOptions = []
+        newContent = content
+        window.contentViewController = content
+        // One unified 52 pt row: traffic lights, the centred pages control and the count (review fix 1). The toolbar
+        // first, then the minimums. With the unified toolbar AppKit holds the frame minimum up to 20 pt above
+        // 560 pt (measured 780 × 580 in a headless test); the page scrolls under the toolbar below its content.
+        window.toolbar = newDesignToolbar.toolbar
+        window.toolbarStyle = .unified
+        window.titlebarSeparatorStyle = .none  // the root draws the one hairline at 52 pt
+        // L17: the window takes each page's own height, width 900, and snaps on a tab switch with the top edge fixed.
+        fitPage(newDesignStore.page)
+        if pageObserver == nil {
+            // D1: after the page is stored (didSet), never from `$page` (willSet).
+            newDesignStore.pageDidChange = { [weak self] page in self?.fitPage(page) }
+            pageObserver = AnyCancellable { [weak store = newDesignStore] in
+                MainActor.assumeIsolated { store?.pageDidChange = nil }
             }
-            if window.isVisible { newDesignStore.setWindowActive(true) }
-            return
+            // L57: inputs can change Jobs and Backups without changing the headline or model.
+            // Coalesce willSet publications; measure only after the complete store update.
+            pageFitObserver = NDPageFitObserver(store: newDesignStore) { [weak self] in
+                guard let self else { return }
+                self.fitPage(self.newDesignStore.page)
+            }
         }
-        // Keep the user's frame across the swap, never below the design's minimum.
-        let minimum = window.frameRect(forContentRect: NSRect(origin: .zero, size: currentMinSize)).size
-        window.setFrame(NSRect(x: frame.minX, y: frame.maxY - max(frame.height, minimum.height),
-                               width: max(frame.width, minimum.width), height: max(frame.height, minimum.height)), display: false)
-        window.contentView?.layoutSubtreeIfNeeded()
-        window.minSize = Self.minSize
-        // Swapping the hosting controller queues AppKit's content-size update. Restore the
-        // Classic limits after that update too; a newer design switch owns its own limits.
-        DispatchQueue.main.async { [weak self] in
-            guard let self, self.shownDesign == .classic else { return }
-            self.window.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
-            self.window.minSize = Self.minSize
-        }
+        if window.isVisible { newDesignStore.setWindowActive(true) }
     }
 
-    private var currentMinSize: NSSize { shownDesign == .new ? NDGrid.windowMinimum : Self.minSize }
+    private var currentMinSize: NSSize { NDGrid.windowMinimum }
 
     nonisolated(unsafe) private var pageObserver: AnyCancellable?
     private var pageFitObserver: NDPageFitObserver?
@@ -411,7 +364,6 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
     var pageFrameAnimatorForTesting: ((NSRect, Double, CAMediaTimingFunction, @escaping () -> Void) -> Void)?
 
     func fitPage(_ page: NDPage) {
-        guard shownDesign == .new else { return }
         // Finish one frame animation before starting another; the newest content wins at its completion.
         guard !pageResizeInFlight else {
             pageFitPending = true
@@ -459,7 +411,6 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
             MainActor.assumeIsolated {
                 guard let self else { return }
                 self.pageResizeInFlight = false
-                guard self.shownDesign == .new else { return }
                 self.window.contentMinSize = size
                 self.window.contentMaxSize = size
                 if self.pageFitPending {
@@ -478,14 +429,9 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
 
     /// The new design's pages: open the window on one (motion 2: no window animation).
     func showPage(_ page: NDPage) {
-        applyDesign()
-        guard shownDesign == .new else { return showDashboard() }
+        installWindowContent()
         newDesignStore.page = page
         show()
-    }
-
-    deinit {
-        if let designObserver { NotificationCenter.default.removeObserver(designObserver) }
     }
 #endif
 
@@ -501,7 +447,7 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
     func show(anchoredTo anchorView: NSView? = nil) {
         Task { [driveAuth] in await driveAuth.refreshIfStale() }
 #if BRAINBAR_UI
-        if shownDesign == .new { newDesignStore.setWindowActive(true) }
+        newDesignStore.setWindowActive(true)
 #endif
         if panelState.selectedTab == .settings { panelState.settingsActivationRevision += 1 }
         if !hasPlacedWindow || isClosingWindow {
@@ -509,7 +455,7 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
             hasPlacedWindow = true
         }
 #if BRAINBAR_UI
-        if shownDesign == .new { fitPage(newDesignStore.page) }
+        fitPage(newDesignStore.page)
 #endif
         activationPolicy?.windowOpened(window)
         if window.isMiniaturized { window.deminiaturize(nil) }
@@ -517,11 +463,9 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
         window.makeKeyAndOrderFront(nil)
         window.orderFrontRegardless()
 #if BRAINBAR_UI
-        if shownDesign == .new {
-            Self.clearInitialFocus(window)
-            // SwiftUI may hand focus on after the window becomes key; clear it again on the next turn.
-            Task { @MainActor [weak window] in if let window { Self.clearInitialFocus(window) } }
-        }
+        Self.clearInitialFocus(window)
+        // SwiftUI may hand focus on after the window becomes key; clear it again on the next turn.
+        Task { @MainActor [weak window] in if let window { Self.clearInitialFocus(window) } }
 #endif
         isClosingWindow = false
     }
@@ -538,34 +482,29 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
 
     func showDashboard() {
 #if BRAINBAR_UI
-        if BrainBarDesign.current(in: designDefaults) == .new { return showPage(.overview) }
-#endif
+        showPage(.overview)
+#else
         panelState.selectedTab = .dashboard
         show()
+#endif
     }
 
     func showSettings() {
 #if BRAINBAR_UI
-        if BrainBarDesign.current(in: designDefaults) == .new {
-            NDSettingsWindowController.show(store: newDesignStore, activationPolicy: activationPolicy)
-            return
-        }
-#endif
+        NDSettingsWindowController.show(store: newDesignStore, activationPolicy: activationPolicy)
+#else
         panelState.selectedTab = .settings
         show()
+#endif
     }
 
 #if BRAINBAR_UI
     func showSettings(section: BrainBarSettingsSection) {
-        if BrainBarDesign.current(in: designDefaults) == .new {
-            switch section {
-            case .jobs: return showPage(.jobs)
-            case .backups: return showPage(.backups)
-            case .advanced: return showSettings()
-            }
+        switch section {
+        case .jobs: showPage(.jobs)
+        case .backups: showPage(.backups)
+        case .advanced: showSettings()
         }
-        panelState.settingsNavigation.select(section)
-        showSettings()
     }
 
     func showURLDestination(_ action: BrainBarURLAction) {
@@ -580,17 +519,20 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
     /// The first time: the last saved frame, fitted to the current screens, else below the
     /// menu-bar icon, else centred. Afterwards the window keeps wherever the user left it.
     private func placeWindow(near anchorView: NSView?) {
+#if BRAINBAR_UI
+        let restorationMinimum = currentMinSize
+#else
+        let restorationMinimum = Self.minSize
+#endif
         if let saved = frameStore.persistedFrame(),
-           let restored = Self.restoredFrame(saved, minSize: Self.minSize, visibleFrames: screenFrames()) {
+           let restored = Self.restoredFrame(saved, minSize: restorationMinimum, visibleFrames: screenFrames()) {
             window.setFrame(restored, display: false)
 #if BRAINBAR_UI
-            if shownDesign == .new { fitPage(newDesignStore.page) }
+            fitPage(newDesignStore.page)
 #endif
             return
         }
-#if BRAINBAR_UI
-        if shownDesign == .classic { window.setContentSize(Self.defaultSize) }
-#else
+#if !BRAINBAR_UI
         window.setContentSize(Self.defaultSize)
 #endif
         if let anchorView, let anchorWindow = anchorView.window,
@@ -625,7 +567,7 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
 
 #if BRAINBAR_UI
     func windowDidChangeScreen(_ notification: Notification) {
-        if shownDesign == .new { pageFitObserver?.schedule() }
+        pageFitObserver?.schedule()
     }
 #endif
 
@@ -634,7 +576,7 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
 #if BRAINBAR_UI
         // L17: the new design's window is the page's size; the delegate holds it even if AppKit's layout clears the
         // content limits (it keeps one pair of size limits, and the toolbar's own layout can reset it).
-        if shownDesign == .new, let fitted = fittedFrameSize { return fitted }
+        if let fitted = fittedFrameSize { return fitted }
         let minimum = currentMinSize
 #else
         let minimum = Self.minSize

@@ -318,7 +318,7 @@ import SwiftUI
     static func menu(_ store: NDStore, name: String, appearance: NSAppearance.Name, in directory: URL) throws -> String {
         let builder = NDMenuBuilder(store: store, perform: { _ in }, openWindow: { _ in })
         let menu = builder.build()
-        let metrics = BrainBarMenuRenderHarness.measured()
+        let metrics = NDMenuMetrics.measured()
         let width = NDGrid.menuWidth
         let nsAppearance = NSAppearance(named: appearance)
         var rows: [(NSView, CGFloat)] = []

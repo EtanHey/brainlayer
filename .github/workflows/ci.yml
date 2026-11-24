@@ -257,6 +257,7 @@ jobs:
         if: needs.changes.outputs.brain_bar == 'true'
         env:
           SWIFT_BACKTRACE: enable=yes,interactive=no
+          NSUnbufferedIO: 'YES'
           MENU_FUNCTION: ${{ needs.changes.outputs.menu_function }}
           EVENT_NAME: ${{ github.event_name }}
         run: |

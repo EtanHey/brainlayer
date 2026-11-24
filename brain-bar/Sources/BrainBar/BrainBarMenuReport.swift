@@ -1,18 +1,8 @@
 import AppKit
 
-/// No registration or cached value: each open re-reads the key, defaulting to the new menu.
-enum BrainBarNewMenuPreference {
-    static let key = "BrainBarNewMenuEnabled"
-    static let defaultValue: Bool = true
-    static func isEnabled(in defaults: UserDefaults = .standard) -> Bool {
-        defaults.object(forKey: key) == nil ? defaultValue : defaults.bool(forKey: key)
-    }
-}
-
 /// The report is limited to presentation words and health-check diagnostics, never source contents.
 enum BrainBarMenuReport {
-    /// `extraLines`: warnings a surface shows beyond the presentation (the new design's runtime warnings); the classic
-    /// menu passes none, so its report is unchanged.
+    /// `extraLines`: runtime warnings a surface shows beyond the presentation.
     static func text(presentation: BrainBarMenuPresentation, verdict: BrainBarHealthVerdict?,
                      version: String, now: Date, extraLines: [String] = []) -> String {
         let timestamp = ISO8601DateFormatter().string(from: now)
@@ -50,32 +40,5 @@ enum BrainBarMenuReport {
             if classes >= 2 { result.replaceSubrange(range, with: "[redacted]") }
         }
         return result
-    }
-}
-
-/// Action targets are injected so tests exercise dispatch without activating windows, auth or process control.
-@MainActor final class BrainBarLiveMenuActions: BrainBarMenuActions {
-    let settings: () -> Void, storage: () -> Void, quit: () -> Void, restart: () -> Void
-    let reconnect: () -> Void, copy: () -> Void, dismiss: () -> Void
-
-    init(settings: @escaping () -> Void, storage: @escaping () -> Void,
-         quit: @escaping () -> Void, restart: @escaping () -> Void,
-         reconnect: @escaping () -> Void, copy: @escaping () -> Void, dismiss: @escaping () -> Void) {
-        self.settings = settings; self.storage = storage; self.quit = quit; self.restart = restart
-        self.reconnect = reconnect; self.copy = copy; self.dismiss = dismiss
-    }
-
-    func perform(_ action: BrainBarMenuAction) {
-        dismiss()
-        DispatchQueue.main.async { [self] in
-            switch action {
-            case .settings: settings()
-            case .quit: quit()
-            case .restart: restart()
-            case .row(.connectDrive), .row(.reconnectDrive): reconnect()
-            case .row(.openStorageSettings): storage()
-            case .row(.copyReport): copy()
-            }
-        }
     }
 }
