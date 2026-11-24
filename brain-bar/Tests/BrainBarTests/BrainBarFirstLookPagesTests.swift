@@ -12,12 +12,12 @@ import XCTest
         override func string(forKey key: String) -> String? { key == BrainBarDesign.key ? choice : nil }
     }
 
-    func testNewIsDefaultAndStoredClassicStillWins() {
+    func testNewIsTheOnlyDesignDespiteStoredClassic() {
         let defaults = DesignDefaults()
         XCTAssertEqual(BrainBarDesign.current(in: defaults), .new)
         XCTAssertNil(defaults.choice, "reading does not store a preference")
         defaults.choice = "classic"
-        XCTAssertEqual(BrainBarDesign.current(in: defaults), .classic)
+        XCTAssertEqual(BrainBarDesign.current(in: defaults), .new)
     }
 
     func testActivityScaleLabelsUseTheirOwnPeaks() {
@@ -146,11 +146,11 @@ import XCTest
         XCTAssertLessThan(label.maxX, dotX - 3.5, "older-count slot clears the left-edge failure dot")
     }
 
-    func testInvalidStoredDesignSelectsTheResolvedDefaultSegment() {
+    func testEveryStoredDesignResolvesToNewWithoutRewritingTheValue() {
         for raw in ["invalid", "", "classic", "new"] {
             let defaults = DesignDefaults(choice: raw)
-            let index = NDSettingsView.designIndex(for: raw)
-            XCTAssertEqual(BrainBarDesign.allCases[index], BrainBarDesign.current(in: defaults))
+            XCTAssertEqual(BrainBarDesign.current(in: defaults), .new)
+            XCTAssertEqual(defaults.choice, raw)
         }
     }
 

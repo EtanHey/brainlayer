@@ -1,27 +1,16 @@
 import AppKit
 import SwiftUI
 
-/// L6: one preference decides the whole UI, read live by the status item, the dropdown, the window and Settings.
-/// An absent preference selects New; an explicit stored choice keeps precedence.
-enum BrainBarDesign: String, CaseIterable, Sendable {
-    case classic, new
+/// Compatibility names for old preferences. The app has one design; reading never migrates or writes defaults.
+enum BrainBarDesign: String, Sendable {
+    case new
 
     static let key = "BrainBarDesign"
     static let defaultValue: BrainBarDesign = .new
 
-    /// The design to draw now. A DEBUG capture fixture forces `new`; nothing else does. Reading never writes a value.
+    /// Old Classic and unknown stored values all resolve to the current design.
     static func current(in defaults: UserDefaults = .standard) -> BrainBarDesign {
-#if DEBUG
-        if BrainBarDesignFixture.requested != nil { return .new }
-#endif
-        return defaults.string(forKey: key).flatMap(Self.init(rawValue:)) ?? defaultValue
-    }
-
-    var title: String {
-        switch self {
-        case .classic: "Classic"
-        case .new: "New"
-        }
+        .new
     }
 }
 

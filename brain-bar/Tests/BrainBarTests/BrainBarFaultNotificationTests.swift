@@ -541,12 +541,11 @@ final class BrainBarFaultNotificationTests: XCTestCase {
         XCTAssertEqual(settings, 1)
     }
 
-    func testMenuOffStillDeliversThroughTheAppLifetimeSubscription() async {
+    func testAppLifetimeSubscriptionDeliversFaultNotifications() async {
         let d = defaults(), center = Center()
-        d.set(false, forKey: "BrainBarNewMenuEnabled")
         let subject = BrainBarFaultNotifications(center: center, defaults: d)
         let changes = PassthroughSubject<Void, Never>()
-        let posted = expectation(description: "Menu-off publisher delivers")
+        let posted = expectation(description: "App-lifetime publisher delivers")
         center.didPost = { posted.fulfill() }
         let c = capture("search")
         subject.observe(changes: changes.eraseToAnyPublisher()) { .init(capture: c) }

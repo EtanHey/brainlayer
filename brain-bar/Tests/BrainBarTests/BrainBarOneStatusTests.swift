@@ -17,7 +17,7 @@ final class BrainBarOneStatusTests: XCTestCase {
     enum Tone: Equatable { case healthy, notice, attention, checking }
 
     enum Surface: CaseIterable {
-        case icon, menuLine, maintenanceRow, panel, headline
+        case maintenanceRow, panel, headline
     }
 
     enum Fixture: CaseIterable {
@@ -135,8 +135,8 @@ final class BrainBarOneStatusTests: XCTestCase {
     // MARK: the real surfaces
 
     private struct Rig {
+        let runtime: BrainBarRuntime
         let model: BrainBarSettingsViewModel
-        let controller: BrainBarStatusPopoverController
         let page: BrainBarOnePagePresentation
     }
 
@@ -174,32 +174,16 @@ final class BrainBarOneStatusTests: XCTestCase {
         if inputs.badge?.vectorScan != nil { runtime.install(collector: collector, database: nil) }
         runtime.jobsModel = model
         runtime.driveAuth.setForPreview(status: .init(state: .valid, reason: nil, expiresAt: inputs.now.addingTimeInterval(30 * 86_400)))
+        model.attachDriveAuth(runtime.driveAuth)
+        model.republishStatus()
         let workspace = BrainBarRecordingWorkspace()
-        let controller = BrainBarStatusPopoverController(workspace: workspace, runtime: runtime,
-            dashboardPanelController: BrainBarDashboardPanelController(workspace: workspace, runtime: runtime, designDefaults: brainBarLegacyMenuDefaults()),
-            statusBar: TestStatusItemHost(), menuDefaults: brainBarLegacyMenuDefaults())
-        controller.menuNeedsUpdate(controller.contextMenuForTesting)
-
-        // Exercise the production renderer without starting collector refreshes or file readers.
-        controller.renderStatusIconForTesting(stats: collector.stats, state: collector.state)
-        _ = try XCTUnwrap(controller.renderedStatusDotForTesting, "fixture icon must actually render")
-        XCTAssertNotNil(controller.statusItemForTesting.button?.image)
-
         let page = BrainBarDashboardPreview.jobsPresentation(collector: collector, model: model,
                                                             workspace: workspace, now: inputs.now)
-        return Rig(model: model, controller: controller, page: page)
+        return Rig(runtime: runtime, model: model, page: page)
     }
 
     private func read(_ surface: Surface, _ rig: Rig) -> Reading {
         switch surface {
-        case .icon:
-            return .init(tone: rig.controller.renderedStatusDotForTesting == true ? .attention : nil, texts: [])
-        case .menuLine:
-            let title = rig.controller.contextMenuForTesting.items.first?.title ?? ""
-            let tone: Tone = title.hasPrefix("Needs attention:") ? .attention : title.hasPrefix("Info:") ? .notice
-                : title == "Checking status…" ? .checking : .healthy
-            let tooltip = rig.controller.contextMenuForTesting.items.first?.toolTip
-            return .init(tone: tone, texts: tooltip.map { [$0] } ?? [])
         case .maintenanceRow:
             let row = rig.model.groupStatus(.maintenance)
             let tone: Tone = switch row.health {
@@ -224,11 +208,10 @@ final class BrainBarOneStatusTests: XCTestCase {
 
     // MARK: the table
 
-    func testEveryStateReadsTheSameOnEverySurface() throws {
+    func testEveryStateKeepsSharedSnapshotAndJobHealthConsistent() throws {
         for fixture in Fixture.allCases {
             let name = "\(fixture)"
             let rig = try rig(try inputs(fixture))
-            defer { rig.controller.stop() }
             let (tone, rowHealth) = fixture.expected
             let readings = Dictionary(uniqueKeysWithValues: Surface.allCases.map { ($0, read($0, rig)) })
             let verdict = rig.model.publishedStatus.verdict
@@ -237,13 +220,13 @@ final class BrainBarOneStatusTests: XCTestCase {
             for surface in Surface.allCases {
                 let reading = readings[surface]!
                 switch surface {
-                case .icon, .panel:
+                case .panel:
                     // Two-state surfaces: they light up for a dot and stay quiet otherwise.
                     XCTAssertEqual(reading.tone == .attention, tone == .attention, "\(name): \(surface) \(reading)")
                 case .maintenanceRow:
                     XCTAssertEqual(rig.model.groupStatus(.maintenance).health, rowHealth, "\(name): \(surface) \(reading)")
                     if reading.tone == .attention { XCTAssertEqual(tone, .attention, "\(name): a red row needs the dot") }
-                case .menuLine, .headline:
+                case .headline:
                     XCTAssertEqual(reading.tone, tone, "\(name): \(surface) \(reading)")
                 }
                 // Whatever a surface says comes from the one shared verdict.
@@ -285,71 +268,10 @@ final class BrainBarOneStatusTests: XCTestCase {
 
     /// `BRAINBAR_SNAPSHOT_DIR=<dir> swift test --filter BrainBarOneStatusTests`: the menu (its icon
     /// and the controller's real rows), the Dashboard and Jobs, per fixture, to compare by eye.
-    func testRenderMenuDashboardAndJobsPerFixture() throws {
-        guard let path = ProcessInfo.processInfo.environment["BRAINBAR_SNAPSHOT_DIR"] else {
-            throw XCTSkip("Set BRAINBAR_SNAPSHOT_DIR to render the one-status fixtures")
-        }
-        let directory = URL(fileURLWithPath: path, isDirectory: true)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        func write(_ view: AnyView, width: CGFloat, height: CGFloat, name: String) throws {
-            let host = NSHostingView(rootView: view)
-            host.appearance = NSAppearance(named: .darkAqua)
-            host.frame = NSRect(x: 0, y: 0, width: width, height: height)
-            host.layoutSubtreeIfNeeded()
-            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.4))
-            host.layoutSubtreeIfNeeded()
-            let bitmap = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
-            host.cacheDisplay(in: host.bounds, to: bitmap)
-            let png = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
-            XCTAssertGreaterThan(png.count, 5_000, name)
-            try png.write(to: directory.appendingPathComponent("\(name).png"), options: .atomic)
-        }
-        for fixture in [Fixture.healthy, .skippedWithReason, .failedNight, .recoveredNight, .vectorScan] {
-            let inputs = try inputs(fixture)
-            let rig = try rig(inputs)
-            defer { rig.controller.stop() }
-            let collector = collector(inputs)
-            if fixture == .vectorScan {
-                try write(BrainBarVectorDetailPreview.make(check: .init(count: 5, checkedAt: inputs.now, error: nil),
-                    scan: inputs.badge!.vectorScan!, now: inputs.now), width: 560, height: 240, name: "vector-details-fresh")
-                try write(BrainBarVectorDetailPreview.make(check: .init(count: 5, checkedAt: inputs.now.addingTimeInterval(-601), error: "Coverage query failed"),
-                    scan: inputs.badge!.vectorScan!, now: inputs.now), width: 560, height: 260, name: "vector-details-stale")
-                for (name, check) in [("starting", BrainBarVectorCheck(count: nil, checkedAt: nil, error: nil)),
-                                      ("unavailable", .init(count: nil, checkedAt: nil, error: "Coverage query failed")),
-                                      ("singular", .init(count: 1, checkedAt: inputs.now, error: nil))] {
-                    for width: CGFloat in [390, 560] {
-                        try write(BrainBarVectorDetailPreview.make(check: check, scan: inputs.badge!.vectorScan!, now: inputs.now),
-                                  width: width, height: 260, name: "vector-details-\(name)-\(Int(width))")
-                    }
-                }
-            }
-            let icon = BrainBarStatusPopoverController.statusIconImage(stats: collector.stats,
-                                                                       badgeOn: try XCTUnwrap(rig.controller.renderedStatusDotForTesting))
-            let rows = rig.controller.contextMenuForTesting.items.filter { !$0.isHidden }
-            let menu = AnyView(VStack(alignment: .leading, spacing: 0) {
-                Image(nsImage: icon).padding(.horizontal, 14).padding(.vertical, 6)
-                ForEach(Array(rows.enumerated()), id: \.offset) { _, item in
-                    if item.isSeparatorItem { Divider().padding(.vertical, 4) }
-                    else { Text(item.title).font(.system(size: 13)).padding(.horizontal, 14).padding(.vertical, 3) }
-                }
-            }.padding(.vertical, 6).frame(width: 560, alignment: .leading)
-                .background(Color(nsColor: .windowBackgroundColor)))
-            try write(menu, width: 560, height: 60 + CGFloat(rows.count) * 22, name: "one-status-\(fixture)-menu")
-            guard case let .readable(base) = BrainBarDashboardFixture.healthyObservabilityResult else { return }
-            let document = base.replacingBackupsForStatusTests(T.backups(), generatedAt: inputs.now)
-            try write(BrainBarDashboardPreview.make(collector: collector, observabilityResult: .readable(document),
-                                                    now: inputs.now, calendar: .current,
-                                                    statusVerdict: rig.model.publishedStatus.verdict),
-                      width: 980, height: 900, name: "one-status-\(fixture)-dashboard")
-            try write(BrainBarUnifiedWindowPreview.make(collector: collector, settingsViewModel: rig.model,
-                                                        panelState: BrainBarDashboardPanelState(), section: .jobs),
-                      width: 980, height: 900, name: "one-status-\(fixture)-jobs")
-        }
-    }
+
 
     func testSkippedNightSaysWhyInPlainWords() throws {
         let rig = try rig(try inputs(.skippedWithReason))
-        defer { rig.controller.stop() }
         let reason = try XCTUnwrap(rig.model.groupStatus(.maintenance).attentionReason)
         XCTAssertTrue(reason.hasPrefix("Nightly skipped at "), reason)
         XCTAssertTrue(reason.hasSuffix(": another program was writing to the database."), reason)
