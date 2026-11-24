@@ -493,7 +493,7 @@ final class BrainBarZeroWarningsRenderTests: XCTestCase {
             initialObservabilityResult: ObservabilityReader.read(url: fixture),
             initialWatcherHealth: .readable(.init(updatedAt: Date(), pollCount: 50)))
         // Blank the actual title and the sidebar's duplicate label in the same rendered view.
-        // Design and every Jobs card remain below this band, so neither can stand in for the title.
+        // Every Jobs card remains below this band, so none can stand in for the title.
         let blank = BrainBarSettingsView(viewModel: model, initialSection: .jobs)
             .overlay(alignment: .topLeading) {
                 Color.brainBarBackgroundBase.frame(height: 70)
@@ -503,7 +503,7 @@ final class BrainBarZeroWarningsRenderTests: XCTestCase {
         }
         let text = try BrainBarRenderHarness.renderSettingsText(model, section: .jobs, directory: root)
         XCTAssertTrue(text.contains("Jobs"), text)
-        XCTAssertTrue(text.contains("Design"), text)
+        XCTAssertFalse(text.contains("Design"), "The removed design selector must not return: \(text)")
     }
 
     func testBackupIdentityFailurePanelsRenderPlainExplanation() throws {

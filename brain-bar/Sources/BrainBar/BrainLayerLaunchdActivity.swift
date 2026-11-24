@@ -15,6 +15,7 @@ struct BrainLayerLaunchdJobObservation: Equatable, Sendable {
     let nextRunAt: Date?
     let isContinuous: Bool
     var pid: Int32? = nil
+    var calendarParentRunning: Bool? = nil
     /// Launchd/supervisor evidence, never inferred from a heartbeat gap.
     var uncleanExit: String? = nil
     var healthySince: Date? = nil

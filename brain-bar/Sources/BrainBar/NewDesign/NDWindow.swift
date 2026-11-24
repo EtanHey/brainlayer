@@ -4,7 +4,8 @@ import SwiftUI
 private typealias Say = BrainBarMenuPresenter.SurfaceSay
 
 /// The window (DESIGN-SPEC-R1 § 2.3 to 2.6): a unified 52 pt title bar holding only the centred tabs, one page, and a
-/// 28 pt footer that says when it was checked. Each page takes its own height (L17); nothing animates on a tab switch.
+/// 28 pt footer that says when it was checked. Each page takes its own height (L17); nothing animates on a tab switch,
+/// nor on a two-finger page swipe (`NDPageSwipe`), which makes the same switch.
 struct NDWindowRoot: View {
     @ObservedObject var store: NDStore
     /// Headless renders have no toolbar, so they draw the same row themselves, with stand-in traffic lights.
@@ -21,6 +22,7 @@ struct NDWindowRoot: View {
             } else {
                 ND.bar.frame(height: NDGrid.titleBar).overlay(alignment: .bottom) { ND.hair.frame(height: 0.5) }
             }
+            BrainBarUpdateRow(updates: store.updates, header: true, showDetails: { NDSettingsWindowController.show(store: store) })
             ScrollView(.vertical) {
                 let shown = page ?? store.shownPage
                 Group {
@@ -55,6 +57,8 @@ struct NDWindowRoot: View {
             NDFooter(left: r1.footerLeft, right: r1.footerRight)
         }
         .ignoresSafeArea(.container, edges: .top)
+        // Phase 14: a two-finger sideways swipe moves to the neighbouring page, through the same change a tab click makes.
+        .background(NDPageSwipeMonitor { store.swipePage($0) })
         .background(ND.bg)
         .foregroundStyle(ND.t1)
         .environment(\.ndPalette, .window)
@@ -513,12 +517,13 @@ struct NDActivitySection: View {
     @ViewBuilder private func chart(wave: NDWave?, known: Bool, cut: CGFloat?) -> some View {
         let scales = wave.map { Self.scaleLabels($0, minutes: store.range.minutes) }
         VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 24) {
+            HStack(spacing: 6) {
                 legend(color: ND.saved, value: known ? wave.map { NDFormat.integer($0.savesTotal) } : nil,
                        words: Say.savedByAgents, scale: known ? scales?.saves : nil)
                 legend(color: ND.read, value: known ? wave.map { NDFormat.integer($0.readsTotal) } : nil,
                        words: Say.readFromConversations, scale: known ? scales?.reads : nil)
-                Spacer()
+                legend(color: ND.agentRead, value: known ? wave?.agentReads.map { NDFormat.integer($0.reduce(0, +)) } : nil,
+                       words: Say.readsByAgents, scale: known ? Self.agentReadScale(wave, minutes: store.range.minutes) : nil)
             }
             .lineLimit(1)
             .frame(height: Self.headerHeight)
@@ -527,12 +532,16 @@ struct NDActivitySection: View {
                 // "saved" just above the baseline, "read" just below it, in the series' text colours (H1).
                 Text(Say.saved).font(NDType.captionMedium).foregroundStyle(ND.savedText)
                     .frame(width: Self.gutter, alignment: .leading).position(x: Self.gutter / 2, y: 53)
-                Text(Say.readWord).font(NDType.captionMedium).foregroundStyle(ND.readText)
+                Text(Say.sessionLinesWord).font(NDType.captionMedium).foregroundStyle(ND.readText)
                     .frame(width: Self.gutter, alignment: .leading).position(x: Self.gutter / 2, y: 72)
                 // Council r2a finding 3: the hover reads the pointer in the plot's own coordinates, the same origin the
                 // rule is drawn from (before, an offset moved the drawing but not the hit area, 52 pt apart).
                 NDWaveform(wave: wave, size: .hero, nowTick: true, hover: shown(wave, cut: cut), noDataFrom: cut)
                     .frame(width: Self.plotWidth, height: Self.plotHeight + 8)
+                    .overlay {
+                        agentReadPlot(wave, cut: cut)
+                            .allowsHitTesting(false)
+                    }
                     .contentShape(Rectangle())
                     .onContinuousHover(coordinateSpace: .local) { phase in
                         switch phase {
@@ -589,7 +598,8 @@ struct NDActivitySection: View {
             }
             .padding(.top, 14)
             .accessibilityElement(children: .ignore)
-            .accessibilityLabel(NDModel.waveAccessibility(wave, minutes: store.range.minutes))
+            .accessibilityLabel(NDModel.waveAccessibility(wave, minutes: store.range.minutes) + " "
+                + Say.agentReadsAccessibility(wave?.agentReads.map { $0.reduce(0, +) }))
             let axis = store.range.axis
             ZStack {
                 HStack {
@@ -642,18 +652,46 @@ struct NDActivitySection: View {
                 wave.readsPeak > 0 ? Say.upTo(NDFormat.integer(wave.readsPeak), minutes: span) : nil)
     }
 
+    static func agentReadScale(_ wave: NDWave?, minutes: Int) -> String? {
+        guard let counts = wave?.agentReads, let peak = counts.max(), peak > 0 else { return nil }
+        return Say.upTo(NDFormat.integer(peak), minutes: max(1, minutes / counts.count))
+    }
+
+    static func agentReadY(count: Int, peak: Int, canvas: CGSize) -> CGFloat {
+        let axis = NDWaveform.baseline(canvas, nowTick: true).midY
+        return axis - CGFloat(count) / CGFloat(max(1, peak)) * NDWaveform.halves(.hero).up
+    }
+
+    /// Read calls use a separate scale and a line, so they cannot be mistaken for ingested session lines.
+    private func agentReadPlot(_ wave: NDWave?, cut: CGFloat?) -> some View {
+        Canvas { context, size in
+            guard let wave, wave.readable, let counts = wave.agentReads, !counts.isEmpty else { return }
+            let peak = max(1, counts.max() ?? 0)
+            let pitch = size.width / CGFloat(counts.count)
+            var path = Path()
+            for (index, count) in counts.enumerated() {
+                if let cut, !Self.hoverable(index, count: counts.count, cut: cut) { break }
+                let point = CGPoint(x: (CGFloat(index) + 0.5) * pitch,
+                                    y: Self.agentReadY(count: count, peak: peak, canvas: size))
+                if index == 0 { path.move(to: point) } else { path.addLine(to: point) }
+            }
+            context.stroke(path, with: .color(ND.agentRead), style: StrokeStyle(lineWidth: 1.5, lineJoin: .round))
+        }
+    }
+
     private func legend(color: Color, value: String?, words: String, scale: String?) -> some View {
-        // R1.2 change 19: the hour's totals are the calm page's hero numbers, at the title size.
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
-            HStack(alignment: .firstTextBaseline, spacing: 6) {
+        // Keep all three series and their scales on the 22 pt header row.
+        HStack(alignment: .firstTextBaseline, spacing: 3) {
+            HStack(alignment: .firstTextBaseline, spacing: 3) {
                 RoundedRectangle(cornerRadius: 2).fill(color).frame(width: 8, height: 8).alignmentGuide(.firstTextBaseline) { d in d.height }
-                Text(value ?? NDModel.Number.unknown.value).font(NDType.total).foregroundStyle(ND.t1)  // R1.12 change 3
-                Text(words).font(NDType.body).foregroundStyle(ND.t2)
+                Text(value ?? NDModel.Number.unknown.value).font(NDType.numberStrong).foregroundStyle(ND.t1)
+                Text(words).font(NDType.caption).foregroundStyle(ND.t2)
             }
             if let scale {
                 Text(scale).font(NDType.caption).foregroundStyle(ND.t3)
             }
         }
+        .fixedSize(horizontal: true, vertical: false)
     }
 }
 
@@ -680,7 +718,8 @@ struct NDActivityReadout: View {
             Text(Self.span(wave, index: index, minutes: minutes, now: now, zone: zone)).font(NDType.captionNumber).foregroundStyle(ND.t2)
                 .padding(.bottom, 3)
             row(ND.saved, index < wave.saves.count ? wave.saves[index] : 0, Say.savedByAgents)
-            row(ND.read, index < wave.reads.count ? wave.reads[index] : 0, Say.readWord)
+            row(ND.read, index < wave.reads.count ? wave.reads[index] : 0, Say.readFromConversations)
+            row(ND.agentRead, wave.agentReads.flatMap { index < $0.count ? $0[index] : nil }, Say.readsByAgents)
         }
         .padding(.horizontal, 9).padding(.vertical, 6)
         .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(ND.pop)
@@ -688,10 +727,10 @@ struct NDActivityReadout: View {
         .ndDecoration(RoundedRectangle(cornerRadius: 6, style: .continuous).stroke(ND.hair2, lineWidth: 0.5))
     }
 
-    private func row(_ color: Color, _ value: Int, _ words: String) -> some View {
+    private func row(_ color: Color, _ value: Int?, _ words: String) -> some View {
         HStack(spacing: 6) {
             RoundedRectangle(cornerRadius: 2).fill(color).frame(width: 8, height: 8)
-            Text(NDFormat.integer(value)).font(NDType.numberStrong).foregroundStyle(ND.t1)
+            Text(value.map(NDFormat.integer) ?? "—").font(NDType.numberStrong).foregroundStyle(ND.t1)
             Text(words).font(NDType.body).foregroundStyle(ND.t2)
         }
         .frame(height: 18)

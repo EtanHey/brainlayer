@@ -621,6 +621,7 @@ struct BrainLayerLaunchdStatusProvider: BrainLayerLaunchdStatusSampling {
                     }
                     result = addingDaemonExit(to: result, daemon: daemon)
                 }
+                result.calendarParentRunning = parent.terminationStatus == 0 ? (integerLine(named: "pid", in: parent.output) ?? 0) > 1 : nil
                 result.ownership = .supervisor
                 return (job, result)
             })

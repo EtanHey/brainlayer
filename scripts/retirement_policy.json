@@ -1082,14 +1082,6 @@
         "target": "subprocess.Popen"
       }
     },
-    "2d6bafd37ab0fc92800b93389b9f5f194d47497b7c4f86d37225dfc5da67796e": {
-      "non_cloud_purpose": "Existing local Unix-domain MCP server, including DEBUG-only bounded fixture shutdown and owned-work drains; no cloud model endpoint or model sender. Both UI source and internal daemon symlink identities are intentionally classified.",
-      "site": {
-        "body_sha256": "a12746c28f65c957b97081a41400a81c9ffbe3dc721caa749f4fb8fe945b7472",
-        "kind": "non_python_source",
-        "path": "brain-bar/Sources/BrainBarDaemon/BrainBarServer.swift"
-      }
-    },
     "2d78a78ee20c7713d42cc1f6b7d925e10bdf8cffcce33c224cc01126e37a03dd": {
       "non_cloud_purpose": "Read the saved JSON resumable-upload receipt URL for the existing upload URL allowlist check. Dictionary metadata lookup only; does not issue a request or introduce a cloud-model sender.",
       "site": {
@@ -1704,6 +1696,16 @@
         "owner": "<module>.MCPClient.__init__",
         "path": "scripts/sprint_gate.py",
         "target": "socket.socket"
+      }
+    },
+    "417efb5945b5fc6d37f5ee82bdc4f3eea5f76caa6883cd6eb48e898fcef4aa6d": {
+      "non_cloud_purpose": "Offline local updater verification harness: subprocess runs only targeted pytest cases with injected fake brew, app, process sampler and keg against isolated deliberately broken script copies. No real brew, network, production data or model call.",
+      "site": {
+        "call_sha256": "9d97d469cf8d66465563e1e22c6dab3b6107819aba2d9956c7080016c1ab9c1b",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/check_brainbar_update_mutations.py",
+        "target": "import subprocess"
       }
     },
     "4181c872eb9212dc9ad6ae2f349275cfff79450c8f32d365d092a84c7742fa51": {
@@ -2384,6 +2386,14 @@
         "owner": "<module>._installed_package_root",
         "path": "src/brainlayer/import_sweep.py",
         "target": "importlib.util.find_spec"
+      }
+    },
+    "5d1571a0d37b9d9e2c31fea3dffecf8f29d28b2f97d100220796e4626105447d": {
+      "non_cloud_purpose": "Existing local Unix-domain MCP server, including DEBUG-only bounded fixture shutdown and owned-work drains; no cloud model endpoint or model sender. Both UI source and internal daemon symlink identities are intentionally classified.",
+      "site": {
+        "body_sha256": "53179c591492e1484c70b70fc9775be9eb6eb29fb9d7e3cd6489f6983a30e891",
+        "kind": "non_python_source",
+        "path": "brain-bar/Sources/BrainBar/BrainBarServer.swift"
       }
     },
     "5d77ee6c396a2eaf7db34365345ffa92a6f0dcfb5600fc1ad2cdd1afae9a3c43": {
@@ -3392,6 +3402,16 @@
         "target": "sqlite3.connect"
       }
     },
+    "7e7a7d02dad0ceb76b01801c3a8db952a68ab45a23ab55fdf3ee5413f03e715f": {
+      "non_cloud_purpose": "Offline local updater verification harness: subprocess runs only targeted pytest cases with injected fake brew, app, process sampler and keg against isolated deliberately broken script copies. No real brew, network, production data or model call.",
+      "site": {
+        "call_sha256": "bafb4781a34419c28271059706bf2912b46a50c97d586020217f622f2c8ec1f3",
+        "kind": "child_process",
+        "owner": "<module>.main",
+        "path": "scripts/check_brainbar_update_mutations.py",
+        "target": "subprocess.run"
+      }
+    },
     "7f473b9df716b6697971d1b0573a23c86bcd4cde3438f886459a3fc4d9f0819f": {
       "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/ingest/t3.py <module>.T3Reader._connect",
       "site": {
@@ -3500,6 +3520,14 @@
         "owner": "<module>.Bridge.__exit__",
         "path": "scripts/harness_probe.py",
         "target": "subprocess.TimeoutExpired"
+      }
+    },
+    "82b6be11c5c4e30d71a57f47ee573b92008cda2ece78fabf4b3e955a5f6008a6": {
+      "non_cloud_purpose": "Homebrew release updater: release-feed checks and local launchd install custody; no model transport.",
+      "site": {
+        "body_sha256": "e921ce78852c58618a9e2e1d8acf91474b901b1d83443fd1df7f12202a37e20c",
+        "kind": "non_python_source",
+        "path": "brain-bar/Sources/BrainBar/BrainBarUpdates.swift"
       }
     },
     "837ee23c48881860478e8eba3c32f0d355e453611a742f9b559903f3d3eefa58": {
@@ -3780,6 +3808,14 @@
         "owner": "<module>.inspect_sdk",
         "path": "scripts/retirement_probe.py",
         "target": "importlib.metadata.distribution"
+      }
+    },
+    "8bb40c7695055c26c1d5d118290dc58c03581e681e9217d6cf5df6f6251f2f45": {
+      "non_cloud_purpose": "Existing local Unix-domain MCP server, including DEBUG-only bounded fixture shutdown and owned-work drains; no cloud model endpoint or model sender. Both UI source and internal daemon symlink identities are intentionally classified.",
+      "site": {
+        "body_sha256": "53179c591492e1484c70b70fc9775be9eb6eb29fb9d7e3cd6489f6983a30e891",
+        "kind": "non_python_source",
+        "path": "brain-bar/Sources/BrainBarDaemon/BrainBarServer.swift"
       }
     },
     "8bdd8bc99bfbae604ca6c7e873da8f799e87da6d3477735b38bd2050baa80724": {
@@ -5166,6 +5202,14 @@
         "owner": "<module>._git_cmd",
         "path": "src/brainlayer/pipeline/git_overlay.py",
         "target": "subprocess.TimeoutExpired"
+      }
+    },
+    "bade659e7442cc873c71566e522c8b3b40d601680e546c93f19aada2a21bc768": {
+      "non_cloud_purpose": "Homebrew release updater: inherited local file-lock custody through supervisor/installer lifetime, pinned install and recovery; no model transport.",
+      "site": {
+        "body_sha256": "cbacfbecb1a718883863e931e6491417202a77488e9232b28fa744cf059d2e4f",
+        "kind": "non_python_source",
+        "path": "scripts/brainbar-update.sh"
       }
     },
     "baed4cb59b552413cee1eba5a2b06f6fe58bf90ec44469923ab041ef695a9b6f": {
@@ -7026,14 +7070,6 @@
         "owner": "<module>",
         "path": "src/brainlayer/archive_collapse.py",
         "target": "import subprocess"
-      }
-    },
-    "fe0a2be54ff85313774b7e8973d8d6a13ef14f9b7f82cbefd55da1109908bb6f": {
-      "non_cloud_purpose": "Existing local Unix-domain MCP server, including DEBUG-only bounded fixture shutdown and owned-work drains; no cloud model endpoint or model sender. Both UI source and internal daemon symlink identities are intentionally classified.",
-      "site": {
-        "body_sha256": "a12746c28f65c957b97081a41400a81c9ffbe3dc721caa749f4fb8fe945b7472",
-        "kind": "non_python_source",
-        "path": "brain-bar/Sources/BrainBar/BrainBarServer.swift"
       }
     },
     "fe0a5fa402bb9cdd757c7d4458b426d220800cdaa1f0ae2624fd45d368e83fad": {
