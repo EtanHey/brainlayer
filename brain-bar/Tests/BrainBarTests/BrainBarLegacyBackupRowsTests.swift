@@ -62,6 +62,9 @@ import XCTest
         XCTAssertEqual(try parse([legacy, upload(boundary + 1), upload(3)]).skipped, 0)
         XCTAssertNil(try parse(["{broken", upload(400), upload(3)]).attempts)
         XCTAssertNil(try parse([#"{"attempted_at":"broken"}"#, upload(400), upload(3)]).attempts)
+        for key in ["ts", "created_at", "at"] {
+            XCTAssertNil(try parse(["{\"\(key)\":\"broken\"}", upload(400), upload(3)]).attempts)
+        }
     }
 
     func testDrawnBackupsPageMatchesCleanHistoryInBothAppearances() throws {

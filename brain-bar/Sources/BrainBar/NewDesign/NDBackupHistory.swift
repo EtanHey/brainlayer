@@ -81,7 +81,8 @@ enum NDBackupHistoryReader {
         if hasError, row["event"] != nil || row["attempted_at"] == nil { return .damage }
         if row["event"] != nil { return .skip }
         if row["attempted_at"] == nil {
-            if let dated = BackupLogReader.isoDate(row["ts"] ?? row["created_at"]) ?? nextDatedRow,
+            let hasLegacyClock = row["ts"] != nil || row["created_at"] != nil || row["at"] != nil
+            if let dated = BackupLogReader.isoDate(row["ts"] ?? row["created_at"]) ?? (hasLegacyClock ? nil : nextDatedRow),
                now.timeIntervalSince(dated) > windowS {
                 return .skip
             }
