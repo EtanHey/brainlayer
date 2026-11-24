@@ -1,0 +1,22 @@
+{
+  "after/agents-dark.png": "33f84c7a9aaad87a90384215b63742a11becaeb5ff991e58840c2bedd9f996f6",
+  "after/agents-light.png": "35867710264d491058b0d6a5a063aa4ec2968f38aab5520783dfd1045f7fcd54",
+  "after/older-NSAppearanceNameAqua.png": "3dd871821b4006215f452497a80e3b9155180eb47287936cdc501ac48c6af93a",
+  "after/older-NSAppearanceNameDarkAqua.png": "26028ad72ea9bec333af307be6403160277651e0504868f63d63fda4dfbf4fa7",
+  "after/queue-dark.png": "37216f3089bc3258c93f86e91523069716cc5d49fd7c4b20768498062ba33aa0",
+  "after/queue-light.png": "8a8b4d59ce007c89b36036da48f37824091f0fab462a6232670d4fb37d3fb534",
+  "after/search-dark.png": "bacebecbdab0652865d30b3096e78d195dd6a7210be589116a96aa46addff887",
+  "after/search-light.png": "8e3ede3729b0218e315632d607a25b871189df0aa70201ed7e8936e8c6c3828c",
+  "after/short-screen-dark.png": "66caa731354ba0c163adc00a462cd6f4b293015bdafc1d9bc45086665ab2fd14",
+  "after/short-screen-light.png": "c55bcbfa39497d4b2b24275d428d3bb225486fb53b97fa59028e4807aa686c48",
+  "before/agents-dark.png": "e309345e01139da4eb5cb0eec34529628417e4a1ca66f0e0a52fd5b52c05cbd0",
+  "before/agents-light.png": "afe39ed42997066fc613b79f2e81d0aef8f469a48ec7df48d080ba14e002050f",
+  "before/older-NSAppearanceNameAqua.png": "413fb62a851c52ebede5d75e8716e617bd86c9984e467d15c6655c2fdf635ecd",
+  "before/older-NSAppearanceNameDarkAqua.png": "ce7a567576ecc59c2bb69fcedc8d65078f6a4cdba02a04a012c6ab4130198ce4",
+  "before/queue-dark.png": "30981d2bd65f7d626f71d0a0e7e81a981fb30e23411991ef1056e64f727d2595",
+  "before/queue-light.png": "802fbf8f68f8416a07e8ca5981872c87ba2a609975cfefc0f195fb00de07bc83",
+  "before/search-dark.png": "03dfcb3bddadb63ff5d819b0a3f94948fc0ca391fd6327acc13bcdb77c036094",
+  "before/search-light.png": "7af5aead7bd1aa02fcf20ef4e5bf128617469e9fc013769afbf07da9f1a92d89",
+  "before/short-screen-dark.png": "c20ea92d596567eeec2a5df0c02f13c96674d38ed7505a2734d14746d5b0b855",
+  "before/short-screen-light.png": "3a533a500b530ea796922fe638c15ce1889780d693cd01c5af2060ffab2d8875"
+}
