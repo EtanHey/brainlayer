@@ -642,6 +642,14 @@
         "target": "client.connect"
       }
     },
+    "1d8caef00f12b435d7ab0a114382457f830ab72c8c69875e66b7e9b6f7824daf": {
+      "non_cloud_purpose": "Existing local Unix-domain MCP server, including DEBUG-only bounded fixture shutdown and owned-work drains; no cloud model endpoint or model sender. Both UI source and internal daemon symlink identities are intentionally classified.",
+      "site": {
+        "body_sha256": "037884bbd68b5fb4ad37e3dc8fafb5504aecfa6f57c04a8a3d1ddd29b65a27e5",
+        "kind": "non_python_source",
+        "path": "brain-bar/Sources/BrainBar/BrainBarServer.swift"
+      }
+    },
     "1d97971828089c566519f43d96a7d58b17fc0610894e1bb8c6d29e63a27079f1": {
       "non_cloud_purpose": "S22 read-only ps sampling of an explicitly named installed hotlane PID for the ten-minute CPU budget; argv only, no shell or cloud sender.",
       "site": {
@@ -1080,14 +1088,6 @@
         "owner": "<module>.Bridge.__enter__",
         "path": "scripts/harness_probe.py",
         "target": "subprocess.Popen"
-      }
-    },
-    "2d6bafd37ab0fc92800b93389b9f5f194d47497b7c4f86d37225dfc5da67796e": {
-      "non_cloud_purpose": "Existing local Unix-domain MCP server, including DEBUG-only bounded fixture shutdown and owned-work drains; no cloud model endpoint or model sender. Both UI source and internal daemon symlink identities are intentionally classified.",
-      "site": {
-        "body_sha256": "a12746c28f65c957b97081a41400a81c9ffbe3dc721caa749f4fb8fe945b7472",
-        "kind": "non_python_source",
-        "path": "brain-bar/Sources/BrainBarDaemon/BrainBarServer.swift"
       }
     },
     "2d78a78ee20c7713d42cc1f6b7d925e10bdf8cffcce33c224cc01126e37a03dd": {
@@ -6398,6 +6398,14 @@
         "target": "subprocess.run"
       }
     },
+    "e9474358ee286ae53b09b75ee61a900f3072248d59bdc358cfa628b710768191": {
+      "non_cloud_purpose": "Existing local Unix-domain MCP server, including DEBUG-only bounded fixture shutdown and owned-work drains; no cloud model endpoint or model sender. Both UI source and internal daemon symlink identities are intentionally classified.",
+      "site": {
+        "body_sha256": "037884bbd68b5fb4ad37e3dc8fafb5504aecfa6f57c04a8a3d1ddd29b65a27e5",
+        "kind": "non_python_source",
+        "path": "brain-bar/Sources/BrainBarDaemon/BrainBarServer.swift"
+      }
+    },
     "e99e49be5ae8608284a32a6996ca8c6f830a95fc18d4d96051a562828dc9689e": {
       "non_cloud_purpose": "Operator-only live Codex App MCP probe over the existing daemon AF_UNIX WebSocket control socket. Uses local thread/start, turn/start, thread/read and own-turn interrupt; does not create a listener or connect an Internet model endpoint. The installed agent retains its own provider configuration and may invoke its model provider; no BrainLayer production model backend is restored. Site: <module>.AppSocket.send self.sock.sendall.",
       "site": {
@@ -7026,14 +7034,6 @@
         "owner": "<module>",
         "path": "src/brainlayer/archive_collapse.py",
         "target": "import subprocess"
-      }
-    },
-    "fe0a2be54ff85313774b7e8973d8d6a13ef14f9b7f82cbefd55da1109908bb6f": {
-      "non_cloud_purpose": "Existing local Unix-domain MCP server, including DEBUG-only bounded fixture shutdown and owned-work drains; no cloud model endpoint or model sender. Both UI source and internal daemon symlink identities are intentionally classified.",
-      "site": {
-        "body_sha256": "a12746c28f65c957b97081a41400a81c9ffbe3dc721caa749f4fb8fe945b7472",
-        "kind": "non_python_source",
-        "path": "brain-bar/Sources/BrainBar/BrainBarServer.swift"
       }
     },
     "fe0a5fa402bb9cdd757c7d4458b426d220800cdaa1f0ae2624fd45d368e83fad": {
