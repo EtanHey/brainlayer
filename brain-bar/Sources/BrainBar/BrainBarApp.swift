@@ -34,6 +34,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var driveAuthTimer: Timer?
     private var driveTokenSamplingTask: Task<Void, Never>?
     /// S5: the shared status snapshot's one sampling cadence, for the app's lifetime.
+    private var updateSamplingTask: Task<Void, Never>?
     private var statusSamplingTask: Task<Void, Never>?
 
     override init() { super.init() }
@@ -113,6 +114,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             jobAlertsURL: BrainBarJobAlerts.producerURL(dbPath: dbPath, producerLabel: BrainBarJobAlerts.badgeProducerLabel),
             lifecycleLog: BrainBarLog.lifecycleLogFile())
         runtime.jobsModel = jobsModel
+        runtime.updates.busy = { [weak jobsModel] in
+            guard let model = jobsModel, model.hasCompletedLaunchdSample else { return "Job status unavailable" }
+            for job in [BrainLayerLaunchdJob.backupDaily, .jsonlBackup, .maintenanceNightly, .maintenanceWeekly] {
+                if model.launchdObservations[job]?.calendarParentRunning == true { return "Maintenance calendar" }
+                if model.launchdObservations[job]?.ownership == .supervisor,
+                   model.launchdObservations[job]?.calendarParentRunning == nil { return "Job status unavailable" }
+                if let observation = model.launchdObservations[job], observation.pid != nil || observation.loadState == .running { return job.title }
+            }
+            return nil
+        }
+        updateSamplingTask = Task { [updates = runtime.updates] in
+            await updates.prepareInstaller()
+            updates.resumeAttempt()
+            await updates.check()
+            var activity: NSObjectProtocol?
+            defer { if let activity { ProcessInfo.processInfo.endActivity(activity) } }
+            while !Task.isCancelled {
+                do { try await Task.sleep(for: .seconds(2)) } catch { return }
+                if updates.phase == .installing, activity == nil { activity = ProcessInfo.processInfo.beginActivity(options: .userInitiated, reason: "BrainBar update") }
+                if updates.phase != .installing, let current = activity { ProcessInfo.processInfo.endActivity(current); activity = nil }
+                await updates.tick()
+            }
+        }
         let notifications = BrainBarFaultNotifications(center: BrainBarSystemNotificationCenter { [weak self] in
             self?.statusPopoverController?.openNotificationDestination()
         }, defaults: .standard)
