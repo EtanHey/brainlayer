@@ -310,6 +310,14 @@ def _build_document(*, env: Mapping[str, str], now: datetime, recorder: InputRec
         }
     except Exception as exc:
         backups = _unmeasurable(f"backups raised {type(exc).__name__}: {exc}", db_input)
+    try:
+        from .observability_backup import build_drive_retention_section
+        backups["drive_retention"] = build_drive_retention_section(env=env, record_input=recorder, now=now, inputs=backups["inputs"])
+    except Exception as exc:
+        backups["drive_retention"] = {
+            "rule": None, "writes_enabled": False,
+            "config_error": f"Drive retention observation unavailable: {type(exc).__name__}", "machines": [],
+        }
     document = {"schema_version": 2, "generated_at": _iso_utc(now), "db_path": recorder.display_path(db_path),
                 "window_hours": WINDOW_HOURS, "stores": stores, "emitters": emitters,
                 "author_unknown": author_unknown, "backups": backups, "transport": transport}
