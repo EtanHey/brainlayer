@@ -63,6 +63,14 @@
     "bytes": 79832,
     "sha256": "9fdc09caef6d8385d62b593d578758ac3a2f5f0311a457f4036edeb019ab3fe4"
   },
+  "merged-update-settings-dark.png": {
+    "bytes": 148160,
+    "sha256": "f24a09e16a46a9a3f850dacf781fe75dbb1dafb132085a46494f27e5fd17c120"
+  },
+  "merged-update-settings-light.png": {
+    "bytes": 142635,
+    "sha256": "ba54edfe522d23a499a042b806ecda03bed9ec32abc0f476bb866a336f9c60e2"
+  },
   "settings-long-text-dark.png": {
     "bytes": 155366,
     "sha256": "7bd0b78608f27d25c52dae27c45bab4fd62467ecf106256cc731f10a2a41f292"

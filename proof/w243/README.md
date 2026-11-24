@@ -50,3 +50,16 @@ Menu proof captures the actual menu attached by the production status controller
 Settings long-text uses an invented 12,345-backup summary with a long nested fixture path. Signed-out/error shows Drive's real Reconnect row; waiting shows its disabled replacement after a reconnect request; unconfirmed shows unknown evidence. No new UI control was introduced by this PR. Pressed/confirmation/saved selector states are not applicable because the Design selector is deleted. Existing actions' native click/confirmation behavior remains in installed acceptance, outside this offscreen proof.
 
 Replay: copy `state-proof-render-test.swift.txt` to `brain-bar/Tests/BrainBarTests/BrainBarW243StateProofTests.swift`, then run `BRAINBAR_W243_STATE_PROOF=<absolute output directory> swift test --package-path brain-bar --filter BrainBarW243StateProofTests` with the lane's required scratch/gate settings. This proof-only fixture uses the shipping sources; it is not shipped in the app. Its drawn-state assertions and PNGs are retained here for visual regression review. All 24 new images were opened and inspected at the proof boundary.
+
+
+## Update-control merge integration
+
+Source `079fc3e7d9a472b44dbb7bb9c0572f4bace675c9` merges main `8393656df7ac204e4c4c6c039723b796c96344f1` while retaining the single New design. Only NDSettings.swift conflicted: keep showsUpdateControl, omit the obsolete Design binding. App, Runtime, NDStore and NDWindow are identical to main's updater wiring.
+
+These additional invented-data captures come from the full run's `BrainBarUpdatesTests.testDrawnUpdateStates`, at the real 480pt Settings width, with long recovery text. Both were opened and inspected. The update row is below Diagnostics and there is no Design row. No extra render invocation or production app was launched.
+
+| Integrated Settings state | Dark | Light |
+|---|---|---|
+| Update recovery, long text, Classic removed | ![](merged-update-settings-dark.png) | ![](merged-update-settings-light.png) |
+
+The version numbers and recovery filename are fixed test fixtures. The independent updater states are exercised unchanged by the merged full test suite. These are offscreen captures, not installed-app proof. There are now 34 PNGs on this proof branch.
