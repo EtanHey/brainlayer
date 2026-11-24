@@ -82,10 +82,10 @@ def environment_policy(selected, metadata, policies):
     if metadata.get("name", "").casefold() != selected.casefold():
         refuse(f"signing environment {selected} missing")
     if metadata.get("deployment_branch_policy") != {"protected_branches": False, "custom_branch_policies": True}:
-        refuse(f"signing environment {selected} requires deployment branch main and tags v* only")
+        refuse(f"signing environment {selected} requires deployment branch main only (no tags)")
     actual = [(p.get("name"), p.get("type")) for p in policies]
-    if len(actual) != 2 or set(actual) != {("main", "branch"), ("v*", "tag")}:
-        refuse(f"signing environment {selected} requires deployment branch main and tags v* only")
+    if actual != [("main", "branch")]:
+        refuse(f"signing environment {selected} requires deployment branch main only (no tags)")
 
 
 def environment_ready(selected):
