@@ -113,6 +113,9 @@ enum NDRange: String, CaseIterable, Sendable, Identifiable {
 struct NDWave: Equatable, Sendable {
     var saves: [Int]
     var reads: [Int]
+    /// Search + recall calls from the daemon's sidecar; nil is unavailable, never a measured zero.
+    var agentReads: [Int]? = nil
+    var agentReadsPeakPerMinute: Int? = nil
     /// False when the database could not be read: the waveform is unknown (dashed), never empty.
     var readable = true
     /// When the newest bucket ends; a later end by one bucket width is a shift (motion 5).

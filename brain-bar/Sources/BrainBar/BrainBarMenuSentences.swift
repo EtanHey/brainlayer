@@ -673,7 +673,8 @@ extension BrainBarMenuPresenter {
         static func nextCheckIn(_ age: String) -> String { "Next check in \(age)" }
         static func lastCheckedAgo(_ age: String) -> String { "Last checked \(age) ago" }
         static let savedByAgents = "saved by agents"
-        static let readFromConversations = "read from agents\u{2019} sessions"
+        static let readFromConversations = "session lines ingested"
+        static let readsByAgents = "reads by agents"
         static let saved = "saved"
         static let readWord = "read"
         static let now = "now"
@@ -973,7 +974,7 @@ extension BrainBarMenuPresenter {
         /// V1's VoiceOver sentence for the waveform.
         static func wave(span minutes: Int, saves: Int, reads: Int) -> String {
             let span = minutes == 60 ? "Last hour" : minutes == 180 ? "Last 3 hours" : "Last 24 hours"
-            return "\(span): \(saves) saved by agents, \(reads) read from agents\u{2019} sessions."
+            return "\(span): \(saves) saved by agents, \(reads) session lines ingested."
         }
     }
 }

@@ -703,6 +703,7 @@ final class MCPRouter: @unchecked Sendable {
         }
 
         let startedAt = ProcessInfo.processInfo.systemUptime
+        if toolName == "brain_recall" { receiptStore.recordAgentRead(toolName: toolName) }
         // Dispatch to handler
         do {
             try Self.validate(arguments: arguments, for: toolName)

@@ -364,7 +364,7 @@ enum NDFixtureTraffic {
             saves.append(s)
             reads.append(r)
         }
-        var wave = NDWave(saves: saves, reads: reads, readable: true,
+        var wave = NDWave(saves: saves, reads: reads, agentReads: saves.map { $0 * 2 }, agentReadsPeakPerMinute: 12, readable: true,
                           endsAt: Date(timeIntervalSinceReferenceDate: Double(end * width)))
         wave.sequence = end
         return wave
