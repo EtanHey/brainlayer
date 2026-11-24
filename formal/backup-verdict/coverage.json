@@ -24,8 +24,8 @@
       "sha256": "4b624f51ae2047026dda8599329337a4b8022da375c46c54f428849abecc1587"
     },
     "src/brainlayer/maintenance_calendar.py": {
-      "sha": "01d9d998 (interim progress is observational; terminal results and last_weekly gate unchanged)",
-      "sha256": "b3ec22d01802f1cabb8f00ac1d0d735a8b404fb20cac6f5cc8b64800d3c91bea"
+      "sha": "28eefc5c (lead fix round on #1878) (review r1 F1): a failed progress write is logged and never fails the step; _progress_record appended at EOF so no anchor line moves; terminal summary, step order and last_weekly gate unchanged",
+      "sha256": "32ecabd2aefcec118cb3eef92161bba37fd0c40047beab7330b2ad48a91d1964"
     },
     "src/brainlayer/job_alerts.py": {
       "sha": "40f6e6da (atomic opt-in reason refresh)",

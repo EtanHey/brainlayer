@@ -1,11 +1,11 @@
 {
   "sync_sha": "a9c3f184821006dd29b40f2758bee1ba2df4afc5",
   "base_sha": "f01469cfdac1368d54a9f9d47bf743f5fc49ca8d",
-  "calendar_progress_sync_note": "2026-11-24: 01d9d998 adds an off-loop progress journal observation before child execution. It neither closes an attempt nor changes heartbeat, custody, abandonment, completion or terminal-summary transitions. Existing journal readers ignore this event. Model/projection actions are unchanged.",
+  "calendar_progress_sync_note": "2026-11-24: 01d9d998 adds an off-loop progress journal observation before child execution. It neither closes an attempt nor changes heartbeat, custody, abandonment, completion or terminal-summary transitions. Existing journal readers ignore this event. Model/projection actions are unchanged. 2026-11-24 lead fix round 28eefc5c: a failed progress write is logged and never fails the step (_progress_record, appended at EOF; no anchor moved; still no modeled transition).",
   "sources": {
     "src/brainlayer/maintenance_calendar.py": {
-      "sha": "01d9d998",
-      "sha256": "b3ec22d01802f1cabb8f00ac1d0d735a8b404fb20cac6f5cc8b64800d3c91bea"
+      "sha": "28eefc5c",
+      "sha256": "32ecabd2aefcec118cb3eef92161bba37fd0c40047beab7330b2ad48a91d1964"
     },
     "src/brainlayer/supervisor_guard.py": {
       "sha": "f9af18c8",
