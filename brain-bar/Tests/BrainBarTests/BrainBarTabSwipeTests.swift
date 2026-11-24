@@ -242,6 +242,173 @@ final class BrainBarTabSwipeTests: XCTestCase {
         XCTAssertEqual(store.page, .overview)
     }
 
+    // MARK: The monitor's lifetime follows the retained window (review r1 of #1870)
+
+    /// The dashboard window is retained and reused, so closing it never detaches its content. The monitor must still be
+    /// registered exactly while the window is open: none before it shows, one while open, none after close, exactly one
+    /// after each reopen, none after detach. A stand-in object plays the window; its notifications are the window's.
+    func testTheMonitorIsRegisteredOnlyWhileTheRetainedWindowIsOpen() {
+        let registry = CountingMonitors()
+        let probe = NDPageSwipeMonitor.Probe(frame: NSRect(x: 0, y: 0, width: 900, height: 600))
+        probe.monitors = registry
+        let window = NSObject()
+        var visible = false
+        let center = NotificationCenter() // private: AppKit's observers of the real center expect a real window
+        probe.notifications = center
+        probe.attach(to: window, isVisible: { visible })
+        XCTAssertEqual(registry.active, 0, "a window not yet shown registers nothing")
+
+        visible = true
+        center.post(name: NSWindow.didBecomeKeyNotification, object: window)
+        XCTAssertEqual(registry.active, 1, "open: one registration")
+        center.post(name: NSWindow.didBecomeMainNotification, object: window)
+        center.post(name: NSWindow.didChangeOcclusionStateNotification, object: window)
+        probe.attach(to: window, isVisible: { visible })
+        XCTAssertEqual(registry.added, 1, "every later open signal is idempotent")
+
+        center.post(name: NSWindow.willCloseNotification, object: window)
+        visible = false
+        XCTAssertEqual(registry.active, 0, "closed: no registration, although the window and its content are kept")
+        XCTAssertFalse(probe.isListening)
+
+        for round in 1...3 {
+            visible = true
+            center.post(name: NSWindow.didChangeOcclusionStateNotification, object: window)
+            center.post(name: NSWindow.didBecomeKeyNotification, object: window)
+            XCTAssertEqual(registry.active, 1, "reopen \(round): exactly one registration")
+            center.post(name: NSWindow.willCloseNotification, object: window)
+            visible = false
+            XCTAssertEqual(registry.active, 0, "close \(round)")
+        }
+        XCTAssertEqual(registry.added, 4)
+        XCTAssertEqual(registry.removed, 4)
+        XCTAssertEqual(registry.peak, 1, "never two at once")
+
+        center.post(name: NSWindow.didBecomeKeyNotification, object: NSObject())
+        visible = true
+        center.post(name: NSWindow.didBecomeKeyNotification, object: NSObject())
+        XCTAssertEqual(registry.active, 0, "another window's notifications change nothing")
+
+        center.post(name: NSWindow.didBecomeKeyNotification, object: window)
+        XCTAssertEqual(registry.active, 1)
+        probe.detach()
+        XCTAssertEqual(registry.active, 0, "detaching (or dismantling) the view removes it")
+        center.post(name: NSWindow.didBecomeKeyNotification, object: window)
+        XCTAssertEqual(registry.active, 0, "and a detached view no longer follows the window")
+    }
+
+    /// A swipe in progress when the window closes is dropped: after reopening, its end moves no page, its momentum is not
+    /// taken, and a fresh gesture works.
+    func testAPendingSwipeIsNotCarriedAcrossClose() throws {
+        let registry = CountingMonitors()
+        let probe = NDPageSwipeMonitor.Probe(frame: NSRect(x: 0, y: 0, width: 900, height: 600))
+        probe.monitors = registry
+        var steps: [Int] = []
+        probe.onStep = { steps.append($0) }
+        let window = NSObject()
+        var visible = true
+        let center = NotificationCenter()
+        probe.notifications = center
+        probe.attach(to: window, isVisible: { visible })
+        let at = NSPoint(x: 450, y: 300)
+
+        XCTAssertFalse(probe.route(try scroll(phase: .began), in: window, at: at))
+        for _ in 0..<6 { _ = probe.route(try scroll(phase: .changed, dx: -20), in: window, at: at) }
+        XCTAssertTrue(probe.route(try scroll(phase: .changed, dx: -20), in: window, at: at), "a sideways swipe is in progress")
+        XCTAssertTrue(probe.swipe.pager.isSwiping)
+
+        center.post(name: NSWindow.willCloseNotification, object: window)
+        visible = false
+        XCTAssertFalse(probe.swipe.pager.isSwiping, "closing drops the gesture")
+        visible = true
+        center.post(name: NSWindow.didBecomeKeyNotification, object: window)
+
+        XCTAssertFalse(probe.route(try scroll(phase: .ended), in: window, at: at))
+        XCTAssertFalse(probe.route(try scroll(momentum: .changed, dx: -30), in: window, at: at), "its momentum is the page's")
+        XCTAssertEqual(steps, [], "the old gesture's end moved no page")
+
+        for event in try gestureEvents(dx: -120) { _ = probe.route(event, in: window, at: at) }
+        XCTAssertEqual(steps, [1], "a fresh gesture after reopening swipes")
+    }
+
+    // MARK: The adapter reads real scroll events (NSEvent from CGEvent, no window)
+
+    func testTheAdapterReadsPhasesMomentumAndDeltasFromRealScrollEvents() throws {
+        let probe = NDPageSwipeMonitor.Probe(frame: NSRect(x: 0, y: 0, width: 900, height: 600))
+        probe.monitors = CountingMonitors()
+        var steps: [Int] = []
+        probe.onStep = { steps.append($0) }
+        let window = NSObject()
+        probe.attach(to: window, isVisible: { true })
+        let at = NSPoint(x: 450, y: 300)
+
+        let began = try scroll(phase: .began)
+        XCTAssertTrue(began.phase.contains(.began), "the scroll phase field reaches NSEvent.phase")
+        let changed = try scroll(phase: .changed, dx: -12)
+        XCTAssertEqual(changed.scrollingDeltaX, -12, accuracy: 0.01, "a continuous event's horizontal delta is in points")
+        XCTAssertTrue(changed.hasPreciseScrollingDeltas)
+
+        // Left: swallowed once sideways, one step on release, momentum kept from the page until it ends.
+        let kept = try gestureEvents(dx: -120).map { probe.route($0, in: window, at: at) }
+        XCTAssertEqual(kept.filter { $0 }.count, 10, "every changed step is kept from the page (the first 12 pt step already passes the 6 pt slop)")
+        XCTAssertFalse(kept.first!, "began reaches the page")
+        XCTAssertFalse(kept.last!, "ended reaches the page")
+        XCTAssertEqual(steps, [1])
+        let momentum = try scroll(momentum: .changed, dx: -40)
+        XCTAssertFalse(momentum.momentumPhase.isEmpty, "the momentum phase field reaches NSEvent.momentumPhase")
+        XCTAssertTrue(probe.route(try scroll(momentum: .began, dx: -40), in: window, at: at))
+        XCTAssertTrue(probe.route(momentum, in: window, at: at))
+        XCTAssertTrue(probe.route(try scroll(momentum: .ended), in: window, at: at))
+        XCTAssertEqual(steps, [1], "momentum never moves a page")
+
+        // Right: back one page.
+        for event in try gestureEvents(dx: 120) { _ = probe.route(event, in: window, at: at) }
+        XCTAssertEqual(steps, [1, -1])
+
+        // Vertical: every event reaches the page, no step.
+        let vertical = try gestureEvents(dx: 0, dy: -200).map { probe.route($0, in: window, at: at) }
+        XCTAssertTrue(vertical.allSatisfy { !$0 })
+        // A notched mouse wheel (no phases, line deltas): left alone.
+        let wheel = try XCTUnwrap(CGEvent(scrollWheelEvent2Source: nil, units: .line, wheelCount: 2, wheel1: 0, wheel2: -3, wheel3: 0))
+        let wheelEvent = try XCTUnwrap(NSEvent(cgEvent: wheel))
+        XCTAssertFalse(wheelEvent.hasPreciseScrollingDeltas)
+        for _ in 0..<20 { XCTAssertFalse(probe.route(wheelEvent, in: window, at: at)) }
+        // Another window's events, or a gesture that begins outside the probe: not a swipe.
+        for event in try gestureEvents(dx: -120) { XCTAssertFalse(probe.route(event, in: NSObject(), at: at)) }
+        for event in try gestureEvents(dx: -120) { XCTAssertFalse(probe.route(event, in: window, at: NSPoint(x: 2000, y: 300))) }
+        XCTAssertEqual(steps, [1, -1])
+    }
+
+    private final class CountingMonitors: NDScrollEventMonitoring {
+        private(set) var added = 0
+        private(set) var removed = 0
+        private(set) var peak = 0
+        var active: Int { added - removed }
+        func add(_ swallows: @escaping @MainActor (NSEvent) -> Bool) -> Any? {
+            added += 1
+            peak = max(peak, active)
+            return NSObject()
+        }
+        func remove(_ token: Any) { removed += 1 }
+    }
+
+    /// A continuous (trackpad) scroll event as AppKit builds it from a CGEvent: `phase` and `momentum` use the
+    /// CGEvent fields (scroll phase began 1, changed 2, ended 4; momentum begin 1, continue 2, end 3).
+    private enum ScrollPhase: Int64 { case began = 1, changed = 2, ended = 4 }
+    private enum MomentumPhase: Int64 { case began = 1, changed = 2, ended = 3 }
+    private func scroll(phase: ScrollPhase? = nil, momentum: MomentumPhase? = nil, dx: Int32 = 0, dy: Int32 = 0) throws -> NSEvent {
+        let cg = try XCTUnwrap(CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 2, wheel1: dy, wheel2: dx, wheel3: 0))
+        cg.setIntegerValueField(.scrollWheelEventIsContinuous, value: 1)
+        if let phase { cg.setIntegerValueField(.scrollWheelEventScrollPhase, value: phase.rawValue) }
+        if let momentum { cg.setIntegerValueField(.scrollWheelEventMomentumPhase, value: momentum.rawValue) }
+        return try XCTUnwrap(NSEvent(cgEvent: cg))
+    }
+
+    /// began, ten changed steps, ended.
+    private func gestureEvents(dx: Int32, dy: Int32 = 0) throws -> [NSEvent] {
+        try [scroll(phase: .began)] + (0..<10).map { _ in try scroll(phase: .changed, dx: dx / 10, dy: dy / 10) } + [scroll(phase: .ended)]
+    }
+
     // MARK: Helpers
 
     /// A trackpad gesture of 10 equal steps (began, changed ×10, ended) through the router, applied to `store`.

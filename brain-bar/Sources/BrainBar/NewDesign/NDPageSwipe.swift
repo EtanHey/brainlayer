@@ -148,50 +148,122 @@ extension NDStore {
     }
 }
 
+
+/// Where the swipe monitor registers. The app's own local event monitors in the window; tests count registrations.
+@MainActor protocol NDScrollEventMonitoring: AnyObject {
+    /// `swallows` answers whether the event is kept from the views under it.
+    func add(_ swallows: @escaping @MainActor (NSEvent) -> Bool) -> Any?
+    func remove(_ token: Any)
+}
+
+@MainActor final class NDLocalScrollMonitors: NDScrollEventMonitoring {
+    static let shared = NDLocalScrollMonitors()
+    func add(_ swallows: @escaping @MainActor (NSEvent) -> Bool) -> Any? {
+        NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { event in
+            MainActor.assumeIsolated { swallows(event) } ? nil : event
+        }
+    }
+    func remove(_ token: Any) { NSEvent.removeMonitor(token) }
+}
+
 /// Feeds the window's two-finger scrolls to `NDPageSwipe`. The page's vertical `ScrollView` would take these events
-/// whole, so a local monitor looks at each one first. It only listens while its view is in a window, so offscreen renders
-/// and tests that host the root without a window install nothing.
+/// whole, so a local monitor looks at each one first.
+///
+/// Lifetime (review r1 of #1870): the dashboard window is retained and reused (`isReleasedWhenClosed = false`), so its
+/// content never leaves it on close. The monitor therefore follows the window itself, not the view's attachment: it
+/// registers while the window is visible (on attach, `didBecomeKey`, `didBecomeMain`, `didChangeOcclusionState`), and
+/// `willClose` removes it and drops any gesture in progress. Registration is idempotent; detaching or dismantling the
+/// view removes it too. Offscreen renders and tests that host the root without a window register nothing.
+///
+/// Deltas: the gesture phases decide, not `hasPreciseScrollingDeltas`. A trackpad (and a Magic Mouse) reports phases
+/// with precise point deltas; a notched mouse wheel reports neither, and the router ignores phase-less events, so a
+/// line-based delta never reaches the pager.
 struct NDPageSwipeMonitor: NSViewRepresentable {
     let onStep: @MainActor (Int) -> Void
 
     func makeNSView(context: Context) -> Probe { Probe() }
     func updateNSView(_ view: Probe, context: Context) { view.onStep = onStep }
-    static func dismantleNSView(_ view: Probe, coordinator: ()) { view.removeMonitor() }
+    static func dismantleNSView(_ view: Probe, coordinator: ()) { view.detach() }
 
     final class Probe: NSView {
         var onStep: (@MainActor (Int) -> Void)?
-        private var monitor: Any?
-        private var swipe = NDPageSwipe()
+        /// Tests inject a counting registry.
+        var monitors: any NDScrollEventMonitoring = NDLocalScrollMonitors.shared
+        /// Tests use a private center: AppKit's own observers of these window notifications expect a real window.
+        var notifications = NotificationCenter.default
+        private var token: Any?
+        private(set) var swipe = NDPageSwipe()
+        private weak var observed: AnyObject?
+        private var isWindowVisible: () -> Bool = { false }
+        private var hitView: (NSPoint) -> NSView? = { _ in nil }
+        private var observers: [NSObjectProtocol] = []
+
+        /// Whether the local monitor is registered now.
+        var isListening: Bool { token != nil }
 
         override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
-            removeMonitor()
-            guard window != nil else { return }
-            monitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
-                guard let self else { return event }
-                return MainActor.assumeIsolated { self.handle(event) } ? nil : event
+            guard let window else { return detach() }
+            attach(to: window, isVisible: { [weak window] in window?.isVisible ?? false }, hitView: { [weak window] location in
+                // `hitTest` takes a point in the content view's superview's coordinates.
+                window?.contentView.flatMap { $0.hitTest($0.superview?.convert(location, from: nil) ?? location) }
+            })
+        }
+
+        /// Follow `target`'s (the window's) open and close. Tests pass a stand-in object and post its notifications.
+        func attach(to target: AnyObject, isVisible: @escaping () -> Bool, hitView: @escaping (NSPoint) -> NSView? = { _ in nil }) {
+            if observed === target { return listenIfVisible() }
+            detach()
+            observed = target
+            isWindowVisible = isVisible
+            self.hitView = hitView
+            let center = notifications
+            observers.append(center.addObserver(forName: NSWindow.willCloseNotification, object: target, queue: nil) { [weak self] _ in
+                MainActor.assumeIsolated { self?.stopListening() }
+            })
+            for name in [NSWindow.didBecomeKeyNotification, NSWindow.didBecomeMainNotification,
+                         NSWindow.didChangeOcclusionStateNotification] {
+                observers.append(center.addObserver(forName: name, object: target, queue: nil) { [weak self] _ in
+                    MainActor.assumeIsolated { self?.listenIfVisible() }
+                })
+            }
+            listenIfVisible()
+        }
+
+        func detach() {
+            for observer in observers { notifications.removeObserver(observer) }
+            observers = []
+            stopListening()
+            observed = nil
+            isWindowVisible = { false }
+            hitView = { _ in nil }
+        }
+
+        private func listenIfVisible() {
+            guard token == nil, observed != nil, isWindowVisible() else { return }
+            swipe = NDPageSwipe()
+            token = monitors.add { [weak self] event in
+                self?.route(event, in: event.window, at: event.locationInWindow) ?? false
             }
         }
 
-        func removeMonitor() {
-            if let monitor { NSEvent.removeMonitor(monitor) }
-            monitor = nil
+        private func stopListening() {
+            if let token { monitors.remove(token) }
+            token = nil
             swipe = NDPageSwipe()
         }
 
-        /// Whether the event belongs to a page swipe and must not reach the page.
-        func handle(_ event: NSEvent) -> Bool {
-            guard let window, event.window === window else { return false }
+        /// Whether the event belongs to a page swipe and must not reach the page. `eventWindow` and `location` are the
+        /// event's own (a test's synthetic scroll event carries neither).
+        func route(_ event: NSEvent, in eventWindow: AnyObject?, at location: NSPoint) -> Bool {
+            guard let observed, eventWindow === observed, event.type == .scrollWheel else { return false }
             var input = NDPageSwipe.Event(phase: event.phase, momentumPhase: event.momentumPhase,
                                           dx: event.scrollingDeltaX, dy: event.scrollingDeltaY)
             if event.phase.contains(.began) {
-                let location = event.locationInWindow
                 input.inside = bounds.contains(convert(location, from: nil))
-                // `hitTest` takes a point in the content view's superview's coordinates.
-                let hit = window.contentView.flatMap { $0.hitTest($0.superview?.convert(location, from: nil) ?? location) }
-                input.overSidewaysScroller = NDPageSwipe.scrollsSideways(hit)
+                input.overSidewaysScroller = NDPageSwipe.scrollsSideways(hitView(location))
             }
             let decision = swipe.route(input)
             if decision.step != 0 { onStep?(decision.step) }
