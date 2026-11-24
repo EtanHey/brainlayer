@@ -595,6 +595,19 @@ map_changed_files_to_pytests() {
           done
         fi
         ;;
+      src/brainlayer/backup_retention_observation.py)
+        # #1862: the Drive-rule observation has no same-name test. Its owners are the drive-config
+        # contract and the backup observability surface that imports it; a missing one falls back.
+        mapped=1
+        for rel in test_drive_retention_config.py test_observability_backup.py; do
+          [ -f "$TEST_ROOT/$rel" ] || mapped=0
+        done
+        if [ "$mapped" -eq 1 ]; then
+          for rel in test_drive_retention_config.py test_observability_backup.py; do
+            append_unique "$TEST_ROOT/$rel"
+          done
+        fi
+        ;;
       src/brainlayer/*.py)
         module_name="$(basename "$changed" .py)"
         test_path="$TEST_ROOT/test_${module_name}.py"
