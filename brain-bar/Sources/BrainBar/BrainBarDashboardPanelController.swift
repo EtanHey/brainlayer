@@ -519,8 +519,13 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
     /// The first time: the last saved frame, fitted to the current screens, else below the
     /// menu-bar icon, else centred. Afterwards the window keeps wherever the user left it.
     private func placeWindow(near anchorView: NSView?) {
+#if BRAINBAR_UI
+        let restorationMinimum = currentMinSize
+#else
+        let restorationMinimum = Self.minSize
+#endif
         if let saved = frameStore.persistedFrame(),
-           let restored = Self.restoredFrame(saved, minSize: Self.minSize, visibleFrames: screenFrames()) {
+           let restored = Self.restoredFrame(saved, minSize: restorationMinimum, visibleFrames: screenFrames()) {
             window.setFrame(restored, display: false)
 #if BRAINBAR_UI
             fitPage(newDesignStore.page)

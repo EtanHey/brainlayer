@@ -16,6 +16,17 @@ final class BrainBarMainWindowTests: XCTestCase {
     /// A large display, so nothing here depends on the machine running the tests.
     private static let bigScreen = [NSRect(x: 0, y: 0, width: 2_560, height: 1_400)]
 
+    func testShortNewPageRestoresItsSavedTopEdge() {
+        let defaults = MemoryDefaults()
+        let saved = NSRect(x: 62, y: 233, width: 900, height: 510)
+        BrainBarWindowFrameStore(defaults: defaults, key: BrainBarDashboardPanelController.frameDefaultsKey).persist(frame: saved)
+        let controller = controller(defaults: defaults)
+        controller.newDesignStore.page = .jobs
+        controller.placeWindowForTesting()
+        XCTAssertEqual(controller.windowForTesting.frame.minX, saved.minX)
+        XCTAssertEqual(controller.windowForTesting.frame.maxY, saved.maxY)
+    }
+
     private func controller(
         defaults: MemoryDefaults = MemoryDefaults(),
         screens: [NSRect] = BrainBarMainWindowTests.bigScreen
