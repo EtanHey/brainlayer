@@ -131,10 +131,10 @@ def test_workflows_keep_required_context_and_gate_both_publish_paths():
         assert "needs.changes.outputs.crash_sweeps == 'true'" in step["if"]
     for name in ("publish.yml", "brainbar-release.yml"):
         workflow = yaml.safe_load((ROOT / ".github/workflows" / name).read_text())
-        job = next(iter(workflow["jobs"].values()))
-        check = job["steps"][1]
+        job = workflow["jobs"].get("release", next(iter(workflow["jobs"].values())))
+        check = next(s for s in job["steps"] if "crash_sweep_gate.py verify-release" in s.get("run", ""))
         assert "crash_sweep_gate.py verify-release" in check["run"]
-        assert "git rev-parse HEAD" in check["run"]
+        assert ("$RELEASE_SHA" if name == "brainbar-release.yml" else "git rev-parse HEAD") in check["run"]
         assert check["env"]["GH_TOKEN"] == "${{ github.token }}"
     hook = (ROOT / ".githooks/pre-push").read_text()
     assert "crash_sweep_gate.py verify-release" in hook
