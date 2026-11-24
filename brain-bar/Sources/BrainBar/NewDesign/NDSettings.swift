@@ -86,6 +86,7 @@ import SwiftUI
 
 struct NDSettingsView: View {
     @ObservedObject var store: NDStore
+    var showsUpdateControl = true
     @AppStorage(BrainBarDesign.key) private var design: String = BrainBarDesign.defaultValue.rawValue
     var configPath: String = "~/.config/brainlayer/brainlayer.env"
     private typealias Say = BrainBarMenuPresenter.SurfaceSay
@@ -102,6 +103,10 @@ struct NDSettingsView: View {
                 .overlay(alignment: .bottom) { ND.hair.frame(height: 0.5) }
             VStack(alignment: .leading, spacing: 0) {
                 VStack(spacing: 0) {
+                    if showsUpdateControl {
+                        BrainBarUpdateRow(updates: store.updates)
+                        ND.hair.frame(height: 0.5)
+                    }
                     row(Say.design) {
                         Spacer()
                         NDSegments(titles: BrainBarDesign.allCases.map(\.title),

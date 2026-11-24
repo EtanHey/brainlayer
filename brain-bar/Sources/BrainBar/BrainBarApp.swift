@@ -34,6 +34,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var driveAuthTimer: Timer?
     private var driveTokenSamplingTask: Task<Void, Never>?
     /// S5: the shared status snapshot's one sampling cadence, for the app's lifetime.
+    private var updateSamplingTask: Task<Void, Never>?
     private var statusSamplingTask: Task<Void, Never>?
 
     override init() { super.init() }
@@ -113,6 +114,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             jobAlertsURL: BrainBarJobAlerts.producerURL(dbPath: dbPath, producerLabel: BrainBarJobAlerts.badgeProducerLabel),
             lifecycleLog: BrainBarLog.lifecycleLogFile())
         runtime.jobsModel = jobsModel
+        runtime.updates.busy = { [weak jobsModel] in
+            guard let model = jobsModel, model.hasCompletedLaunchdSample else { return "job status is unavailable" }
+            for job in [BrainLayerLaunchdJob.backupDaily, .jsonlBackup, .maintenanceNightly, .maintenanceWeekly] {
+                if let observation = model.launchdObservations[job], observation.pid != nil || observation.loadState == .running { return job.rawValue }
+            }
+            return nil
+        }
+        updateSamplingTask = Task { [updates = runtime.updates] in
+            updates.resumeAttempt()
+            await updates.check()
+            while !Task.isCancelled {
+                do { try await Task.sleep(for: .seconds(2)) } catch { return }
+                await updates.tick()
+            }
+        }
         let notifications = BrainBarFaultNotifications(center: BrainBarSystemNotificationCenter { [weak self] in
             self?.statusPopoverController?.openNotificationDestination()
         }, defaults: .standard)
