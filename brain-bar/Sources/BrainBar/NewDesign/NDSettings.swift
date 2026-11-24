@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import Combine
 
 /// Settings (⌘,): account, design, settings file, Diagnostics and the meaning-search explanation.
 @MainActor final class NDSettingsWindowController: NSObject, NSWindowDelegate {
@@ -35,6 +36,15 @@ import SwiftUI
         window.isRestorable = false
         super.init()
         window.delegate = self
+        updateChanges = store.updates.objectWillChange.receive(on: DispatchQueue.main).sink { [weak self, weak hosting] _ in
+            guard let self, let hosting else { return }
+            let size = Self.contentSize(of: hosting.view)
+            self.window.contentMinSize = .zero
+            self.window.contentMaxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+            self.window.setContentSize(size)
+            self.window.contentMinSize = size
+            self.window.contentMaxSize = size
+        }
     }
 
     /// The 28 pt title bar the content runs under, with its hairline.
@@ -77,6 +87,7 @@ import SwiftUI
 
     static var isOpenForTesting: Bool { current != nil }
 
+    private var updateChanges: AnyCancellable?
     private var activationPolicy: BrainBarWindowActivationPolicy?
 
     func windowWillClose(_ notification: Notification) {
@@ -159,6 +170,7 @@ struct NDSettingsView: View {
         }
         .ignoresSafeArea(.container, edges: .top)
         .frame(width: NDSettingsWindowController.width)
+        .fixedSize(horizontal: false, vertical: true)
         .background(ND.bg)
         .foregroundStyle(ND.t1)
         .environment(\.ndPalette, .window)

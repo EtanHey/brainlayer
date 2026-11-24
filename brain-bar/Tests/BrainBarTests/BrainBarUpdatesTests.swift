@@ -1,8 +1,97 @@
 import XCTest
+import SwiftUI
 @testable import BrainBar
 
 @MainActor final class BrainBarUpdatesTests: XCTestCase {
     func preferences() -> UserDefaults { UserDefaults(suiteName: "update-test-" + UUID().uuidString)! }
+
+    func testSuspendedCheckCannotOverwriteInstallOrCancel() async throws {
+        for outcome in ["2.1.0", "error", "tap"] {
+            var continuation: CheckedContinuation<String, Error>?
+            var launches = 0
+            let state = FileManager.default.currentDirectoryPath + "/.build.noindex/w257/race-" + UUID().uuidString
+            let model = BrainBarUpdates(installerPath: "/fixture/update.sh", installed: "1.0.0", stateRoot: state,
+                defaults: preferences(), feed: { try await withCheckedThrowingContinuation { continuation = $0 } },
+                launch: { _, _, _, _ in launches += 1 })
+            model.offer = "2.0.0"; model.busy = { nil }
+            let check = Task { await model.check() }
+            while continuation == nil { await Task.yield() }
+            model.install(); model.cancel()
+            if outcome == "error" { continuation!.resume(throwing: URLError(.timedOut)) }
+            else if outcome == "tap" { continuation!.resume(throwing: BrainBarReleaseFeed.FeedError.tapPending) }
+            else { continuation!.resume(returning: outcome) }
+            await check.value
+            XCTAssertEqual(model.phase, .installing)
+            XCTAssertEqual(model.detail, "Cancelling…")
+            model.install()
+            XCTAssertEqual(launches, 1)
+        }
+    }
+
+    func testSpawnSubmitsIndependentJobAndPinsScript() throws {
+        let root = FileManager.default.currentDirectoryPath + "/.build.noindex/w257/spawn-" + UUID().uuidString
+        try FileManager.default.createDirectory(atPath: root, withIntermediateDirectories: true)
+        let source = root + "/source.sh"
+        try "#!/bin/bash\nexit 0\n".write(toFile: source, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: source)
+        var submitted: [String] = []
+        try BrainBarUpdates.spawn("2.0.0", "fixture-id", root + "/jobs.json", source, root: root) { submitted = $0 }
+        XCTAssertEqual(submitted, ["bootstrap", "gui/" + String(getuid()), root + "/update-job-fixture-id.plist"])
+        let data = try Data(contentsOf: URL(fileURLWithPath: submitted[2]))
+        let job = try XCTUnwrap(PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any])
+        XCTAssertTrue((job["Label"] as? String)?.hasPrefix("com.brainlayer.brainbar-update.fixture-id.") == true)
+        XCTAssertEqual(job["RunAtLoad"] as? Bool, true)
+        XCTAssertEqual(job["LaunchOnlyOnce"] as? Bool, true)
+        XCTAssertEqual(job["ProgramArguments"] as? [String], ["/usr/bin/env",
+            "BRAINBAR_UPDATE_JOBS=" + root + "/jobs.json", "/bin/bash", root + "/update-fixture-id.sh", "2.0.0", "fixture-id"])
+        XCTAssertEqual(try String(contentsOfFile: root + "/update-fixture-id.sh", encoding: .utf8),
+                       try String(contentsOfFile: source, encoding: .utf8))
+        XCTAssertThrowsError(try BrainBarUpdates.spawn("2.0.0", "other-id", root + "/jobs.json", source, root: root) { _ in
+            throw URLError(.cannotConnectToHost)
+        })
+    }
+
+    func testFixtureWithRuntimeHasInertUpdater() async {
+        let runtime = BrainBarRuntime()
+        let store = NDStore(fixture: BrainBarDesignFixture.inputs(.calm), runtime: runtime)
+        XCTAssertFalse(store.updates === runtime.updates)
+        store.preferences.removeObject(forKey: "update.offer")
+        await store.updates.check(force: true)
+        XCTAssertNil(store.updates.offer)
+        XCTAssertNil(store.preferences.string(forKey: "update.offer"))
+        let normal = NDStore(runtime: runtime, workspace: BrainBarRecordingWorkspace())
+        XCTAssertTrue(normal.updates === runtime.updates)
+    }
+
+    func testOpenSettingsContentReportsRecoveryHeight() async throws {
+        let store = NDStore(fixture: BrainBarDesignFixture.inputs(.calm))
+        let model = store.updates
+        let host = NSHostingView(rootView: NDSettingsView(store: store))
+        host.frame = NSRect(x: 0, y: 0, width: 480, height: 800)
+        func settle() async {
+            for _ in 0..<10 { host.layoutSubtreeIfNeeded(); try? await Task.sleep(for: .milliseconds(10)) }
+        }
+        await settle()
+        func capture(_ name: String) throws {
+            host.setFrameSize(NSSize(width: 480, height: host.fittingSize.height))
+            host.layoutSubtreeIfNeeded()
+            let rep = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+            host.cacheDisplay(in: host.bounds, to: rep)
+            let directory = FileManager.default.currentDirectoryPath + "/.build.noindex/w257/refit-proof"
+            try FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
+            try XCTUnwrap(rep.representation(using: .png, properties: [:])).write(to: URL(fileURLWithPath: directory + "/" + name + ".png"))
+        }
+        let idle = NDSettingsWindowController.contentSize(of: host).height
+        try capture("settings-before")
+        model.phase = .failed
+        model.detail = String(repeating: "Recovery command needs attention. ", count: 12)
+        await settle()
+        XCTAssertGreaterThan(NDSettingsWindowController.contentSize(of: host).height, idle)
+        try capture("settings-recovery")
+        model.detail = ""
+        await settle()
+        XCTAssertEqual(NDSettingsWindowController.contentSize(of: host).height, idle, accuracy: 1)
+    }
 
     func testNumericVersions() {
         XCTAssertTrue(BrainBarReleaseFeed.newer("1.10.0", than: "1.9.9"))

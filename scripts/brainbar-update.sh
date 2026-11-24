@@ -5,6 +5,22 @@ umask 077
 export PATH="${BRAINBAR_UPDATE_PATH:-/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin}"
 export HOMEBREW_NO_INSTALL_CLEANUP=1 HOMEBREW_NO_AUTO_UPDATE=1
 export SUDO_ASKPASS=/usr/bin/false NONINTERACTIVE=1
+# flock is held by a supervisor for the entire attempt, including stale mkdir recovery.
+# The file is permanent: unlinking it would let contenders lock different inodes.
+if [ "${1:-}" != --custody-held ]; then
+  custody_root=${BRAINBAR_UPDATE_ROOT:-"$HOME/Library/Application Support/BrainBar"}
+  mkdir -p "$custody_root"
+  exec /usr/bin/ruby -e '
+    File.open(ARGV.shift, File::RDWR|File::CREAT, 0600) do |lock|
+      unless lock.flock(File::LOCK_EX|File::LOCK_NB)
+        warn "Another update owns custody"; exit 75
+      end
+      system("/bin/bash", ARGV.shift, "--custody-held", *ARGV)
+      exit($?.exitstatus || 1)
+    end
+  ' "$custody_root/update-custody.lock" "$0" "$@"
+fi
+shift
 V=${1:?Usage: brainbar-update.sh VERSION OPERATION_ID}
 OP=${2:?operation id required}
 [[ "$V" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ && "$OP" =~ ^[A-Za-z0-9-]+$ ]] || exit 64
@@ -54,18 +70,21 @@ finish() {
       if [ -e "$APP" ]; then
         failed="$ROOT/Backups.noindex/BrainBar.failed-$OP.app"
         mv "$APP" "$failed" || { state recovery-required "Restore $BACKUP to $APP"; exit 1; }
-        if [ -f "$ROOT/last-failed" ]; then
-          previous_failed=$(cat "$ROOT/last-failed")
-          case "$previous_failed" in "$ROOT/Backups.noindex/BrainBar.failed-"*.app)
-            ruby -rfileutils -e 'FileUtils.remove_entry_secure(ARGV[0]) if File.directory?(ARGV[0])' "$previous_failed" ;;
-          esac
-        fi
-        printf '%s\n' "$failed" > "$ROOT/last-failed"
       fi
       mv "$BACKUP" "$APP" || { state recovery-required "$BACKUP"; exit 1; }
       if ! "$CLI" brainbar activate --verify --timeout 90; then
         state recovery-required "Run: $CLI brainbar activate --verify --timeout 90"
         exit 1
+      fi
+      # Restoration and its real activation check take priority over retention cleanup.
+      if [ -n "${failed:-}" ]; then
+        if [ -f "$ROOT/last-failed" ]; then
+          previous_failed=$(cat "$ROOT/last-failed")
+          case "$previous_failed" in "$ROOT/Backups.noindex/BrainBar.failed-"*.app)
+            ruby -rfileutils -e 'FileUtils.remove_entry_secure(ARGV[0]) if File.directory?(ARGV[0])' "$previous_failed" || echo "Could not prune $previous_failed" >&2 ;;
+          esac
+        fi
+        printf '%s\n' "$failed" > "$ROOT/last-failed"
       fi
     fi
     if [ "$MUTATED" = 0 ]; then
@@ -147,7 +166,7 @@ if [ -f "$ROOT/last-backup" ]; then
   previous_backup=$(cat "$ROOT/last-backup")
   case "$previous_backup" in "$ROOT/Backups.noindex/BrainBar.backup-"*.app)
     if [ "$previous_backup" != "$BACKUP" ]; then
-      ruby -rfileutils -e 'FileUtils.remove_entry_secure(ARGV[0]) if File.directory?(ARGV[0])' "$previous_backup"
+      ruby -rfileutils -e 'FileUtils.remove_entry_secure(ARGV[0]) if File.directory?(ARGV[0])' "$previous_backup" || echo "Could not prune $previous_backup" >&2
     fi ;;
   esac
 fi

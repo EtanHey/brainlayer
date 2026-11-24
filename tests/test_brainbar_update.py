@@ -252,3 +252,56 @@ def test_dead_owner_with_settled_state_can_retry(install):
     result, _, _, app = install()
     assert result.returncode == 0, result.stderr
     assert (app / "identity").read_text().strip() == "new"
+
+
+def test_prune_failure_does_not_prevent_restore(install):
+    _, _, root, app = install("busy")
+    previous = root / "Backups.noindex/BrainBar.failed-previous.app"
+    previous.mkdir()
+    (root / "last-failed").write_text(str(previous))
+    commands = app.parents[1] / "bin"
+    ruby = commands / "ruby"
+    ruby.write_text(
+        '#!/bin/bash\nif [ "$1" = -rfileutils ]; then echo prune >> "$TEST_LOG"; exit 1; fi\nexec /usr/bin/ruby "$@"\n'
+    )
+    ruby.chmod(0o700)
+    result, log, _, app = install("activate")
+    assert result.returncode != 0
+    assert (app / "identity").read_text() == "old"
+    assert log.index("activate", log.index("activate") + 1) < log.index("prune")
+    assert "failed" in (root / "update-state").read_text()
+
+
+def test_reaper_blocks_new_acquisition_during_owner_read(install):
+    import time
+
+    _, _, root, app = install("busy")
+    lock = root / "update.lock"
+    lock.mkdir()
+    (lock / "pid").write_text("2147483647")
+    (lock / "operation").write_text("dead")
+    commands = app.parents[1] / "bin"
+    cat = commands / "cat"
+    cat.write_text(
+        '#!/bin/bash\nif [ "$1" = "$BRAINBAR_UPDATE_ROOT/update.lock/pid" ]; then touch "$BRAINBAR_UPDATE_ROOT/reading"; while [ ! -f "$BRAINBAR_UPDATE_ROOT/continue" ]; do sleep 0.02; done; fi\nexec /bin/cat "$@"\n'
+    )
+    cat.chmod(0o700)
+    from concurrent.futures import ThreadPoolExecutor
+
+    with ThreadPoolExecutor() as pool:
+        first = pool.submit(install, "busy")
+        try:
+            deadline = time.monotonic() + 10
+            while not (root / "reading").exists():
+                assert time.monotonic() < deadline
+                time.sleep(0.02)
+            # Model the exiting owner releasing the old mkdir while the reaper is suspended.
+            (lock / "pid").unlink()
+            (lock / "operation").unlink()
+            lock.rmdir()
+            second, log, _, _ = install(operation="contender")
+            assert second.returncode == 75, second.stderr
+            assert "upgrade" not in log
+        finally:
+            (root / "continue").touch()
+        first.result(timeout=10)

@@ -1022,6 +1022,14 @@
         "target": "ctypes.CDLL"
       }
     },
+    "2afa59b5ee591890abc325d5788f6b5adc5da3d4637abd0962ffbbe5b83ea8d7": {
+      "non_cloud_purpose": "Homebrew release updater: local one-shot launchd helper custody, installation and recovery; no model transport.",
+      "site": {
+        "body_sha256": "8c79cf91eddcac738da6e669a51b97aaccb0eae47fb16794ed53d07ac82be052",
+        "kind": "non_python_source",
+        "path": "brain-bar/Sources/BrainBar/BrainBarUpdates.swift"
+      }
+    },
     "2bb09499f9acf2a30a25502cdedea8038706202945be453be98b730e04a7b3c4": {
       "non_cloud_purpose": "Local handling of gunzip -t integrity-check failures during raw/gzip backup cleanup; preserves the raw snapshot on failure and invokes no cloud or model transport.",
       "site": {
@@ -1346,14 +1354,6 @@
         "owner": "<module>",
         "path": "scripts/retirement_probe.py",
         "target": "import socket"
-      }
-    },
-    "34d609fb58832cb07d51146c938cbb81cf63b3a9074938a6deeb370c6d7196dc": {
-      "non_cloud_purpose": "Homebrew release/tap metadata fetch, formula upgrade and cask reinstall for the explicitly requested BrainBar update; no model call. Other commands are local process sampling, package signature verification, bundle custody/restore and verified BrainBar activation. No credential prompt or source checkout update.",
-      "site": {
-        "body_sha256": "7b2feb1eef6860313f3bb7251100d2612e1216058636f57e69232d3fe7d2074d",
-        "kind": "non_python_source",
-        "path": "scripts/brainbar-update.sh"
       }
     },
     "34e69277091eabe06e1d49fbf6c83d3edd069a45aaa0d19c5d273b9d714bb7dd": {
@@ -2022,14 +2022,6 @@
         "owner": "<module>",
         "path": "scripts/ci/crash_sweep_gate.py",
         "target": "from importlib.machinery import PathFinder"
-      }
-    },
-    "4bd7dc859133e0115a9f5c92410db6dcd33246c3590de3d37a4b03d2d748d059": {
-      "non_cloud_purpose": "Read-only GitHub release feed and Homebrew tap metadata with five-second URLSession timeouts; no model call. Also resolves the installed local package resource and detaches the explicitly requested shared Homebrew update helper; no model provider subprocess.",
-      "site": {
-        "body_sha256": "ba7a49de2508c513d134c1bb07758c6071e92cf2dda7acd665ec0c696ec2559c",
-        "kind": "non_python_source",
-        "path": "brain-bar/Sources/BrainBar/BrainBarUpdates.swift"
       }
     },
     "4c2d63c91d45ff3e5cff002fc599c7972d353f8df0cf5d6a0305342f752610ab": {
@@ -6912,6 +6904,14 @@
         "owner": "<module>.source_identity.git",
         "path": "scripts/brainbar_source_identity.py",
         "target": "subprocess.run"
+      }
+    },
+    "f7b195522242be3555361655c9af44426d1e89318e77afedc211f16c0189ee34": {
+      "non_cloud_purpose": "Homebrew release updater: local launchd helper custody, installation and recovery; no model transport.",
+      "site": {
+        "body_sha256": "e792cde3ece778810ca0bc016b0dd6b10476b284cb1bfe178473d12b354bff23",
+        "kind": "non_python_source",
+        "path": "scripts/brainbar-update.sh"
       }
     },
     "f7dbcb00cb0143c66eec160a222f62d7ba48405ef1502c0aaed8153c3cbd226a": {

@@ -75,6 +75,7 @@ enum BrainBarReleaseFeed {
     private var operation: String?
     private var lastCheck: Date?
     private var lastAttempt: Date?
+    private var lifecycleGeneration = 0
     private var checking = false
     private var launchedAt: Date?
     private var transientResultUntil: Date?
@@ -112,6 +113,7 @@ enum BrainBarReleaseFeed {
     func check(force: Bool = false) async {
         guard !checking, phase != .installing else { return }
         if !force, let lastCheck, now().timeIntervalSince(lastCheck) < 6 * 3600 { return }
+        let generation = lifecycleGeneration
         let previousPhase = phase, previousDetail = detail
         checking = true
         if force { phase = .checking }
@@ -119,6 +121,7 @@ enum BrainBarReleaseFeed {
         defer { checking = false }
         do {
             let latest = try await feed()
+            guard generation == lifecycleGeneration else { return }
             guard BrainBarReleaseFeed.components(latest) != nil else { throw URLError(.cannotParseResponse) }
             lastCheck = now()
             let superseded = offer == nil || BrainBarReleaseFeed.newer(latest, than: offer!)
@@ -131,14 +134,17 @@ enum BrainBarReleaseFeed {
             if !installerAvailable { detail = "Update unavailable — reinstall brainlayer" }
             if previousPhase == .waiting, operation != nil { install() }
         } catch BrainBarReleaseFeed.FeedError.tapPending {
+            guard generation == lifecycleGeneration else { return }
             phase = previousPhase; detail = "Release is reaching Homebrew"
         } catch {
+            guard generation == lifecycleGeneration else { return }
             phase = previousPhase; detail = previousPhase == .failed ? previousDetail : "Could not check"
         }
     }
 
     func install() {
         guard phase != .installing, let offer, let installerPath else { return }
+        lifecycleGeneration += 1
         if let job = busy() { phase = .waiting; detail = job == "Job status unavailable" ? "Will update when job status is available" : "Will update when \(job) finishes"; operation = operation ?? UUID().uuidString; return }
         let id = operation ?? UUID().uuidString
         do {
@@ -150,6 +156,7 @@ enum BrainBarReleaseFeed {
 
     func cancel() {
         guard let operation else { return }
+        lifecycleGeneration += 1
         if phase == .waiting { self.operation = nil; phase = .idle; detail = ""; return }
         // The helper checks this only before formula mutation. It is never killed mid-swap.
         canCancel = false; detail = "Cancelling…"
@@ -210,10 +217,36 @@ enum BrainBarReleaseFeed {
     }
 
     nonisolated static func spawn(_ version: String, _ id: String, _ jobs: String, _ script: String) throws {
-        let p = Process()
-        p.executableURL = URL(fileURLWithPath: "/bin/bash")
-        p.arguments = ["-c", #"set -e; mkdir -p "$3"; test -x "$0"; if [ ! -f "$3/update-$2.sh" ]; then cp "$0" "$3/update-$2.sh"; fi; BRAINBAR_UPDATE_JOBS="$4" nohup /bin/bash "$3/update-$2.sh" "$1" "$2" >>"$3/update.log" 2>&1 </dev/null &"#, script, version, id, Self.root, jobs]
-        try p.run()
+        try spawn(version, id, jobs, script, root: Self.root) { arguments in
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+            process.arguments = arguments
+            try process.run()
+            process.waitUntilExit()
+            guard process.terminationStatus == 0 else { throw CocoaError(.executableRuntimeMismatch) }
+        }
+    }
+
+    nonisolated static func spawn(_ version: String, _ id: String, _ jobs: String, _ script: String,
+                                 root: String, submit: ([String]) throws -> Void) throws {
+        let files = FileManager.default
+        guard BrainBarReleaseFeed.components(version) != nil,
+              !id.isEmpty, id.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-") }),
+              files.isExecutableFile(atPath: script) else { throw CocoaError(.fileReadNoPermission) }
+        try files.createDirectory(atPath: root, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        let copy = root + "/update-" + id + ".sh"
+        if !files.fileExists(atPath: copy) { try files.copyItem(atPath: script, toPath: copy) }
+        // A one-shot job has independent launchd custody and cannot respawn after exit, including failure.
+        let plist = root + "/update-job-" + id + ".plist"
+        let job: [String: Any] = [
+            "Label": "com.brainlayer.brainbar-update." + id + "." + UUID().uuidString,
+            "ProgramArguments": ["/usr/bin/env", "BRAINBAR_UPDATE_JOBS=" + jobs, "/bin/bash", copy, version, id],
+            "RunAtLoad": true, "LaunchOnlyOnce": true,
+            "StandardOutPath": root + "/update.log", "StandardErrorPath": root + "/update.log"
+        ]
+        try PropertyListSerialization.data(fromPropertyList: job, format: .xml, options: 0)
+            .write(to: URL(fileURLWithPath: plist), options: .atomic)
+        try submit(["bootstrap", "gui/" + String(getuid()), plist])
     }
 }
 

@@ -7,9 +7,12 @@ The offer persists across launches until installed or superseded. Later hides
 the header offer for the current session; Settings retains it.
 
 The Update button copies the installed `brainlayer/launchd/brainbar-update.sh`
-resource outside the keg and starts it detached from the app. Release workers
+resource outside the keg and bootstraps an independent one-shot launchd job
+(`RunAtLoad`, `LaunchOnlyOnce`, unique label per launch). Release workers
 can run that same shipped script with `VERSION OPERATION_ID`. Each operation
 uses one version-independent lock in `~/Library/Application Support/BrainBar`.
+A Ruby supervisor holds an OS file lock for the whole attempt, including stale
+mkdir-lock recovery. Its permanent lock file must not be unlinked.
 The helper refreshes Homebrew metadata and rechecks both tap versions immediately
 before the formula upgrade. It never pulls a source checkout or takes release
 receipts. Homebrew runs noninteractively, with stdin closed and askpass disabled.
@@ -30,7 +33,8 @@ Order: formula upgrade, installed-keg signature verification, service consolidat
 old-app backup, cask reinstall, activation with a real MCP handshake, installed bundle
 version check. A signature failure leaves the cask and services untouched.
 App replacement or activation failure restores the saved bundle and verifies
-activation again. A failed restore leaves custody and its recovery instruction
+activation again before pruning older failed bundles. Retention failures are
+non-fatal. A failed restore leaves custody and its recovery instruction
 in `update-state`; it never silently retries an unsettled attempt.
 
 Cancellation is accepted before formula mutation. After mutation, the operation
