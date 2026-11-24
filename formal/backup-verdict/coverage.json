@@ -24,8 +24,8 @@
       "sha256": "4b624f51ae2047026dda8599329337a4b8022da375c46c54f428849abecc1587"
     },
     "src/brainlayer/maintenance_calendar.py": {
-      "sha": "FIX-ALERT-POLICY working tree",
-      "sha256": "9c7c86907bba533de38a4f213e2765c695a7fe125e0250beae91a27b61a5152b"
+      "sha": "01d9d998 (interim progress is observational; terminal results and last_weekly gate unchanged)",
+      "sha256": "b3ec22d01802f1cabb8f00ac1d0d735a8b404fb20cac6f5cc8b64800d3c91bea"
     },
     "src/brainlayer/job_alerts.py": {
       "sha": "40f6e6da (atomic opt-in reason refresh)",
@@ -92,8 +92,8 @@
         "src/brainlayer/maintenance.py:1417-1440 (freelist gate; an EXIT_DEFERRED abort is vacuum deferred, #1641)",
         "src/brainlayer/backup_daily.py:3272-3298 (_recent_local_verified_backup: strict read since #1685; latest receipt per snapshot; excludes md5 mismatch, local_removed, abandoned, superseded)",
         "src/brainlayer/maintenance_calendar.py:857 (exit75 is deferred)",
-        "src/brainlayer/maintenance_calendar.py:1299-1303 (HoldWindowClosed / #1668 HoldBusy defer with75)",
-        "src/brainlayer/maintenance_calendar.py:1331-1332 (last_weekly only on three ok results)"
+        "src/brainlayer/maintenance_calendar.py:1333-1337 (HoldWindowClosed / #1668 HoldBusy defer with75)",
+        "src/brainlayer/maintenance_calendar.py:1365-1366 (last_weekly only on three ok results)"
       ],
       "Damage": [
         "src/brainlayer/backup_daily.py:315-370 (_scan_backup_receipts / _read_backup_receipts: an uncertain line raises under strict)",

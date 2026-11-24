@@ -1,10 +1,11 @@
 {
   "sync_sha": "a9c3f184821006dd29b40f2758bee1ba2df4afc5",
   "base_sha": "f01469cfdac1368d54a9f9d47bf743f5fc49ca8d",
+  "calendar_progress_sync_note": "2026-11-24: 01d9d998 adds an off-loop progress journal observation before child execution. It neither closes an attempt nor changes heartbeat, custody, abandonment, completion or terminal-summary transitions. Existing journal readers ignore this event. Model/projection actions are unchanged.",
   "sources": {
     "src/brainlayer/maintenance_calendar.py": {
-      "sha": "5a24d4b9",
-      "sha256": "5a307852afec90364eb48bbfca534d0e85e07c35c09503b24d57e3b72bbe91ac"
+      "sha": "01d9d998",
+      "sha256": "b3ec22d01802f1cabb8f00ac1d0d735a8b404fb20cac6f5cc8b64800d3c91bea"
     },
     "src/brainlayer/supervisor_guard.py": {
       "sha": "f9af18c8",
