@@ -642,14 +642,6 @@
         "target": "client.connect"
       }
     },
-    "1d8caef00f12b435d7ab0a114382457f830ab72c8c69875e66b7e9b6f7824daf": {
-      "non_cloud_purpose": "Existing local Unix-domain MCP server, including DEBUG-only bounded fixture shutdown and owned-work drains; no cloud model endpoint or model sender. Both UI source and internal daemon symlink identities are intentionally classified.",
-      "site": {
-        "body_sha256": "037884bbd68b5fb4ad37e3dc8fafb5504aecfa6f57c04a8a3d1ddd29b65a27e5",
-        "kind": "non_python_source",
-        "path": "brain-bar/Sources/BrainBar/BrainBarServer.swift"
-      }
-    },
     "1d97971828089c566519f43d96a7d58b17fc0610894e1bb8c6d29e63a27079f1": {
       "non_cloud_purpose": "S22 read-only ps sampling of an explicitly named installed hotlane PID for the ten-minute CPU budget; argv only, no shell or cloud sender.",
       "site": {
@@ -2386,6 +2378,14 @@
         "target": "importlib.util.find_spec"
       }
     },
+    "5d1571a0d37b9d9e2c31fea3dffecf8f29d28b2f97d100220796e4626105447d": {
+      "non_cloud_purpose": "Existing local Unix-domain MCP server, including DEBUG-only bounded fixture shutdown and owned-work drains; no cloud model endpoint or model sender. Both UI source and internal daemon symlink identities are intentionally classified.",
+      "site": {
+        "body_sha256": "53179c591492e1484c70b70fc9775be9eb6eb29fb9d7e3cd6489f6983a30e891",
+        "kind": "non_python_source",
+        "path": "brain-bar/Sources/BrainBar/BrainBarServer.swift"
+      }
+    },
     "5d77ee6c396a2eaf7db34365345ffa92a6f0dcfb5600fc1ad2cdd1afae9a3c43": {
       "non_cloud_purpose": "Import subprocess only for bounded local macOS security metadata-presence check, discarding stdout/stderr; never reads keyring secret or starts authentication.",
       "site": {
@@ -3780,6 +3780,14 @@
         "owner": "<module>.inspect_sdk",
         "path": "scripts/retirement_probe.py",
         "target": "importlib.metadata.distribution"
+      }
+    },
+    "8bb40c7695055c26c1d5d118290dc58c03581e681e9217d6cf5df6f6251f2f45": {
+      "non_cloud_purpose": "Existing local Unix-domain MCP server, including DEBUG-only bounded fixture shutdown and owned-work drains; no cloud model endpoint or model sender. Both UI source and internal daemon symlink identities are intentionally classified.",
+      "site": {
+        "body_sha256": "53179c591492e1484c70b70fc9775be9eb6eb29fb9d7e3cd6489f6983a30e891",
+        "kind": "non_python_source",
+        "path": "brain-bar/Sources/BrainBarDaemon/BrainBarServer.swift"
       }
     },
     "8bdd8bc99bfbae604ca6c7e873da8f799e87da6d3477735b38bd2050baa80724": {
@@ -6396,14 +6404,6 @@
         "owner": "<module>.merged_sha",
         "path": "scripts/golems_approve_release.py",
         "target": "subprocess.run"
-      }
-    },
-    "e9474358ee286ae53b09b75ee61a900f3072248d59bdc358cfa628b710768191": {
-      "non_cloud_purpose": "Existing local Unix-domain MCP server, including DEBUG-only bounded fixture shutdown and owned-work drains; no cloud model endpoint or model sender. Both UI source and internal daemon symlink identities are intentionally classified.",
-      "site": {
-        "body_sha256": "037884bbd68b5fb4ad37e3dc8fafb5504aecfa6f57c04a8a3d1ddd29b65a27e5",
-        "kind": "non_python_source",
-        "path": "brain-bar/Sources/BrainBarDaemon/BrainBarServer.swift"
       }
     },
     "e99e49be5ae8608284a32a6996ca8c6f830a95fc18d4d96051a562828dc9689e": {

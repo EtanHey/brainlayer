@@ -483,16 +483,30 @@ final class MCPRouter: @unchecked Sendable {
         pendingStoreDrainScheduler.backupGate.finishBackup()
     }
 
+    static let pendingStoreDrainJoinTimeout: TimeInterval = 5
+
     /// Called after backup work joins, from the server request queue. Marking the
     /// scheduler stopped here also disables delayed retries that have not fired.
-    func stopPendingStoreDrains() {
+    ///
+    /// Returns false when a drain already on the queue outlived `deadline`. A drain
+    /// can block without limit in the pending-store `flock`, which the Python side
+    /// takes too, so the join is bounded. The stop marker still runs once that drain
+    /// ends, ahead of any retry it schedules, because the queue is serial. On false
+    /// the caller must not close the write handle the drain is using.
+    @discardableResult
+    func stopPendingStoreDrains(
+        deadline: DispatchTime = .now() + MCPRouter.pendingStoreDrainJoinTimeout
+    ) -> Bool {
         let scheduler = pendingStoreDrainScheduler
         // Cleanup already joined the backup worker. Its normal gate-release
         // callback is queued behind cleanup on the server queue, so release here
         // before joining a drain that may be waiting at that gate.
         scheduler.backupGate.finishBackup()
-        scheduler.queue.sync { scheduler.stopped = true }
+        let joined = DispatchGroup()
+        scheduler.queue.async(group: joined) { scheduler.stopped = true }
+        let finished = joined.wait(timeout: deadline) == .success
         entityCache.stopRefreshTimer()
+        return finished
     }
 
     private let vacuumActivity = NSLock()

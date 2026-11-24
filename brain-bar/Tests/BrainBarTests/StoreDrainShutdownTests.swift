@@ -60,23 +60,63 @@ final class StoreDrainShutdownTests: XCTestCase {
     }
 
     func testProductionStopJoinsDrainBeforeClosingOwnedDatabase() throws {
-        let root = brainBarTestTemporaryDirectory().appendingPathComponent(UUID().uuidString)
+        let fixture = try HeldDrainServerFixture(test: self)
+        defer { fixture.removeFiles() }
+        DispatchQueue.global().async { fixture.server.stop(); fixture.stopped.signal() }
+        let prematureStop = fixture.stopped.wait(timeout: .now() + 0.2)
+        XCTAssertEqual(prematureStop, .timedOut, "Production cleanup must join the held drain")
+        fixture.release.signal()
+        XCTAssertEqual(fixture.drained.wait(timeout: .now() + 5), .success)
+        if prematureStop == .timedOut {
+            XCTAssertEqual(fixture.stopped.wait(timeout: .now() + 5), .success)
+        }
+    }
+
+    /// A drain can block without limit in the pending-store flock (the Python side
+    /// takes the same lock file). Shutdown must give up on it after its bound and
+    /// must not close the handle under it.
+    func testProductionStopBoundsDrainJoinAndKeepsHandleOpenForLiveDrain() throws {
+        executionTimeAllowance = 60
+        let fixture = try HeldDrainServerFixture(test: self, joinTimeout: 0.3)
+        defer { fixture.removeFiles() }
+        DispatchQueue.global().async { fixture.server.stop(); fixture.stopped.signal() }
+        let stop = fixture.stopped.wait(timeout: .now() + 3)
+        XCTAssertEqual(stop, .success, "stop() must return within the drain-join bound")
+        XCTAssertTrue(fixture.database.isOpen, "A timed-out join must leave the live drain's handle open")
+        // The drain body then runs its query on that handle (XCTFail inside if closed).
+        fixture.release.signal()
+        XCTAssertEqual(fixture.drained.wait(timeout: .now() + 5), .success)
+        if stop == .timedOut { XCTAssertEqual(fixture.stopped.wait(timeout: .now() + 5), .success) }
+    }
+}
+
+/// A started production server with a real, server-owned SQLite handle and one
+/// drain held on the production drain queue until `release` is signalled.
+private final class HeldDrainServerFixture: @unchecked Sendable {
+    let root: URL
+    let path: String
+    let server: BrainBarServer
+    let entered = DispatchSemaphore(value: 0)
+    let release = DispatchSemaphore(value: 0)
+    let stopped = DispatchSemaphore(value: 0)
+    let drained = DispatchSemaphore(value: 0)
+    private(set) var database: BrainDatabase!
+
+    init(test: XCTestCase, joinTimeout: TimeInterval? = nil) throws {
+        // A short directory keeps the socket below Darwin's 104-byte Unix socket limit.
+        root = brainBarTestTemporaryDirectory()
+            .appendingPathComponent("sd-" + UUID().uuidString.prefix(8))
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        let path = root.appendingPathComponent("fixture.db").path
-        // A relative fixture socket stays below Darwin's 104-byte Unix socket limit
-        // even when the harness worktree path is long.
-        let socketPath = "sd-\(UUID().uuidString).sock"
-        let server = BrainBarServer(socketPath: socketPath,
-                                    dbPath: path, enableHybridSearchHelper: false)
-        let ready = expectation(description: "database ready")
-        let entered = DispatchSemaphore(value: 0)
-        let release = DispatchSemaphore(value: 0)
-        let stopped = DispatchSemaphore(value: 0)
-        let drained = DispatchSemaphore(value: 0)
-        server.onDatabaseReady = { database in
-            // Runs on the production drain queue, with a real, server-owned SQLite handle.
-            DispatchQueue.global().async {
-                server.enqueueStoreDrainForTesting {
+        path = root.appendingPathComponent("fixture.db").path
+        let socketPath = root.appendingPathComponent("s.sock").path
+        XCTAssertLessThan(socketPath.utf8.count, 104, "Socket path exceeds Darwin's sun_path limit")
+        server = BrainBarServer(socketPath: socketPath, dbPath: path, enableHybridSearchHelper: false)
+        if let joinTimeout { server.pendingStoreDrainJoinTimeout = joinTimeout }
+        let ready = test.expectation(description: "database ready")
+        server.onDatabaseReady = { [self] database in
+            self.database = database
+            DispatchQueue.global().async { [self] in
+                server.enqueueStoreDrainForTesting { [self] in
                     entered.signal()
                     release.wait()
                     do { _ = try database.pragma("page_count") }
@@ -87,19 +127,19 @@ final class StoreDrainShutdownTests: XCTestCase {
             }
         }
         server.start()
-        wait(for: [ready], timeout: 5)
+        test.wait(for: [ready], timeout: 5)
         server.onDatabaseReady = nil
         XCTAssertEqual(entered.wait(timeout: .now() + 5), .success)
-        DispatchQueue.global().async { server.stop(); stopped.signal() }
-        let prematureStop = stopped.wait(timeout: .now() + 0.2)
-        XCTAssertEqual(prematureStop, .timedOut, "Production cleanup must join the held drain")
-        release.signal()
-        XCTAssertEqual(drained.wait(timeout: .now() + 5), .success)
-        if prematureStop == .timedOut {
-            XCTAssertEqual(stopped.wait(timeout: .now() + 5), .success)
-        }
+    }
+
+    /// Runs after the drain finished, so closing a handle a timed-out stop left open is safe.
+    func removeFiles() {
+        database?.close()
         removeBrainBarTestDatabase(path)
-        try FileManager.default.removeItem(atPath: socketPath + ".lock")
-        try FileManager.default.removeItem(at: root)
+        // The socket's .lock file lives under root; tolerate a run that never made it.
+        if FileManager.default.fileExists(atPath: root.path) {
+            do { try FileManager.default.removeItem(at: root) }
+            catch { XCTFail("Unable to remove fixture root \(root.path): \(error)") }
+        }
     }
 }
