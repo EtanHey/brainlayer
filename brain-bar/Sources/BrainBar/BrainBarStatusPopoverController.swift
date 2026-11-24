@@ -51,54 +51,16 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
     let contextMenuForTesting: NSMenu
 
 #if BRAINBAR_UI
-    private var logPathsOverride: BrainBarBackupSources.Paths?
-    private var logNote: (key: String, reason: String, message: String)?
-    private var activeLogKey: String?
-    private var activeLogReason = ""
-    private let logNoteItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
-    private var backupReceiptItems: [NSMenuItem] = []
-    private var logPaths: BrainBarBackupSources.Paths {
-        logPathsOverride ?? .live(databasePath: runtime.databasePath ?? BrainBarServer.defaultDBPath())
-    }
-#endif
-#if BRAINBAR_UI
-    private let menuDefaults: UserDefaults
-    private var legacyMenuItems: [NSMenuItem]?
-    private var newMenuReport = ""
-    private var lastBrainPresentation: BrainBarMenuPresentation?
-    private var copyReportFailed = false
     private var menuQuit: () -> Void = { BrainBarProcessControl.quit() }
     private var menuRestart: () -> Void = { BrainBarProcessControl.restart() }
-    private var menuPasteboard: () -> NSPasteboard = { .general }
-    private var menuStorage: ((BrainBarSettingsSection) -> Void)?
     private var diagnosticsOpener: (() -> Void)?
-
-    private lazy var liveMenuActions = BrainBarLiveMenuActions(
-        settings: { [weak self] in self?.openSettings(nil) },
-        storage: { [weak self] in self?.openMenuStorageSettings(section: .backups) },
-        quit: { [weak self] in self?.menuQuit() },
-        restart: { [weak self] in self?.menuRestart() },
-        reconnect: { [weak self] in
-            guard let drive = self?.runtime.driveAuth else { return }
-            Task { await drive.reconnect() }
-        },
-        copy: { [weak self] in self?.copyMenuReport() },
-        dismiss: { [weak self] in self?.contextMenuForTesting.cancelTracking() })
-    private lazy var liveMenuBuilder: BrainBarMenuBuilder = {
-        let builder = BrainBarMenuBuilder(actions: liveMenuActions)
-        builder.openDiagnostics = { [weak self] in self?.openDiagnostics(nil) }
-        return builder
-    }()
-    /// L6: the new design, behind `BrainBarDesign`. Built on first use, so the classic path never creates it.
-    private var shownDesign: BrainBarDesign = .classic
     private var newDesignCancellables: Set<AnyCancellable> = []
     private var hasNewDesignStore = false
     private lazy var newDesignStore: NDStore = {
         hasNewDesignStore = true
         let store = dashboardPanelController?.newDesignStore ?? NDStore.shared(for: runtime, workspace: workspace)
         store.$model.receive(on: RunLoop.main).sink { [weak self] _ in
-            guard let self, self.design == .new else { return }
-            self.renderNewIcon()
+            self?.renderNewIcon()
         }.store(in: &newDesignCancellables)
         return store
     }()
@@ -113,7 +75,6 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
         builder.diagnosticsOpener = { [weak self] in self?.openDiagnostics(nil) }
         return builder
     }()
-    private var design: BrainBarDesign { BrainBarDesign.current(in: menuDefaults) }
 
     private func performNew(_ action: BrainBarMenuAction) {
         contextMenuForTesting.cancelTracking()
@@ -135,7 +96,6 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
         guard !isStopped else { return }
         // F04: the store samples only while a surface shows the new design.
         newDesignStore.setIconActive(true)
-        shownDesign = .new
         guard !isMenuTracking, let button = statusItemForTesting.button else { return }
         let model = newDesignStore.model
         let r1 = newDesignStore.r1
@@ -145,17 +105,6 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
         button.toolTip = r1.headline
     }
 
-    /// Back to classic: forget what the new design drew, so the classic path renders as it always has.
-    private func leaveNewDesignIfNeeded() {
-        guard shownDesign == .new else { return }
-        shownDesign = .classic
-        if hasNewDesignStore { newDesignStore.setIconActive(false) }
-        lastBrainPresentation = nil
-        lastRenderedIcon = nil
-        statusItemForTesting.button?.alphaValue = 1
-        statusItemForTesting.button?.setAccessibilityLabel(nil)
-        statusItemForTesting.button?.image = nil
-    }
 #endif
     private let workspace: any BrainBarWorkspaceActing
     private let runtime: BrainBarRuntime
@@ -182,7 +131,9 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
         /// The button's appearance, and the app's (SwiftUI resolves the icon's colors from it).
         let appearance: NSAppearance.Name?, appAppearance: NSAppearance.Name?, increaseContrast: Bool
     }
+#if !BRAINBAR_UI
     private let statusPublisher = BrainBarUIStatusPublisher()
+#endif
     private var lastRenderedIcon: RenderedIcon?
     private var appearanceObservation: NSKeyValueObservation?
     private var appAppearanceObservation: NSKeyValueObservation?
@@ -195,12 +146,8 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
         workspace: any BrainBarWorkspaceActing,
         runtime: BrainBarRuntime,
         dashboardPanelController: BrainBarDashboardPanelController?,
-        statusBar: any BrainBarStatusItemHosting,
-        menuDefaults: UserDefaults = .standard
+        statusBar: any BrainBarStatusItemHosting
     ) {
-#if BRAINBAR_UI
-        self.menuDefaults = menuDefaults
-#endif
         self.workspace = workspace
         self.runtime = runtime
         self.dashboardPanelController = dashboardPanelController
@@ -212,16 +159,7 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
         configureContextMenu()
         configureStatusItem()
         bindRuntime()
-#if BRAINBAR_UI
-        NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification, object: menuDefaults)
-            .receive(on: RunLoop.main)
-            .sink { [weak self] _ in
-                guard let self, self.design != self.shownDesign else { return }
-                // Native tracking finishes before the status item changes geometry.
-                DispatchQueue.main.async { self.renderCurrentStatus() }
-            }
-            .store(in: &runtimeCancellables)
-#endif
+
         dashboardPanelController?.statusItemButton = statusItemForTesting.button
     }
 
@@ -315,7 +253,9 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
         newDesignCancellables.removeAll()
         if hasNewDesignStore { newDesignStore.setIconActive(false) }
 #endif
+#if !BRAINBAR_UI
         statusPublisher.flush()
+#endif
         badgeReadGeneration = UUID()
         appearanceObservation?.invalidate()
         appearanceObservation = nil
@@ -337,14 +277,7 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
         statusItemForTesting.menu = contextMenuForTesting
         guard let button = statusItemForTesting.button else { return }
 #if BRAINBAR_UI
-        if design == .new {
-            renderNewIcon()
-        } else if BrainBarNewMenuPreference.isEnabled(in: menuDefaults) {
-            renderBrainIcon(BrainBarMenuPresenter.present(menuCapture(stats: runtime.collector?.stats)))
-        } else {
-            button.image = NSImage(systemSymbolName: "brain", accessibilityDescription: "BrainBar")
-            button.toolTip = "BrainBar"
-        }
+        renderNewIcon()
 #else
         button.image = NSImage(systemSymbolName: "brain", accessibilityDescription: "BrainBar")
         button.toolTip = "BrainBar"
@@ -414,20 +347,14 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
 
     private func renderCurrentStatus() {
 #if BRAINBAR_UI
-        if design == .new { return renderNewIcon() }
-        leaveNewDesignIfNeeded()
-#endif
+        renderNewIcon()
+#else
         if let stats = latestStats, let state = latestState {
             renderStatusIcon(stats: stats, state: state)
         } else {
-#if BRAINBAR_UI
-            if BrainBarNewMenuPreference.isEnabled(in: menuDefaults) {
-                renderBrainIcon(BrainBarMenuPresenter.present(menuCapture(stats: latestStats)))
-                return
-            }
-#endif
             updateTooltip()
         }
+#endif
     }
 
     private func bindCollector(_ collector: StatsCollector?) {
@@ -496,25 +423,8 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
         // Keep AppKit's tracking anchor stable; collectors still cache the latest state.
         guard !isStopped, !isMenuTracking else { return }
 #if BRAINBAR_UI
-        if design == .new { return renderNewIcon() }
-        leaveNewDesignIfNeeded()
-#endif
-        // Three overlapping pipeline lines (Agent stores / JSONL watcher / Enrichment)
-        // with an always-visible baseline so the icon stays legible on a dark
-        // fullscreen menu bar instead of the old single gray line that vanished.
-        // Coalesce by content: late collector/badge deliveries after a menu closes must not relayout
-        // the status item again when the icon they would draw is identical.
-#if BRAINBAR_UI
-        if BrainBarNewMenuPreference.isEnabled(in: menuDefaults) {
-            renderBrainIcon(BrainBarMenuPresenter.present(menuCapture(stats: stats)))
-            return
-        }
-        if lastBrainPresentation != nil {
-            lastBrainPresentation = nil
-            lastRenderedIcon = nil
-            statusItemForTesting.button?.setAccessibilityLabel(nil)
-        }
-#endif
+        renderNewIcon()
+#else
         let appearance = statusItemForTesting.button?.effectiveAppearance ?? NSAppearance.currentDrawing()
         let icon = RenderedIcon(agent: stats.recentAgentWriteBuckets, watcher: stats.recentWatcherWriteBuckets,
                                 dot: currentVerdict.dot,
@@ -527,6 +437,7 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
         }
         updateTooltip()
         publishRenderedStatus()
+#endif
     }
 
     struct VerdictRow: Equatable {
@@ -633,12 +544,10 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
         return item
     }
 
+#if !BRAINBAR_UI
     private func publishRenderedStatus() {
         guard let dbPath = runtime.databasePath else { return }
-        var health = badgePresentation.healthVerdict
-#if BRAINBAR_UI
-        if let model = runtime.jobsModel { health = model.publishedStatus.healthVerdict ?? model.healthBadge?.healthVerdict }
-#endif
+        let health = badgePresentation.healthVerdict
         let verdict = currentVerdict
         var items = verdict.currentItems
         if verdict.dot != .green && items.isEmpty {
@@ -651,6 +560,8 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
             gitCommit: Bundle.main.object(forInfoDictionaryKey: "GitCommit") as? String ?? "unknown", items: items)
         statusPublisher.publish(receipt, to: BrainBarUIStatusReceipt.url(dbPath: dbPath))
     }
+
+#endif
 
     /// The system Increase Contrast setting (High Contrast reaches the icon through it).
     nonisolated(unsafe) static var increaseContrast: () -> Bool = { NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast }
@@ -688,33 +599,17 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
     private func updateTooltip() {
         guard !isStopped, !isMenuTracking else { return }
 #if BRAINBAR_UI
-        if design == .new {
-            statusItemForTesting.button?.toolTip = newDesignStore.model.headline
-            return
-        }
-        if BrainBarNewMenuPreference.isEnabled(in: menuDefaults), let presentation = lastBrainPresentation {
-            statusItemForTesting.button?.toolTip = presentation.headline
-            return
-        }
-#endif
+        statusItemForTesting.button?.toolTip = newDesignStore.model.headline
+#else
         statusItemForTesting.button?.toolTip = currentVerdict.tooltip
+#endif
     }
 
 #if DEBUG
 #if BRAINBAR_UI
-    func setMenuTargetsForTesting(quit: @escaping () -> Void, restart: @escaping () -> Void,
-                                  storage: @escaping (BrainBarSettingsSection) -> Void, pasteboard: NSPasteboard) {
-        menuQuit = quit; menuRestart = restart; menuStorage = storage
-        menuPasteboard = { pasteboard }
-    }
-    func populateLiveMenuForTesting(_ presentation: BrainBarMenuPresentation) {
-        liveMenuBuilder.populate(contextMenuForTesting, with: presentation)
-    }
     func setDiagnosticsOpenerForTesting(_ opener: @escaping () -> Void) { diagnosticsOpener = opener }
-    func setLogPathsForTesting(_ paths: BrainBarBackupSources.Paths) { logPathsOverride = paths }
 #endif
     func setMenuTrackingForTesting(_ tracking: Bool) { isMenuTracking = tracking }
-    func flushStatusReceiptForTesting() { statusPublisher.flush() }
     var statusVerdictForTesting: BrainBarStatusVerdict { currentVerdict }
     var statusDotForTesting: Bool { currentVerdict.needsAttention }
     /// The badge input retained when the real status-item image was rendered; nil before rendering.
@@ -755,28 +650,6 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
         }
     }
 
-#if BRAINBAR_UI
-    private func menuCapture(stats: DashboardStats?) -> BrainBarMenuCapture {
-        runtime.jobsModel?.menuCapture(stats: stats)
-            ?? BrainBarMenuLiveCapture.capture(status: .checking, verdictAwakeAgeS: nil,
-                wakeCatchUpPending: false, driveAuth: runtime.driveAuth.status, backups: .notRead,
-                backupsNotice: nil, watcher: nil, watcherAwakeAgeS: nil, observations: nil,
-                stats: stats, now: Date(), timeZone: .current)
-    }
-
-    private func renderBrainIcon(_ presentation: BrainBarMenuPresentation) {
-        guard !isStopped, !isMenuTracking else { return }
-        if presentation.icon != lastBrainPresentation?.icon || statusItemForTesting.button?.image == nil {
-            statusItemForTesting.button?.image = BrainBarBrainIcon.image(for: presentation)
-        }
-        statusItemForTesting.button?.setAccessibilityLabel("BrainBar — " + presentation.headline)
-        statusItemForTesting.button?.image?.accessibilityDescription = "BrainBar — " + presentation.headline
-        lastBrainPresentation = presentation
-        updateTooltip()
-        publishRenderedStatus()
-    }
-#endif
-
     func menuNeedsUpdate(_ menu: NSMenu) {
 #if BRAINBAR_UI
         if let model = runtime.jobsModel {
@@ -792,76 +665,17 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
         reconcileBadgeFromAlertFile()
 #endif
 #if BRAINBAR_UI
-        if design == .new {
-            if legacyMenuItems == nil { legacyMenuItems = menu.items }
-            newDesignStore.refresh()
-            newMenuBuilder.populate(menu)
-            renderNewIcon()
-            return
-        }
-        leaveNewDesignIfNeeded()
-        if BrainBarNewMenuPreference.isEnabled(in: menuDefaults) {
-            if legacyMenuItems == nil { legacyMenuItems = menu.items }
-            let capture = menuCapture(stats: runtime.collector?.stats)
-            var presentation = BrainBarMenuPresenter.present(capture)
-            if copyReportFailed, let index = presentation.rows.firstIndex(where: { $0.action?.kind == .copyReport }) {
-                presentation.rows[index].strings.append("Couldn’t copy the report. Try again.")
-            }
-            newMenuReport = BrainBarMenuReport.text(presentation: presentation, verdict: capture.verdict,
-                version: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "unknown",
-                now: capture.now)
-            renderBrainIcon(presentation)
-            liveMenuBuilder.populate(menu, with: presentation)
-            return
-        }
-        if let items = legacyMenuItems {
-            menu.removeAllItems()
-            for item in items { menu.addItem(item) }
-            legacyMenuItems = nil
-        }
-#endif
+        newDesignStore.refresh()
+        newMenuBuilder.populate(menu)
+        renderNewIcon()
+#else
         // S5: the menu text is the shared verdict, the same one the icon and Dashboard render.
         let verdict = currentVerdict
-#if BRAINBAR_UI
-        activeLogKey = Self.jobAlertKey(for: badgePresentation)
-        activeLogReason = badgePresentation.reason
-        for item in backupReceiptItems { menu.removeItem(item) }
-        backupReceiptItems.removeAll()
-        if let model = runtime.jobsModel {
-            let snapshot = model.publishedStatus
-            // A job alert the badge has not caught up with yet still offers its log.
-            if activeLogKey == nil, let issue = snapshot.attention.first(where: { $0.alertKey != nil }),
-               let key = issue.alertKey {
-                activeLogKey = key
-                activeLogReason = issue.text
-            }
-            // The single menu action follows desired-ON attention; named screen rows retain history.
-            if activeLogKey == nil, let failure = BrainBarBackupLogTarget.failures(in: model.config).first(where: {
-                model.config.launchdJobs[$0.job]?.enabled != false
-            }) {
-                activeLogKey = failure.key
-                activeLogReason = failure.reason
-            }
-            // This property derives from the published document AND observabilityNow shared
-            // with Dashboard and Backups. Opening the menu never starts another receipt read.
-            for (index, line) in (model.backupReceiptLines ?? []).enumerated() {
-                let item = NSMenuItem(title: line.text, action: nil, keyEquivalent: "")
-                item.identifier = NSUserInterfaceItemIdentifier("brainbar.menu.backup.\(index)")
-                item.isEnabled = false
-                item.toolTip = "observability.json · database snapshot creation / transcript upload receipt · shared check clock"
-                let color = Self.backupReceiptColor(line.tone, verdictMode: verdict.dotOverride != nil)
-                item.attributedTitle = NSAttributedString(string: line.text, attributes: [.foregroundColor: color])
-                menu.insertItem(item, at: 1 + index)
-                backupReceiptItems.append(item)
-            }
-        }
-#endif
+
         for item in verdictItems { menu.removeItem(item) }
         verdictItems = []
-        var health = badgePresentation.healthVerdict.flatMap { $0.isFresh(now: Date()) ? $0 : nil }
-#if BRAINBAR_UI
-        if let model = runtime.jobsModel { health = model.publishedStatus.healthVerdict }
-#endif
+        let health = badgePresentation.healthVerdict.flatMap { $0.isFresh(now: Date()) ? $0 : nil }
+
         // At most three ranked rows, then "+N more"; nothing is dropped.
         let compact = BrainBarCompactNotices(rows: Self.problemRows(verdict, health: health))
         for (index, row) in compact.visible.enumerated() {
@@ -877,33 +691,11 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
         // The row's tooltip keeps every current reason: dot issues first, then neutral notices.
         let fullReason = (verdict.attention + verdict.notices).joined(separator: "; ")
         statusLineItem.toolTip = fullReason.isEmpty ? nil : fullReason
-#if BRAINBAR_UI
-        let key = activeLogKey
-        showLogItem.isHidden = key == nil
-        if let key {
-            showLogItem.title = Self.showLogItemTitle(forKey: key, paths: logPaths)
-            showLogItem.isEnabled = true
-            showLogItem.toolTip = showLogItem.title == Self.showLogTitle ? nil : BrainBarJobAlerts.missingLogMessage(forKey: key)
-        }
-        if logNote?.key != key || logNote?.reason != activeLogReason { logNote = nil }
-        logNoteItem.title = logNote?.message ?? ""
-        logNoteItem.toolTip = logNote?.message
-        logNoteItem.isHidden = logNote == nil
+
 #endif
     }
 
 #if BRAINBAR_UI
-    private func openMenuStorageSettings(section: BrainBarSettingsSection) {
-        if let menuStorage { menuStorage(section) }
-        else { dashboardPanelController?.showSettings(section: section) }
-    }
-
-    private func copyMenuReport() {
-        let pasteboard = menuPasteboard()
-        pasteboard.clearContents()
-        copyReportFailed = !pasteboard.setString(newMenuReport, forType: .string)
-    }
-
     @objc private func openDiagnostics(_ sender: Any?) {
         contextMenuForTesting.cancelTracking()
         Task { @MainActor [weak self] in
@@ -913,8 +705,7 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
     }
 
     func menu(_ menu: NSMenu, willHighlight item: NSMenuItem?) {
-        if design == .new { return newMenuBuilder.menu(menu, willHighlight: item) }
-        if legacyMenuItems != nil { liveMenuBuilder.menu(menu, willHighlight: item) }
+        newMenuBuilder.menu(menu, willHighlight: item)
     }
 #endif
 
@@ -932,18 +723,14 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
         NotificationCenter.default.addObserver(self, selector: #selector(menuTrackingDidBegin(_:)),
             name: NSMenu.didBeginTrackingNotification, object: contextMenuForTesting)
         contextMenuForTesting.autoenablesItems = false
+#if BRAINBAR_UI
+        newMenuBuilder.populate(contextMenuForTesting)
+#else
         statusLineItem.title = Self.statusLineTitle(for: badgePresentation)
         statusLineItem.toolTip = badgePresentation.reason.isEmpty ? nil : badgePresentation.reason
         statusLineItem.isEnabled = false
         contextMenuForTesting.addItem(statusLineItem)
-#if BRAINBAR_UI
-        showLogItem.action = #selector(showJobAlertLog(_:))
-        showLogItem.isHidden = Self.jobAlertKey(for: badgePresentation) == nil
-        contextMenuForTesting.addItem(showLogItem)
-        logNoteItem.isEnabled = false
-        logNoteItem.isHidden = true
-        contextMenuForTesting.addItem(logNoteItem)
-#endif
+
         contextMenuForTesting.addItem(NSMenuItem.separator())
         contextMenuForTesting.addItem(
             NSMenuItem(
@@ -959,11 +746,7 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
                 keyEquivalent: ""
             )
         )
-#if BRAINBAR_UI
-        contextMenuForTesting.addItem(NSMenuItem(
-            title: BrainBarMenuPresenter.SurfaceSay.diagnostics,
-            action: #selector(openDiagnostics(_:)), keyEquivalent: ""))
-#endif
+
         contextMenuForTesting.addItem(NSMenuItem.separator())
         contextMenuForTesting.addItem(
             NSMenuItem(
@@ -984,21 +767,12 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
         for item in contextMenuForTesting.items where item.action != nil {
             item.target = self
         }
+#endif
     }
 
     @objc private func openDashboard(_ sender: Any?) {
         dashboardPanelController?.showDashboard()
     }
-
-#if BRAINBAR_UI
-    @objc private func showJobAlertLog(_ sender: Any?) {
-        menuNeedsUpdate(contextMenuForTesting)
-        guard let key = activeLogKey else { return }
-        let result = BrainBarJobAlerts.showLog(forKey: key, paths: logPaths, workspace: workspace)
-        logNote = result.message.map { (key, activeLogReason, $0) }
-        menuNeedsUpdate(contextMenuForTesting)
-    }
-#endif
 
     @objc private func restartBrainBar(_ sender: Any?) {
         BrainBarProcessControl.restart()

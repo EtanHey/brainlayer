@@ -162,7 +162,7 @@ enum BrainBarRenderHarness {
         request.recognitionLevel = .accurate
         try VNImageRequestHandler(cgImage: image).perform([request])
         var text = (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }.joined(separator: "\n")
-        // Vision can omit the short title and Design label when segmenting the full tall
+        // Vision can omit the short title when segmenting the full tall
         // page alongside its sidebar. Read those actual pixels separately; retain the full
         // page's text above so no status/truth assertion loses its input.
         let scaleX = CGFloat(image.width) / host.bounds.width
@@ -364,8 +364,6 @@ enum BrainBarRenderHarness {
             NSApplication.shared.setActivationPolicy(.prohibited)
             let outputDirectory = URL(fileURLWithPath: path, isDirectory: true)
             try FileManager.default.createDirectory(at: outputDirectory, withIntermediateDirectories: true)
-            _ = try BrainBarMenuRenderHarness.render(in: outputDirectory)
-            if ProcessInfo.processInfo.environment["BRAINBAR_RENDER_SET"] == "menu" { Darwin.exit(EXIT_SUCCESS) }
             try verifyDirectionalStateCoverage()
             try verifyReadableChartMarkerContract()
             try renderUnifiedSettings(in: outputDirectory)

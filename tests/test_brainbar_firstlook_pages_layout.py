@@ -5,17 +5,20 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1] / "brain-bar/Sources/BrainBar"
 
 
-def test_classic_design_is_first_settings_row():
+def test_initial_status_menu_is_populated_before_appkit_can_open_it():
+    source = (ROOT / "BrainBarStatusPopoverController.swift").read_text()
+    setup = source.split("private func configureContextMenu() {", 1)[1].split("@objc private func openDashboard", 1)[0]
+    assert "newMenuBuilder.populate(contextMenuForTesting)" in setup
+    menu = (ROOT / "NewDesign/NDMenu.swift").read_text()
+    assert "action: .settings" in menu
+    assert "action: .quit" in menu
+
+
+def test_shared_settings_has_no_design_or_old_menu_choice():
     source = (ROOT / "BrainBarSettingsView.swift").read_text()
-    content = source.split("var body: some View {", 1)[1]
-    stack = content.split("VStack(alignment: .leading, spacing: 24) {", 1)[1]
-    shared = stack.split("private var sectionContent", 1)[0]
-    assert "designRow" not in shared
-    first_section = source.split("private var sectionContent", 1)[1].split("case .backups:", 1)[0]
-    assert first_section.index("designRow") < first_section.index("BrainBarBackupFailureLogs")
-    assert source.count("\n                designRow") == 1
-    advanced = source.split("case .advanced:")[-1].split("private var designRow", 1)[0]
-    assert 'Picker("Design"' not in advanced
+    assert "designRow" not in source
+    assert 'Picker("Design"' not in source
+    assert "BrainBarNewMenu" not in source
 
 
 def test_drive_state_is_after_spacer():
@@ -53,12 +56,13 @@ def test_next_run_hover_is_attached_at_ring():
     assert ".position(x: x(event.hours, geo.size.width), y: 7)" in rail
 
 
-def test_new_settings_design_is_first_row_and_caption_keeps_switch_back():
+def test_new_settings_has_no_design_choice_or_switch_back_caption():
     settings = (ROOT / "NewDesign/NDSettings.swift").read_text()
-    assert settings.index("row(Say.design)") < settings.index("row(Say.stageDrive)")
-    assert "Text(Say.classicCaption)" in settings
+    assert "row(Say.design)" not in settings
+    assert "BrainBarDesign" not in settings
+    assert "classicCaption" not in settings
     sentences = (ROOT / "BrainBarMenuSentences.swift").read_text()
-    assert "You can switch back at any time." in sentences
+    assert "You can switch back at any time." not in sentences
 
 
 def test_activity_labels_carry_each_halfs_scale():
@@ -68,10 +72,11 @@ def test_activity_labels_carry_each_halfs_scale():
     assert "Text(scale).font(NDType.caption).foregroundStyle(ND.t3)" in source
 
 
-def test_new_default_keeps_stored_choice_precedence():
+def test_old_design_preferences_cannot_select_another_design():
     source = (ROOT / "NewDesign/BrainBarDesign.swift").read_text()
     assert "static let defaultValue: BrainBarDesign = .new" in source
-    assert "defaults.string(forKey: key).flatMap(Self.init(rawValue:)) ?? defaultValue" in source
+    assert "case classic" not in source
+    assert "defaults.string(forKey:" not in source
 
 
 def test_activity_header_stays_22_points_and_scale_stays_inline():
@@ -103,10 +108,11 @@ def test_scale_wording_uses_per():
     assert " / " not in formatter
 
 
-def test_classic_keeps_no_new_rows_assertions():
+def test_stored_design_regression_checks_new_menu_and_icon():
     source = (ROOT.parents[1] / "Tests/BrainBarTests/BrainBarNewDesignTests.swift").read_text()
-    assert "XCTAssertEqual(off.hostedNew, 0)" in source
-    assert "XCTAssertEqual(on.hostedNew, 0)" in source
+    assert "testEveryStoredDesignShowsTheNewMenuAndIcon" in source
+    assert "XCTAssertEqual(actual.image, expected.image)" in source
+    assert "XCTAssertGreaterThanOrEqual(actual.hostedNew, 5)" in source
 
 
 def test_outside_timeline_legend_matches_bare_age():

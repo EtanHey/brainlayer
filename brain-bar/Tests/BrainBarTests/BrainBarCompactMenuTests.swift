@@ -143,47 +143,7 @@ final class BrainBarCompactMenuTests: XCTestCase {
         }
     }
 
-    func testRealMenuShowsCappedRowsAndOverflowSubmenuWithEveryRow() throws {
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let runtime = BrainBarRuntime()
-        runtime.install(collector: BrainBarDashboardFixture.makeCollector(), database: nil,
-            databasePath: directory.appendingPathComponent("fixture.db").path)
-        let panel = BrainBarDashboardPanelController(workspace: BrainBarRecordingWorkspace(), runtime: runtime, designDefaults: brainBarLegacyMenuDefaults())
-        let controller = BrainBarStatusPopoverController(workspace: BrainBarRecordingWorkspace(), runtime: runtime,
-            dashboardPanelController: panel, statusBar: TestStatusItemHost(), menuDefaults: brainBarLegacyMenuDefaults())
-        defer { controller.stop() }
-        var badge = BadgeStatePresentation(badgeOn: false, reason: "", activeCodes: [])
-        badge.healthVerdict = .init(dot: .amber, checks: Self.m1Checks, notes: Self.m1Notices.enumerated().map {
-            .init(code: "fixture_\($0.offset)", message: $0.element)
-        }, evaluatedAt: Date())
-        controller.setBadgeForTesting(badge, alertsURL: directory.appendingPathComponent("job-alerts.json"))
-        let menu = controller.contextMenuForTesting
-        controller.menuNeedsUpdate(menu)
-        menu.update()
 
-        XCTAssertEqual(menu.items.first?.title, "Check soon")
-        XCTAssertNotNil(menu.items.first?.image, "the headline carries the status dot")
-        let overflow = try XCTUnwrap(menu.items.first { $0.title == "+6 more" })
-        XCTAssertTrue(overflow.isEnabled)
-        let submenu = try XCTUnwrap(overflow.submenu)
-        for text in ["Watcher status unknown", "Supervisor status unavailable for watch",
-                     "Kill check unavailable: Watcher supervisor status unavailable",
-                     "Scheduled maintenance runner failed at 03:15"] {
-            XCTAssertTrue(submenu.items.contains { $0.title == text }, "\(text) reachable under +6 more")
-        }
-        let open = try XCTUnwrap(submenu.items.last)
-        XCTAssertEqual(open.title, "Open Dashboard")
-        XCTAssertTrue(open.target === controller)
-        XCTAssertNotNil(open.action)
-        // The top-level menu holds at most three entries plus "+N more" between the headline and backups.
-        let statusRows = menu.items.prefix { $0.title != "" && !$0.isSeparatorItem }.dropFirst()
-            .filter { !$0.isHidden && !$0.title.hasPrefix("Show log") }
-        XCTAssertLessThanOrEqual(statusRows.count, BrainBarCompactNotices.visibleLimit + 1, "\(statusRows.map(\.title))")
-        // Reopening rebuilds, never stacks rows.
-        controller.menuNeedsUpdate(menu)
-        XCTAssertEqual(menu.items.filter { $0.title == "+6 more" }.count, 1)
-    }
 
     /// Before/after evidence: `BRAINBAR_COMPACT_RENDER_DIR=<dir> swift test --filter BrainBarCompactMenuTests`.
     func testRenderM1MenuAndDashboard() throws {

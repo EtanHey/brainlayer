@@ -344,27 +344,11 @@ final class BrainBarBackupStatusConsistencyTests: XCTestCase {
             runtime.jobsModel = model
             runtime.driveAuth.setForPreview(status: .init(state: auth, reason: nil, expiresAt: now.addingTimeInterval(48 * 3600)))
             let workspace = BrainBarRecordingWorkspace()
-            let panel = BrainBarDashboardPanelController(workspace: workspace, runtime: runtime, designDefaults: brainBarLegacyMenuDefaults())
-            let controller = BrainBarStatusPopoverController(workspace: workspace, runtime: runtime,
-                dashboardPanelController: panel, statusBar: TestStatusItemHost(), menuDefaults: brainBarLegacyMenuDefaults())
-            defer { controller.stop() }
-            let menu = controller.contextMenuForTesting
-            controller.setBadgeForTesting(.init(badgeOn: false, reason: "", activeCodes: []),
-                                          alertsURL: URL(fileURLWithPath: "/fixture/absent-alerts"))
-            controller.menuNeedsUpdate(menu)
-            let receipts = menu.items.filter { $0.identifier?.rawValue.hasPrefix("brainbar.menu.backup.") == true }
-            XCTAssertEqual(receipts.map(\.title), model.backupReceiptLines?.map(\.text))
-            XCTAssertTrue(receipts.allSatisfy { !$0.isEnabled && $0.action == nil })
-            XCTAssertTrue(receipts.allSatisfy { $0.toolTip?.contains("observability.json") == true })
-            XCTAssertEqual(menu.items.first?.title.hasPrefix("Needs attention:"), dot)
-            if !dot { XCTAssertTrue(menu.items.first?.title.hasPrefix("Info:") == true) }
-            for (item, line) in zip(receipts, model.backupReceiptLines ?? []) where line.tone == .red {
-                XCTAssertEqual(item.attributedTitle?.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor,
-                               BrainBarDesignTokens.Colors.statusError)
-            }
-            runtime.jobsModel = nil
-            controller.menuNeedsUpdate(menu)
-            XCTAssertFalse(menu.items.contains { $0.identifier?.rawValue.hasPrefix("brainbar.menu.backup.") == true })
+            model.attachDriveAuth(runtime.driveAuth)
+            let sample = NDStore.sample(runtime: runtime, previous: nil, now: now)
+            XCTAssertEqual(sample.capture.now, now)
+            XCTAssertEqual(sample.capture.driveAuthModel, auth)
+
         }
     }
 
@@ -488,16 +472,7 @@ final class BrainBarBackupStatusConsistencyTests: XCTestCase {
             runtime.jobsModel = model
             runtime.driveAuth.setForPreview(status: .init(state: .valid, reason: nil, expiresAt: now.addingTimeInterval(5 * 86400)))
             let workspace = BrainBarRecordingWorkspace()
-            let panel = BrainBarDashboardPanelController(workspace: workspace, runtime: runtime, designDefaults: brainBarLegacyMenuDefaults())
-            let menu = BrainBarStatusPopoverController(workspace: workspace, runtime: runtime,
-                dashboardPanelController: panel, statusBar: TestStatusItemHost(), menuDefaults: brainBarLegacyMenuDefaults())
-            defer { menu.stop() }
-            menu.setBadgeForTesting(.init(badgeOn: false, reason: "", activeCodes: []), alertsURL: URL(fileURLWithPath: "/fixture/absent-alerts"))
-            menu.menuNeedsUpdate(menu.contextMenuForTesting)
-            XCTAssertTrue(menu.contextMenuForTesting.items.first?.title.hasPrefix("Info:") == true)
-            // S5: the row's tooltip lists every notice; the backup one is among them.
-            XCTAssertTrue(menu.contextMenuForTesting.items.first?.toolTip?.contains(
-                try XCTUnwrap(model.backupsHealth(drive: drive(expiresIn: 5 * 86400)).reason)) == true)
+            model.attachDriveAuth(runtime.driveAuth)
             // B4/B5: Drive severity comes from the one published snapshot (the runtime's auth state).
             runtime.driveAuth.setForPreview(status: .init(state: .invalid, reason: nil, expiresAt: nil))
             model.republishStatus()
@@ -507,8 +482,6 @@ final class BrainBarBackupStatusConsistencyTests: XCTestCase {
             model.setObservabilityResultForTesting(.readable(document.replacingBackupsErrorType("job_alert:Fixture failure")))
             XCTAssertEqual(model.backupsHealth(drive: drive()).badge, .notice)
             XCTAssertEqual(model.backupChecks?.verdictTone, .neutral)
-            menu.menuNeedsUpdate(menu.contextMenuForTesting)
-            XCTAssertTrue(menu.contextMenuForTesting.items.first?.title.hasPrefix("Info:") == true)
         }
     }
 
