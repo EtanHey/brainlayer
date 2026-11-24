@@ -359,7 +359,13 @@ enum NDFixtureTraffic {
             saves.append(s)
             reads.append(r)
         }
-        var wave = NDWave(saves: saves, reads: reads, readable: true,
+        // Independent call traffic: quiet stretches, a burst, and low traffic between bursts.
+        let calls = (0..<n).map { index -> Int in
+            let phase = index % 20
+            let perMinute = phase >= 7 && phase <= 10 ? [2, 12, 9, 4][phase - 7] : (phase >= 11 && phase <= 14 ? 1 : 0)
+            return perMinute * max(1, minutes / n)
+        }
+        var wave = NDWave(saves: saves, reads: reads, agentReads: calls, agentReadsPeakPerMinute: 12, readable: true,
                           endsAt: Date(timeIntervalSinceReferenceDate: Double(end * width)))
         wave.sequence = end
         return wave

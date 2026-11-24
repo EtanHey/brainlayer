@@ -673,9 +673,14 @@ extension BrainBarMenuPresenter {
         static func nextCheckIn(_ age: String) -> String { "Next check in \(age)" }
         static func lastCheckedAgo(_ age: String) -> String { "Last checked \(age) ago" }
         static let savedByAgents = "saved by agents"
-        static let readFromConversations = "read from agents\u{2019} sessions"
+        static let readFromConversations = "session lines ingested"
+        static let readsByAgents = "reads by agents"
+        static func agentReadsAccessibility(_ count: Int?) -> String {
+            guard let count else { return "Reads by agents unavailable." }
+            return "\(count) reads by agents."
+        }
         static let saved = "saved"
-        static let readWord = "read"
+        static let sessionLinesWord = "lines"
         static let now = "now"
         static let pipeline = "Pipeline"
         static let goesIn = "Goes in"
@@ -826,7 +831,7 @@ extension BrainBarMenuPresenter {
         static func macAgo(_ age: String) -> String { "Local copy \(age) ago" }  // R1.12 (§ C): the dropdown's Backups value
         static let lastKnown = "last known"
         /// Each half's scale names the real bucket span, not a bare number that reads like an axis floor.
-        static func upTo(_ value: String, minutes: Int) -> String { minutes == 1 ? "up to \(value) per min" : "up to \(value) per \(minutes) min" }
+        static func upTo(_ value: String, minutes: Int) -> String { minutes == 1 ? "up to \(value)/min" : "up to \(value)/\(minutes) min" }
         // Revision 1.2 (L23, L24, L26).
         static let checkSoon = "Check soon"
         static func lastDriveUpload(_ age: String) -> String { "Last Drive upload \(age) ago." }
@@ -971,7 +976,7 @@ extension BrainBarMenuPresenter {
         /// V1's VoiceOver sentence for the waveform.
         static func wave(span minutes: Int, saves: Int, reads: Int) -> String {
             let span = minutes == 60 ? "Last hour" : minutes == 180 ? "Last 3 hours" : "Last 24 hours"
-            return "\(span): \(saves) saved by agents, \(reads) read from agents\u{2019} sessions."
+            return "\(span): \(saves) saved by agents, \(reads) session lines ingested."
         }
     }
 }
