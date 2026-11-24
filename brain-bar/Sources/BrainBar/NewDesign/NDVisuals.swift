@@ -522,7 +522,8 @@ struct NDRail: View {
                     Text(words).font(older.kind == .fail ? NDType.captionStrong : NDType.caption)
                         .foregroundStyle(older.kind == .fail ? ND.redText : palette.ink2)
                         .fixedSize()
-                        .alignmentGuide(.leading) { size in -Self.olderLabelFrame(width: size.width).minX }
+                        .frame(width: 0, alignment: .trailing)
+                        .offset(x: -Self.olderLabelGap)
                 }
             }
             .overlay {

@@ -59,17 +59,15 @@ import XCTest
                 if abs(delta) > 1 {
                     let nearerBody = p.body.offsetBy(dx: horizontal ? (delta > 0 ? 1 : -1) : 0,
                                                  dy: horizontal ? 0 : (delta > 0 ? 1 : -1))
-                    let arrow = horizontal
-                        ? CGRect(x: p.tip.x - L.arrowHalfWidth, y: p.edge == .top ? p.tip.y - L.arrowLength : p.tip.y,
-                                 width: 2 * L.arrowHalfWidth, height: L.arrowLength)
-                        : CGRect(x: p.edge == .leading ? p.tip.x - L.arrowLength : p.tip.x, y: p.tip.y - L.arrowHalfWidth,
-                                 width: L.arrowLength, height: 2 * L.arrowHalfWidth)
-                    let nearer = nearerBody.union(arrow)
+                    var nearer = p
+                    nearer.body = nearerBody
+                    nearer.outer = nearerBody.union(nearer.notch)
                     let obstacles = L.panelObstacles(station, state: state, actions: [], actionWidths: [:],
                                                     interior: p.clearanceException == nil, displayedWords: chart.displayedPanelWords)
                     let ceiling = station == .search ? L.keptSafe.maxY + 4 : L.activityLabelsBottom + 4
-                    let blocked = nearer.minX < L.windowInside.minX || nearer.maxX > L.windowInside.maxX
-                        || nearer.minY < ceiling || nearer.maxY > L.footerTop - 4
+                    let bounds = L.panelBounds(station)
+                    let blocked = nearer.outer.minX < bounds.minX || nearer.outer.maxX > bounds.maxX
+                        || nearer.outer.minY < ceiling || nearer.outer.maxY > bounds.maxY
                         || obstacles.contains { nearer.intersects($0) }
                         || L.panelBodyObstacles(station, interior: p.clearanceException == nil).contains { nearerBody.intersects($0) }
                     XCTAssertTrue(blocked, "\(station): moving 1 pt nearer the centre must violate clearance")
@@ -89,7 +87,7 @@ import XCTest
                 let context = "\(name.rawValue) \(station) \(panel.body) measured=\(measured)"
                 XCTAssertGreaterThanOrEqual(panel.body.height + 0.01, measured, context)
                 XCTAssertFalse(panel.scrolls, context)
-                XCTAssertFalse(panel.outer.intersects(NDPipelineLayout.pipelineHeading), context)
+                XCTAssertFalse(panel.intersects(NDPipelineLayout.pipelineHeading), context)
                 if panel.clearanceException == .topRowBelowBothSidesBlocked {
                     XCTAssertEqual(panel.edge, .bottom, context)
                     for side: Edge in [.top, .trailing, .leading, .bottom] {
@@ -122,7 +120,7 @@ import XCTest
         XCTAssertEqual(row.maxY, 114)
         XCTAssertTrue(chart.displayedPanelWords[.drive]?.contains(row) == true)
         let panel = chart.panel(.drive, content: AnyView(NDStationPopover(store: store, station: .drive)))
-        XCTAssertFalse(panel.outer.intersects(row), "the notch and body must clear the words actually drawn")
+        XCTAssertFalse(panel.intersects(row), "the notch and body must clear the words actually drawn")
         XCTAssertFalse(panel.body.intersects(row))
         if panel.edge == .bottom {
             XCTAssertGreaterThanOrEqual(panel.tip.y, row.maxY)

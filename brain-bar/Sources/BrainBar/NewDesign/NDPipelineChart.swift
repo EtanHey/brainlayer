@@ -197,6 +197,12 @@ struct NDPipelineChart: View {
                                               heightAtWidth: measure)
     }
 
+    func panel(_ s: NDStation, content: AnyView, within visible: CGRect?) -> NDPipelineLayout.Panel? {
+        guard let visible else { return panel(s, content: content) }
+        return NDPipelineLayout.screenPanel(s, state: Self.drawingState(state, progress: backupProgress), within: visible,
+            displayedWords: displayedPanelWords, heightAtWidth: { NDStationPopover.measure(content, width: $0).height })
+    }
+
     static func stationTarget(_ s: NDStation, state: NDPipelineState) -> (frame: CGRect, shape: NDStationHitShape) {
         let hit = NDPipelineLayout.hitShape(s, state)
         let frame = hit.label.map { hit.circle.union($0) } ?? hit.circle
@@ -209,7 +215,7 @@ struct NDPipelineChart: View {
         let frame = target.frame
         NDStationButton(station: s, interactive: interactive, hovered: $hovered, presenter: panels,
                         shape: target.shape,
-                        content: { popover(s) }, layout: { content in panel(s, content: content) })
+                        content: { popover(s) }, layout: { content, visible in panel(s, content: content, within: visible) })
             .frame(width: frame.width, height: frame.height)
             .position(x: frame.midX, y: frame.midY)
     }
@@ -508,7 +514,7 @@ struct NDStationButton: View {
     /// The spoken name, when it is not the station's (a failing provider's icon names the provider).
     var spoken: String? = nil
     var content: () -> AnyView?
-    var layout: (AnyView) -> NDPipelineLayout.Panel
+    var layout: (AnyView, CGRect?) -> NDPipelineLayout.Panel?
     @State private var overStation = false
     @FocusState private var focused: Bool
 
@@ -567,7 +573,8 @@ struct NDStationButton: View {
 
     private func open(pinned: Bool, focusAction: Bool) {
         guard interactive || focusAction, let view = content() else { return }
-        presenter.show(station, layout: layout(view), content: view, pinned: pinned, focusAction: focusAction)
+        guard let placed = layout(view, presenter.visibleLimit) else { return }
+        presenter.show(station, layout: placed, content: view, pinned: pinned, focusAction: focusAction)
     }
 }
 
@@ -624,18 +631,18 @@ struct NDStationButton: View {
         })
     }
 
+    var visibleLimit: CGRect? {
+        guard let view = anchorView, let window = view.window,
+              let visible = (window.screen ?? NSScreen.main)?.visibleFrame else { return nil }
+        return view.convert(window.convertFromScreen(visible), from: nil)
+    }
+
     func show(_ station: NDStation, layout: NDPipelineLayout.Panel, content: AnyView, pinned: Bool, focusAction: Bool = false) {
         hide()
         shown = station
         self.pinned = pinned
         focusTarget = focusAction ? .action(station) : nil
         guard let view = anchorView, let window = view.window else { return }
-        // L39: inside the screen's visible frame (the window's own edge may be passed).
-        var layout = layout
-        if let visible = (window.screen ?? NSScreen.main)?.visibleFrame {
-            let limit = view.convert(window.convertFromScreen(visible), from: nil)
-            layout = NDPipelineLayout.fitted(layout, within: limit)
-        }
         let rect = window.convertToScreen(view.convert(layout.outer, to: nil))
         let p = NDKeyPanel(contentRect: rect, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
         p.isOpaque = false

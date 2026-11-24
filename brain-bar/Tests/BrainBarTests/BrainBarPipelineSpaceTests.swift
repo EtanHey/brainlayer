@@ -93,7 +93,7 @@ import XCTest
                     let context = "\(name.rawValue) \(station) covering \(other)"
                     XCTAssertFalse(panel.body.intersects(NDPipelineLayout.circle(other).insetBy(dx: -4, dy: -4)), context)
                     for words in chart.displayedPanelWords[other] ?? NDPipelineLayout.labelRects(other, store.r1.pipeline) {
-                        XCTAssertFalse(panel.outer.intersects(words.insetBy(dx: -4, dy: -4)), context)
+                        XCTAssertFalse(panel.intersects(words.insetBy(dx: -4, dy: -4)), context)
                     }
                 }
             }
@@ -107,19 +107,19 @@ import XCTest
             for station in NDStation.allCases {
                 let panel = L.panel(station, state: state, actions: [], height: 2000)
                 XCTAssertTrue(panel.scrolls)
-                XCTAssertFalse(panel.outer.intersects(L.pipelineHeading))
+                XCTAssertFalse(panel.intersects(L.pipelineHeading))
                 for other in NDStation.allCases {
                     let icon = other == station ? L.circle(other) : L.circle(other).insetBy(dx: -4, dy: -4)
                     XCTAssertFalse(panel.body.intersects(icon), "\(station) over \(other)")
                     for words in L.labelRects(other, state) {
-                        XCTAssertFalse(panel.outer.intersects(other == station ? words : words.insetBy(dx: -4, dy: -4)), "\(station) over \(other)")
+                        XCTAssertFalse(panel.intersects(other == station ? words : words.insetBy(dx: -4, dy: -4)), "\(station) over \(other)")
                     }
                 }
             }
         }
     }
 
-    func testScreenFitKeepsTheBodyInsideItsClearNaturalFrame() {
+    func testScreenFitKeepsTheBodyInsideItsClearNaturalFrame() throws {
         let L = NDPipelineLayout.self
         let screen = CGRect(x: -60, y: -200, width: 940, height: L.size.height + 210)
         for name in BrainBarDesignFixture.Name.allCases {
@@ -128,13 +128,13 @@ import XCTest
                 items: store.r1.stationItems, backupProgress: store.inputs.backupProgress)
             for station in NDStation.allCases {
                 let natural = chart.panel(station, content: AnyView(NDStationPopover(store: store, station: station)))
-                let fitted = L.fitted(natural, within: screen)
+                let fitted = try XCTUnwrap(chart.panel(station, content: AnyView(NDStationPopover(store: store, station: station)), within: screen))
                 XCTAssertTrue(natural.body.insetBy(dx: -0.01, dy: -0.01).contains(fitted.body), "\(name.rawValue) \(station)")
                 XCTAssertEqual(fitted.tip, natural.tip)
                 for other in NDStation.allCases where other != station {
                     XCTAssertFalse(fitted.body.intersects(L.circle(other).insetBy(dx: -4, dy: -4)), "\(station) over \(other)")
                     for words in chart.displayedPanelWords[other] ?? L.labelRects(other, store.r1.pipeline) {
-                        XCTAssertFalse(fitted.outer.intersects(words.insetBy(dx: -4, dy: -4)), "\(station) over \(other)")
+                        XCTAssertFalse(fitted.intersects(words.insetBy(dx: -4, dy: -4)), "\(station) over \(other)")
                     }
                 }
             }

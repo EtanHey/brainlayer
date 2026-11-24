@@ -1629,7 +1629,7 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
                 case .leading, .trailing:
                     XCTAssertTrue((panel.body.minY + L.arrowInset - 0.01...panel.body.maxY - L.arrowInset + 0.01).contains(panel.tip.y), where_)
                 }
-                XCTAssertFalse(panel.outer.intersects(own.insetBy(dx: 1, dy: 1)), "\(where_) covers its own station")
+                XCTAssertFalse(panel.intersects(own.insetBy(dx: 1, dy: 1)), "\(where_) covers its own station")
                 // L54 remains strict outside the named L58 fallback; own words are always protected.
                 for other in NDStation.allCases {
                     if other != station && !topRowBelowBothSidesBlocked {
@@ -1637,14 +1637,14 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
                     }
                     for rect in L.labelRects(other, r1.pipeline) {
                         if other == station || !topRowBelowBothSidesBlocked {
-                            XCTAssertFalse(panel.outer.intersects(rect), "\(where_) covers \(other)'s words")
+                            XCTAssertFalse(panel.intersects(rect), "\(where_) covers \(other)'s words")
                         }
                     }
                 }
                 // R13: both job panels clear the visible caption fields, including their 4 pt native insets.
                 if station == .jobs || station == .weekly {
                     for (_, rect) in L.laneLabelRects() {
-                        XCTAssertFalse(panel.outer.intersects(rect.insetBy(dx: -4, dy: -4)), where_)
+                        XCTAssertFalse(panel.intersects(rect.insetBy(dx: -4, dy: -4)), where_)
                     }
                     let content = NDStationPopover.measure(AnyView(NDStationPopover(store: store, station: station)), width: panel.body.width)
                     XCTAssertGreaterThanOrEqual(panel.body.height + 0.01, content.height, where_)
@@ -2538,7 +2538,7 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
 
     /// L39: on a small screen every panel stays inside the screen's visible frame, its arrow still on its station; a body
     /// the screen shortens scrolls.
-    func testPanelsStayInsideASmallScreen() {
+    func testPanelsStayInsideASmallScreen() throws {
         let L = NDPipelineLayout.self
         // A screen whose visible frame ends 10 pt below the chart and starts 200 pt above it, in chart coordinates.
         let screen = CGRect(x: -60, y: -200, width: 940, height: L.size.height + 210)
@@ -2546,11 +2546,11 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
             let store = NDStore(fixture: Fixture.inputs(name), page: .overview)
             let chart = NDPipelineChart(state: store.r1.pipeline, memories: store.model.memories, items: store.r1.stationItems)
             for station in NDStation.allCases {
-                let natural = chart.panel(station, content: AnyView(NDStationPopover(store: store, station: station)))
-                let fitted = L.fitted(natural, within: screen)
+                let fitted = try XCTUnwrap(chart.panel(station, content: AnyView(NDStationPopover(store: store, station: station)), within: screen))
                 let where_ = "\(name.rawValue) \(station)"
                 XCTAssertTrue(screen.insetBy(dx: -0.5, dy: -0.5).contains(fitted.outer), "\(where_): inside the screen")
-                XCTAssertEqual(fitted.tip, natural.tip, "\(where_): the arrow stays on its station")
+                let horizontal = fitted.edge == .top || fitted.edge == .bottom
+                XCTAssertEqual(horizontal ? fitted.tip.x : fitted.tip.y, horizontal ? L.circle(station).midX : L.circle(station).midY, accuracy: 1, where_)
                 switch fitted.edge {
                 case .top, .bottom:
                     XCTAssertTrue((fitted.body.minX + L.arrowInset - 0.01...fitted.body.maxX - L.arrowInset + 0.01).contains(fitted.tip.x), where_)
@@ -2563,7 +2563,7 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
         let store = NDStore(fixture: Fixture.inputs(.twoFaults), page: .overview)
         let chart = NDPipelineChart(state: store.r1.pipeline, memories: store.model.memories, items: store.r1.stationItems)
         let jobs = chart.panel(.jobs, content: AnyView(NDStationPopover(store: store, station: .jobs)))
-        XCTAssertEqual(L.fitted(jobs, within: CGRect(x: -500, y: -800, width: 2000, height: 2000)), jobs)
+        XCTAssertEqual(chart.panel(.jobs, content: AnyView(NDStationPopover(store: store, station: .jobs)), within: CGRect(x: -500, y: -800, width: 2000, height: 2000)), jobs)
     }
 
     /// R14: Memory-to-Search leaves the lower port with 8 pt frame clearance and turns once into Search.
@@ -2765,7 +2765,7 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
                 let panel = chart.panel(station, content: AnyView(NDStationPopover(store: store, station: station)))
                 let where_ = "\(name.rawValue) \(station)"
                 for (index, text) in L.footerTexts.enumerated() {
-                    XCTAssertFalse(panel.outer.intersects(text), "\(where_) covers the footer's \(index == 0 ? "left" : "right") line")
+                    XCTAssertFalse(panel.intersects(text), "\(where_) covers the footer's \(index == 0 ? "left" : "right") line")
                 }
             }
         }
@@ -2808,11 +2808,12 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
             let panel = chart.panel(station, content: AnyView(NDStationPopover(store: store, station: station)))
             let content = NDStationPopover.measure(AnyView(NDStationPopover(store: store, station: station)), width: panel.body.width).height
             XCTAssertEqual(panel.scrolls, panel.body.height < content, "\(station): only cut content scrolls")
-            XCTAssertEqual(NDPipelineLayout.fitted(panel, within: roomy).scrolls, panel.scrolls, "a roomy screen adds no cut")
+            XCTAssertEqual(chart.panel(station, content: AnyView(NDStationPopover(store: store, station: station)), within: roomy)?.scrolls, panel.scrolls, "a roomy screen adds no cut")
         }
-        let queue = chart.panel(.queue, content: AnyView(NDStationPopover(store: store, station: .queue)))
-        let short = CGRect(x: -2000, y: -2000, width: 4000, height: 2000 + queue.body.minY + 40)
-        XCTAssertTrue(NDPipelineLayout.fitted(queue, within: short).scrolls, "the screen cuts it: then it scrolls")
+        let short = CGRect(x: -2000, y: -2000, width: 4000, height: 2180)
+        let fitted = try XCTUnwrap(chart.panel(.queue, content: AnyView(NDStationPopover(store: store, station: .queue)), within: short))
+        XCTAssertTrue(short.contains(fitted.outer), "choose a clear placement inside the short screen")
+        XCTAssertEqual(fitted.scrolls, fitted.body.height < NDStationPopover.measure(AnyView(NDStationPopover(store: store, station: .queue)), width: fitted.body.width).height)
         let source = try String(contentsOf: URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
             .deletingLastPathComponent().appendingPathComponent("Sources/BrainBar/NewDesign/NDPipelineChart.swift"), encoding: .utf8)
         XCTAssertTrue(source.contains("if layout.scrolls {"), "the chrome holds a scroll view only when cut")
@@ -3333,7 +3334,7 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
             XCTAssertEqual(panel.edge, .bottom, name.rawValue)
             XCTAssertEqual(panel.tip.x, L.agentsFrame.midX, accuracy: 0.5)
             XCTAssertGreaterThanOrEqual(panel.tip.x - panel.body.minX, L.arrowInset - 0.01, "\(name.rawValue): under the straight edge")
-            XCTAssertFalse(panel.outer.intersects(L.pipelineHeading))
+            XCTAssertFalse(panel.intersects(L.pipelineHeading))
             XCTAssertGreaterThan(panel.body.minY, L.agentsFrame.maxY)
             XCTAssertGreaterThanOrEqual(panel.outer.minX, L.windowInside.minX)
             XCTAssertGreaterThanOrEqual(panel.body.height, NDStationPopover.measure(content, width: panel.body.width).height)
@@ -3351,10 +3352,10 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
             let protected = L.footerTexts + L.laneLabelRects().filter { $0.0 == Say.searchAnswers }.map { $0.1.insetBy(dx: -4, dy: -4) }
             XCTAssertEqual(protected.count, L.footerTexts.count + 1, "the answers caption is present")
             for rect in protected {
-                XCTAssertFalse(panel.outer.intersects(rect), "\(name.rawValue): over a protected caption or footer")
+                XCTAssertFalse(panel.intersects(rect), "\(name.rawValue): over a protected caption or footer")
             }
             let screen = CGRect(x: L.windowInside.minX - 40, y: -400, width: 2000, height: 2000)
-            XCTAssertEqual(NDPipelineLayout.fitted(panel, within: screen).body.minX, panel.body.minX, "keyboard: not clipped")
+            XCTAssertEqual(chart.panel(.agents, content: content, within: screen)?.body.minX, panel.body.minX, "keyboard: not clipped")
         }
     }
 
@@ -3372,16 +3373,16 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
                 XCTAssertEqual(horizontal ? panel.tip.x : panel.tip.y,
                                horizontal ? L.point(station).x : L.point(station).y, accuracy: 1, where_)
                 for words in L.labelRects(station, store.r1.pipeline) {
-                    XCTAssertFalse(panel.outer.intersects(words), where_)
+                    XCTAssertFalse(panel.intersects(words), where_)
                 }
                 XCTAssertLessThanOrEqual(panel.body.maxY, L.footerTop - 4, where_)
                 XCTAssertGreaterThanOrEqual(panel.body.height + 0.01, NDStationPopover.measure(content, width: panel.body.width).height, where_)
                 for other in NDStation.allCases where other != station {
                     XCTAssertFalse(panel.body.intersects(L.circle(other)), where_)
-                    for rect in L.labelRects(other, store.r1.pipeline) { XCTAssertFalse(panel.outer.intersects(rect), where_) }
+                    for rect in L.labelRects(other, store.r1.pipeline) { XCTAssertFalse(panel.intersects(rect), where_) }
                 }
-                for (_, rect) in L.laneLabelRects() { XCTAssertFalse(panel.outer.intersects(rect.insetBy(dx: -4, dy: -4)), where_) }
-                for text in L.footerTexts { XCTAssertFalse(panel.outer.intersects(text), where_) }
+                for (_, rect) in L.laneLabelRects() { XCTAssertFalse(panel.intersects(rect.insetBy(dx: -4, dy: -4)), where_) }
+                for text in L.footerTexts { XCTAssertFalse(panel.intersects(text), where_) }
             }
         }
     }
