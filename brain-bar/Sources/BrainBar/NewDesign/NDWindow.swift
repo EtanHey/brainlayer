@@ -4,7 +4,8 @@ import SwiftUI
 private typealias Say = BrainBarMenuPresenter.SurfaceSay
 
 /// The window (DESIGN-SPEC-R1 § 2.3 to 2.6): a unified 52 pt title bar holding only the centred tabs, one page, and a
-/// 28 pt footer that says when it was checked. Each page takes its own height (L17); nothing animates on a tab switch.
+/// 28 pt footer that says when it was checked. Each page takes its own height (L17); nothing animates on a tab switch,
+/// nor on a two-finger page swipe (`NDPageSwipe`), which makes the same switch.
 struct NDWindowRoot: View {
     @ObservedObject var store: NDStore
     /// Headless renders have no toolbar, so they draw the same row themselves, with stand-in traffic lights.
@@ -56,6 +57,8 @@ struct NDWindowRoot: View {
             NDFooter(left: r1.footerLeft, right: r1.footerRight)
         }
         .ignoresSafeArea(.container, edges: .top)
+        // Phase 14: a two-finger sideways swipe moves to the neighbouring page, through the same change a tab click makes.
+        .background(NDPageSwipeMonitor { store.swipePage($0) })
         .background(ND.bg)
         .foregroundStyle(ND.t1)
         .environment(\.ndPalette, .window)
