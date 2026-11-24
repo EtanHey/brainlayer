@@ -1,0 +1,34 @@
+{
+  "after-settings-dark.png": {
+    "bytes": 95480,
+    "sha256": "0247b33e4a9c9e1d2530cc1bed1e44660561486377d6e016922ffad93ad5f9f8"
+  },
+  "after-settings-light.png": {
+    "bytes": 91385,
+    "sha256": "e394fec157a0fdaa2970eea99a65c083732d62e668f0c23f2c9c90d8c67ca7b6"
+  },
+  "after-stored-classic-window-dark.png": {
+    "bytes": 231065,
+    "sha256": "c961a072d8f1f329eea80d5c76170cc916af30e957057881903211917b0b950d"
+  },
+  "after-stored-classic-window-light.png": {
+    "bytes": 234107,
+    "sha256": "d865a01f67634b3a08234ed7f71e1a0037a3452f000bf9ea8c2b17ea7e9da289"
+  },
+  "before-settings-dark.png": {
+    "bytes": 121153,
+    "sha256": "92e64605514640f72d8449e465999a55602149d16f04d200be6982f1a624a997"
+  },
+  "before-settings-light.png": {
+    "bytes": 117175,
+    "sha256": "b3183e6a0a6623ee1b9d7e6d844b98bd1072ecc228147208e4f1cadf98e221a9"
+  },
+  "before-stored-classic-window-dark.png": {
+    "bytes": 2829026,
+    "sha256": "038ded2ab214b33d51b7c65c362a996e10c9d95e3da4229ab163dc67c57a4dc7"
+  },
+  "before-stored-classic-window-light.png": {
+    "bytes": 2829026,
+    "sha256": "038ded2ab214b33d51b7c65c362a996e10c9d95e3da4229ab163dc67c57a4dc7"
+  }
+}
