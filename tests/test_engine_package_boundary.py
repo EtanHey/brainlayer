@@ -33,6 +33,7 @@ def test_pyproject_declares_pure_engine_package_boundary() -> None:
         "scripts/launchd",
         "scripts/hotlane_brainbar_daemon.py",
         "scripts/tier0-watchdog.sh",
+        "scripts/brainbar-update.sh",
         # The wheel force-includes this script, so the sdist must carry its source too.
         "scripts/release-verify-signatures.sh",
         "scripts/brainlayer-version-check.sh",
