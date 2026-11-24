@@ -71,8 +71,9 @@ enum NDBackupHistoryReader {
         case attempt
     }
 
-    /// A missing attempt clock is not evidence of age. Only a dated legacy row outside the window can be ignored.
-    static func rowKind(_ row: [String: Any], now: Date) -> RowKind {
+    /// In an append-only log, a following dated row also bounds an undated legacy row's age.
+    /// Without that bound, or with an error, a missing attempt clock remains damage.
+    static func rowKind(_ row: [String: Any], now: Date, nextDatedRow: Date? = nil) -> RowKind {
         let hasError: Bool = {
             guard let error = row["error"], !(error is NSNull) else { return false }
             return (error as? String).map { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty } ?? true
@@ -80,7 +81,8 @@ enum NDBackupHistoryReader {
         if hasError, row["event"] != nil || row["attempted_at"] == nil { return .damage }
         if row["event"] != nil { return .skip }
         if row["attempted_at"] == nil {
-            if let dated = BackupLogReader.isoDate(row["ts"] ?? row["created_at"]), now.timeIntervalSince(dated) > windowS {
+            if let dated = BackupLogReader.isoDate(row["ts"] ?? row["created_at"]) ?? nextDatedRow,
+               now.timeIntervalSince(dated) > windowS {
                 return .skip
             }
             return .damage
@@ -151,7 +153,7 @@ enum NDBackupHistoryReader {
                 }
                 continue
             }
-            switch rowKind(row, now: now) {
+            switch rowKind(row, now: now, nextDatedRow: dated.first { $0.index > index }?.at) {
             case .skip: continue
             case .damage: skipped += 1; continue
             case .attempt: break
