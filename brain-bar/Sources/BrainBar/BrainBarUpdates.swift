@@ -276,8 +276,8 @@ struct BrainBarUpdateRow: View {
                     Text("Installing…").font(NDType.caption).foregroundStyle(ND.t2)
                 } else if updates.phase == .checking {
                     Text("Checking…").font(NDType.caption).foregroundStyle(ND.t2)
-                } else if updates.offer != nil && updates.installerAvailable {
-                    NDButton(label: "Update", filled: header, small: true) { updates.install() }
+                } else if updates.offer != nil {
+                    NDButton(label: "Update", filled: header, small: true) { updates.install() }.disabled(!updates.installerAvailable).opacity(updates.installerAvailable ? 1 : 0.45)
                     if header { Button("Later") { updates.snoozed = true }.buttonStyle(.plain).font(NDType.caption).foregroundStyle(ND.t2) }
                 } else {
                     NDButton(label: "Check", small: true) { Task { await updates.check(force: true) } }

@@ -311,3 +311,80 @@ def test_reaper_blocks_new_acquisition_during_owner_read(install):
         finally:
             (root / "continue").touch()
         first.result(timeout=10)
+
+
+def test_custody_survives_supervisor_death_until_installer_exits(install):
+    import signal
+    import time
+
+    _, _, root, app = install("busy")
+    commands = app.parents[1] / "bin"
+    brew = commands / "brew"
+    original = brew.read_text()
+    brew.write_text(
+        original.replace(
+            'echo "brew $*"',
+            'if [ "$1" = update ]; then touch "$BRAINBAR_UPDATE_ROOT/blocked"; while [ ! -f "$BRAINBAR_UPDATE_ROOT/release" ]; do sleep 0.02; done; fi\necho "brew $*"',
+            1,
+        )
+    )
+    env = dict(
+        os.environ,
+        BRAINBAR_UPDATE_PATH=f"{commands}:/usr/bin:/bin",
+        BRAINBAR_UPDATE_APP=str(app),
+        BRAINBAR_UPDATE_ROOT=str(root),
+        BRAINBAR_UPDATE_PLIST=str(commands / "plist"),
+        TEST_LOG=str(app.parents[1] / "commands"),
+        TEST_PREFIX=str(app.parents[1]),
+        FAIL_STEP="",
+    )
+    supervisor = subprocess.Popen(
+        ["bash", str(SCRIPT), "2.0.0", "held-attempt"], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+    )
+    child = None
+    try:
+        deadline = time.monotonic() + 10
+        while not (root / "blocked").exists():
+            assert supervisor.poll() is None
+            assert time.monotonic() < deadline
+            time.sleep(0.02)
+        child = int((root / "update.lock/pid").read_text())
+        supervisor.kill()  # Kill only Ruby; the installer remains blocked in fake brew.
+        supervisor.wait(timeout=10)
+        os.kill(child, 0)
+        second, _, _, _ = install(operation="contender")
+        assert second.returncode == 75
+        assert "Another update owns custody" in second.stderr
+    finally:
+        (root / "release").touch()
+        if supervisor.poll() is None:
+            supervisor.kill()
+        supervisor.wait(timeout=10)
+        deadline = time.monotonic() + 10
+        while child is not None:
+            try:
+                os.kill(child, 0)
+            except ProcessLookupError:
+                break
+            if time.monotonic() >= deadline:
+                os.kill(child, signal.SIGKILL)
+                pytest.fail("Installer did not exit after fake brew was released")
+            time.sleep(0.02)
+        # Confirm the inherited open-file description is released when the child exits.
+        import fcntl
+
+        with (root / "update-custody.lock").open("r+") as lock:
+            deadline = time.monotonic() + 10
+            while True:
+                try:
+                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    fcntl.flock(lock, fcntl.LOCK_UN)
+                    break
+                except BlockingIOError:
+                    if time.monotonic() >= deadline:
+                        if child is not None:
+                            os.kill(child, signal.SIGKILL)
+                        raise
+                    time.sleep(0.02)
+    third, _, _, _ = install(operation="after-child")
+    assert third.returncode == 0, third.stderr

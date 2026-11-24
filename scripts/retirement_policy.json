@@ -1022,14 +1022,6 @@
         "target": "ctypes.CDLL"
       }
     },
-    "2afa59b5ee591890abc325d5788f6b5adc5da3d4637abd0962ffbbe5b83ea8d7": {
-      "non_cloud_purpose": "Homebrew release updater: local one-shot launchd helper custody, installation and recovery; no model transport.",
-      "site": {
-        "body_sha256": "8c79cf91eddcac738da6e669a51b97aaccb0eae47fb16794ed53d07ac82be052",
-        "kind": "non_python_source",
-        "path": "brain-bar/Sources/BrainBar/BrainBarUpdates.swift"
-      }
-    },
     "2bb09499f9acf2a30a25502cdedea8038706202945be453be98b730e04a7b3c4": {
       "non_cloud_purpose": "Local handling of gunzip -t integrity-check failures during raw/gzip backup cleanup; preserves the raw snapshot on failure and invokes no cloud or model transport.",
       "site": {
@@ -3530,6 +3522,14 @@
         "target": "subprocess.TimeoutExpired"
       }
     },
+    "82b6be11c5c4e30d71a57f47ee573b92008cda2ece78fabf4b3e955a5f6008a6": {
+      "non_cloud_purpose": "Homebrew release updater: release-feed checks and local launchd install custody; no model transport.",
+      "site": {
+        "body_sha256": "e921ce78852c58618a9e2e1d8acf91474b901b1d83443fd1df7f12202a37e20c",
+        "kind": "non_python_source",
+        "path": "brain-bar/Sources/BrainBar/BrainBarUpdates.swift"
+      }
+    },
     "837ee23c48881860478e8eba3c32f0d355e453611a742f9b559903f3d3eefa58": {
       "non_cloud_purpose": "Stdlib-only best-effort Darwin current-process thread scheduling observation: resolve symbols from the current process with ctypes.CDLL(None), read QoS, thread ID and curpri via libSystem APIs, and build ctypes structs and pointers; no library path, model, cloud or network sender.",
       "site": {
@@ -5194,6 +5194,14 @@
         "owner": "<module>._git_cmd",
         "path": "src/brainlayer/pipeline/git_overlay.py",
         "target": "subprocess.TimeoutExpired"
+      }
+    },
+    "bade659e7442cc873c71566e522c8b3b40d601680e546c93f19aada2a21bc768": {
+      "non_cloud_purpose": "Homebrew release updater: inherited local file-lock custody through supervisor/installer lifetime, pinned install and recovery; no model transport.",
+      "site": {
+        "body_sha256": "cbacfbecb1a718883863e931e6491417202a77488e9232b28fa744cf059d2e4f",
+        "kind": "non_python_source",
+        "path": "scripts/brainbar-update.sh"
       }
     },
     "baed4cb59b552413cee1eba5a2b06f6fe58bf90ec44469923ab041ef695a9b6f": {
@@ -6904,14 +6912,6 @@
         "owner": "<module>.source_identity.git",
         "path": "scripts/brainbar_source_identity.py",
         "target": "subprocess.run"
-      }
-    },
-    "f7b195522242be3555361655c9af44426d1e89318e77afedc211f16c0189ee34": {
-      "non_cloud_purpose": "Homebrew release updater: local launchd helper custody, installation and recovery; no model transport.",
-      "site": {
-        "body_sha256": "e792cde3ece778810ca0bc016b0dd6b10476b284cb1bfe178473d12b354bff23",
-        "kind": "non_python_source",
-        "path": "scripts/brainbar-update.sh"
       }
     },
     "f7dbcb00cb0143c66eec160a222f62d7ba48405ef1502c0aaed8153c3cbd226a": {

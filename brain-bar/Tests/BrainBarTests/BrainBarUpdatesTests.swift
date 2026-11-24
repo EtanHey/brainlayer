@@ -3,6 +3,8 @@ import SwiftUI
 @testable import BrainBar
 
 @MainActor final class BrainBarUpdatesTests: XCTestCase {
+    private static let recoveryMessage = "Restore ~/Library/Application Support/BrainBar/Backups.noindex/BrainBar.backup-1.6.11-00000000-0000-4000-8000-000000000000.app to /Applications/BrainBar.app"
+
     func preferences() -> UserDefaults { UserDefaults(suiteName: "update-test-" + UUID().uuidString)! }
 
     func testSuspendedCheckCannotOverwriteInstallOrCancel() async throws {
@@ -84,7 +86,7 @@ import SwiftUI
         let idle = NDSettingsWindowController.contentSize(of: host).height
         try capture("settings-before")
         model.phase = .failed
-        model.detail = String(repeating: "Recovery command needs attention. ", count: 12)
+        model.detail = Self.recoveryMessage
         await settle()
         XCTAssertGreaterThan(NDSettingsWindowController.contentSize(of: host).height, idle)
         try capture("settings-recovery")
@@ -258,39 +260,80 @@ import SwiftUI
         print("BRAINBAR_UPDATE_FEED latest release matches formula and cask: \(version)")
     }
 
-    func testDrawnUpdateStates() throws {
-        let path = ProcessInfo.processInfo.environment["BRAINBAR_UPDATE_PROOF_DIR"]
-        let directory = URL(fileURLWithPath: path ?? FileManager.default.currentDirectoryPath + "/.build.noindex/brainbar-ui-lead-w245/proof").appendingPathComponent("update-control")
+    func testDrawnUpdateStates() async throws {
+        let directory = URL(fileURLWithPath: ProcessInfo.processInfo.environment["BRAINBAR_UPDATE_PROOF_DIR"]
+            ?? FileManager.default.currentDirectoryPath + "/.build.noindex/w257/state-proof")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        var pixels = Set<Data>()
-        for (name, phase, offer) in [("up-to-date", BrainBarUpdates.Phase.idle, nil), ("checking", .checking, nil),
-                                     ("offer", .idle, "2.0.0"), ("installing", .installing, "2.0.0"), ("failed", .failed, "2.0.0")] {
-            let model = BrainBarUpdates(installerPath: "/fixture/update.sh", installed: "1.0.0", defaults: preferences(), feed: { "2.0.0" })
-            model.phase = phase; model.offer = offer
-            model.detail = phase == .failed ? "Step activate failed. Run: /opt/homebrew/bin/brainlayer brainbar activate --verify --timeout 90" : ""
+        let states = ["rest", "up-to-date", "checking", "offer", "offer-pressed", "later", "waiting", "unknown-jobs", "install-preflight", "installing",
+                      "cancelling", "failed-long", "installer-unavailable", "tap-pending", "check-failed"]
+        var settingsPixels = Set<Data>()
+        var table = "# Update control state table\n\nInvented data; Settings row440pt, header900pt, Settings window480pt. Offscreen only. Header is intentionally hidden for rest, up-to-date and Later.\nMissing before: transient up-to-date, Later-hidden, both waiting states, cancelling, installer-unavailable, tap-pending, check-failed, pressed/preflight, longest recovery; header previously shown only for offer.\n\n| State | Settings dark | Settings light | Header dark | Header light |\n|---|---|---|---|---|\n"
+        for name in states {
+            let model = BrainBarUpdates(installerPath: name == "installer-unavailable" ? nil : "/fixture/update.sh",
+                installed: "1.6.11", stateRoot: directory.appendingPathComponent(name).path,
+                defaults: preferences(), feed: { "2.0.0" }, launch: { _, _, _, _ in })
+            model.busy = { nil }
+            model.offer = ["rest", "up-to-date"].contains(name) ? nil : "2.0.0"
+            switch name {
+            case "up-to-date": model.detail = "Up to date"
+            case "checking": model.phase = .checking
+            case "later": model.snoozed = true
+            case "waiting": model.busy = { "Daily backup" }; model.install()
+            case "unknown-jobs": model.busy = { "Job status unavailable" }; model.install()
+            case "installing":
+                let root = directory.appendingPathComponent(name)
+                let lock = root.appendingPathComponent("update.lock")
+                try FileManager.default.createDirectory(at: lock, withIntermediateDirectories: true)
+                try "mutation\nformula\n\n".write(to: root.appendingPathComponent("update-state"), atomically: true, encoding: .utf8)
+                try "\(getpid())".write(to: lock.appendingPathComponent("pid"), atomically: true, encoding: .utf8)
+                model.resumeAttempt()
+                XCTAssertEqual(model.phase, .installing)
+                XCTAssertFalse(model.canCancel)
+            case "install-preflight": model.install()
+            case "cancelling": model.install(); model.cancel()
+            case "failed-long":
+                model.phase = .failed
+                model.detail = Self.recoveryMessage
+            case "installer-unavailable": model.detail = "Update unavailable — reinstall brainlayer"
+            case "tap-pending": model.detail = "Release is reaching Homebrew"
+            case "check-failed": model.detail = "Could not check"
+            default: break
+            }
             for (suffix, appearance) in NDRenderHarness.appearances {
-                let view = BrainBarUpdateRow(updates: model).background(ND.bg).foregroundStyle(ND.t1)
-                let rep = try NDRenderHarness.host(view, size: NSSize(width: 480, height: 140), appearance: appearance)
-                XCTAssertGreaterThan(rep.pixelsWide, 0)
-                if suffix == "dark", let data = rep.representation(using: .png, properties: [:]) { pixels.insert(data) }
-                try NDRenderHarness.write(rep, name: "\(name)-\(suffix)", in: directory)
-                if name == "offer" {
-                    let header = BrainBarUpdateRow(updates: model, header: true).background(ND.bg).foregroundStyle(ND.t1)
-                    try NDRenderHarness.write(NDRenderHarness.host(header, size: NSSize(width: 640, height: 64), appearance: appearance), name: "header-\(suffix)", in: directory)
-                    let windowStore = NDStore(fixture: BrainBarDesignFixture.inputs(.calm))
-                    windowStore.updates = model
-                    _ = try NDRenderHarness.window(windowStore, name: "window-offer-\(suffix)", appearance: appearance, in: directory)
+                func render<V: View>(_ view: V, width: CGFloat, file: String) throws -> Data {
+                    let content = view.environment(\.ndHeldPressed, name == "offer-pressed")
+                        .frame(width: width).fixedSize(horizontal: false, vertical: true)
+                        .background(ND.bg).foregroundStyle(ND.t1)
+                    let host = NSHostingView(rootView: content)
+                    host.appearance = NSAppearance(named: appearance)
+                    host.frame = NSRect(x: 0, y: 0, width: width, height: 800)
+                    host.layoutSubtreeIfNeeded()
+                    let height = max(1, ceil(host.fittingSize.height))
+                    let rep = try NDRenderHarness.host(content, size: NSSize(width: width, height: height), appearance: appearance)
+                    XCTAssertEqual(rep.pixelsWide, Int(width * 2))
+                    XCTAssertEqual(rep.pixelsHigh, Int(ceil(height * 2)))
+                    let data = try XCTUnwrap(rep.representation(using: .png, properties: [:]))
+                    try data.write(to: directory.appendingPathComponent(file + "-" + suffix + ".png"))
+                    return data
                 }
-                let store = NDStore(fixture: BrainBarDesignFixture.inputs(.calm))
-                store.updates = model
-                let settings = NDSettingsView(store: store)
-                try NDRenderHarness.write(NDRenderHarness.host(settings, size: NSSize(width: 480, height: 540), appearance: appearance), name: "settings-\(name)-\(suffix)", in: directory)
-                if name == "up-to-date" {
-                    let before = NDSettingsView(store: store, showsUpdateControl: false)
-                    try NDRenderHarness.write(NDRenderHarness.host(before, size: NSSize(width: 480, height: 540), appearance: appearance), name: "settings-before-\(suffix)", in: directory)
+                let row = BrainBarUpdateRow(updates: model)
+                let pixels = try render(row, width: NDSettingsWindowController.width - 40, file: name + "-settings")
+                if suffix == "dark" { settingsPixels.insert(pixels) }
+                let header = BrainBarUpdateRow(updates: model, header: true, showDetails: {})
+                let headerPixels = try render(header, width: NDGrid.windowWidth, file: name + "-header")
+                if ["later", "rest", "up-to-date"].contains(name) {
+                    let empty = try render(Color.clear.frame(height: 0), width: NDGrid.windowWidth, file: name + "-hidden-reference")
+                    XCTAssertEqual(headerPixels, empty, "No header offer when hidden")
+                }
+                if name == "failed-long" {
+                    let store = NDStore(fixture: BrainBarDesignFixture.inputs(.calm)); store.updates = model
+                    _ = try render(NDSettingsView(store: store), width: NDSettingsWindowController.width, file: name + "-full-settings")
                 }
             }
+            table += "| \(name) | ![](\(name)-settings-dark.png) | ![](\(name)-settings-light.png) | ![](\(name)-header-dark.png) | ![](\(name)-header-light.png) |\n"
         }
-        XCTAssertEqual(pixels.count, 5, "Every drawn state must differ")
+        XCTAssertEqual(settingsPixels.count, states.count - 1, "Later changes only the header; every other Settings state must differ")
+        table += "\n## Long recovery in the refitted Settings content (480 pt)\n\n| Dark | Light |\n|---|---|\n| ![](failed-long-full-settings-dark.png) | ![](failed-long-full-settings-light.png) |\n"
+        try table.write(to: directory.appendingPathComponent("README.md"), atomically: true, encoding: .utf8)
     }
 }

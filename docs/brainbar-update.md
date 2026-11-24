@@ -11,8 +11,9 @@ resource outside the keg and bootstraps an independent one-shot launchd job
 (`RunAtLoad`, `LaunchOnlyOnce`, unique label per launch). Release workers
 can run that same shipped script with `VERSION OPERATION_ID`. Each operation
 uses one version-independent lock in `~/Library/Application Support/BrainBar`.
-A Ruby supervisor holds an OS file lock for the whole attempt, including stale
-mkdir-lock recovery. Its permanent lock file must not be unlinked.
+A Ruby supervisor and its Bash child share an inherited OS file lock for the
+whole attempt, including stale mkdir-lock recovery. Killing only the supervisor
+does not release custody while the installer still runs. Its permanent lock file must not be unlinked.
 The helper refreshes Homebrew metadata and rechecks both tap versions immediately
 before the formula upgrade. It never pulls a source checkout or takes release
 receipts. Homebrew runs noninteractively, with stdin closed and askpass disabled.
@@ -72,3 +73,9 @@ deferred from v1. Never clear custody merely because the PID is gone.
 Release acceptance must prove the detached helper survives bootout of the running
 app LaunchAgent and completes activation end to end. Unit tests do not establish
 that process-group behavior.
+
+The updater render regression covers resting, transient up-to-date, checking,
+offer, pressed offer, Later-hidden, waiting for a job, unknown job status,
+pre-mutation install, installing, cancelling, long recovery, installer unavailable,
+tap pending and failed check. It renders the 440 pt Settings row and 900 pt header
+in dark and light, plus the 480 pt Settings content for recovery.

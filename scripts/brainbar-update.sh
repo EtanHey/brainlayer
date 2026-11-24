@@ -5,7 +5,7 @@ umask 077
 export PATH="${BRAINBAR_UPDATE_PATH:-/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin}"
 export HOMEBREW_NO_INSTALL_CLEANUP=1 HOMEBREW_NO_AUTO_UPDATE=1
 export SUDO_ASKPASS=/usr/bin/false NONINTERACTIVE=1
-# flock is held by a supervisor for the entire attempt, including stale mkdir recovery.
+# flock is shared by the supervisor and installer for the entire attempt, including stale mkdir recovery.
 # The file is permanent: unlinking it would let contenders lock different inodes.
 if [ "${1:-}" != --custody-held ]; then
   custody_root=${BRAINBAR_UPDATE_ROOT:-"$HOME/Library/Application Support/BrainBar"}
@@ -15,6 +15,7 @@ if [ "${1:-}" != --custody-held ]; then
       unless lock.flock(File::LOCK_EX|File::LOCK_NB)
         warn "Another update owns custody"; exit 75
       end
+      lock.close_on_exec = false
       system("/bin/bash", ARGV.shift, "--custody-held", *ARGV)
       exit($?.exitstatus || 1)
     end
