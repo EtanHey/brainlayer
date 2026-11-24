@@ -86,9 +86,11 @@ The calendar's `runs.jsonl` publishes an interim summary as `event: "progress"`
 before each child starts. It carries `status: "running"`, `complete: false`, the
 `running_step`, its Unix `step_started_at`, the attempt's `runner_started_at` and
 `scheduled_date`, and a `results` map of finished steps. While a backup upload
-runs, health readers can report those completed results and the running backup
-instead of requiring a terminal summary. Progress is an observation at that time,
-not a liveness heartbeat or proof of upload completion. Only `event: "summary"`
+runs, a health reader may report those completed results and the running backup
+instead of requiring a terminal summary; no reader shows them yet (BrainBar and
+the observability producer skip `progress` rows). Progress is an observation at
+that time, not a liveness heartbeat or proof of upload completion: a failed
+progress write is logged and never changes the night. Only `event: "summary"`
 ends the attempt; its existing fields and completion rules are unchanged.
 
 The macOS daemon adds an hourly `transcript-backup-recovery` component when its

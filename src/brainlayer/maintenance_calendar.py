@@ -1296,7 +1296,7 @@ async def run_calendar(
                                     # consume that as terminal evidence for this attempt. Persist
                                     # progress before entering a possibly hours-long backup upload.
                                     await _blocking(
-                                        record,
+                                        _progress_record,
                                         directory,
                                         event="progress",
                                         kind=kind,
@@ -1474,3 +1474,14 @@ async def run_calendar(
                         leases.close()
                     finally:
                         _calendar_operations.reset(token)
+
+
+def _progress_record(directory, **event):
+    """Write an interim progress row. A failure is logged and never changes the night (#1878 review r1 F1).
+
+    Defined last so the formal models' line anchors in this file do not move.
+    """
+    try:
+        record(directory, **event)
+    except OSError as exc:
+        LOG.warning("calendar progress write failed: %s", type(exc).__name__)

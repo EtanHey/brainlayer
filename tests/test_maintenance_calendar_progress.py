@@ -66,3 +66,39 @@ def test_backup_wait_publishes_interim_summary_then_preserves_terminal_shape(run
     }
     assert final.items() >= dict(event="summary", complete=True, failed=0, deferred=0).items()
     assert calendar.failed_recovery_selection(runner.directory)["failures"] == []
+
+
+def test_failed_progress_write_never_changes_the_night(runner, monkeypatch):  # noqa: F811
+    """Review r1 F1 (#1878): progress is an observation, so failing to write it must not fail a step."""
+    names = ("jsonl-backup", "p0-counter", "wal-checkpoint", "backup-daily")
+    executed = []
+    real_record = calendar.record
+
+    def record_without_progress(directory, **event):
+        if event.get("event") == "progress":
+            raise OSError(28, "No space left on device")
+        return real_record(directory, **event)
+
+    async def execute(step, env, **kwargs):
+        executed.append(step.name)
+        return 0
+
+    monkeypatch.setattr(calendar, "record", record_without_progress)
+    monkeypatch.setattr(calendar, "_execute_step", execute)
+    monkeypatch.setattr(calendar.CalendarPlan, "select", lambda self, _marker: self.candidates)
+    now = dt.datetime(2026, 11, 24, 4, 45)
+    assert (
+        asyncio.run(
+            calendar.run_calendar(
+                calendar.CalendarPlan(now.date(), tuple(calendar.Step(name, ("/unused",), 60) for name in names)),
+                runner.directory,
+                runner.logs,
+                now_fn=lambda: now,
+            )
+        )
+        == 0
+    )
+    assert executed == list(names)
+    rows = runner.rows()
+    assert not any(row["event"] in ("progress", "step-error") for row in rows)
+    assert rows[-1].items() >= dict(event="summary", complete=True, failed=0, deferred=0).items()
