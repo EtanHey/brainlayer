@@ -165,9 +165,9 @@ final class MCPRouter: @unchecked Sendable {
         let registry = PendingStoreDrainRegistry()
         let backupGate = PendingStoreBackupGate()
         let onFlushed: (@Sendable ([BrainDatabase.FlushedPendingStore]) -> Void)?
+        var stopped = false // Accessed only on the serial drain queue.
 #if DEBUG
         var onUnreadableTargetRetryForTesting: (@Sendable (String) -> Void)?
-        var stoppedForTesting = false // Accessed only on queue.
 #endif
 
         init(
@@ -306,10 +306,21 @@ final class MCPRouter: @unchecked Sendable {
 #if DEBUG
     var receiptPersistenceEnabledForTesting: Bool { receiptStore.isPersistent }
 
+    func enqueueStoreDrainForTesting(
+        beforeDrain: (@Sendable () -> Void)? = nil,
+        _ work: @escaping @Sendable () -> Void
+    ) {
+        let scheduler = pendingStoreDrainScheduler
+        scheduler.queue.async {
+            beforeDrain?()
+            scheduler.backupGate.withDrain(work)
+        }
+    }
+
     func finishOwnedWorkForTesting(deadline: DispatchTime) -> FixtureShutdownResult {
         let scheduler = pendingStoreDrainScheduler
         guard drainFixtureQueueForTesting(scheduler.queue, deadline: deadline, work: {
-            scheduler.stoppedForTesting = true
+            scheduler.stopped = true
         }) == .finished else { return .timedOut }
         return entityCache.stopAndDrainForTesting(deadline: deadline)
     }
@@ -472,6 +483,18 @@ final class MCPRouter: @unchecked Sendable {
         pendingStoreDrainScheduler.backupGate.finishBackup()
     }
 
+    /// Called after backup work joins, from the server request queue. Marking the
+    /// scheduler stopped here also disables delayed retries that have not fired.
+    func stopPendingStoreDrains() {
+        let scheduler = pendingStoreDrainScheduler
+        // Cleanup already joined the backup worker. Its normal gate-release
+        // callback is queued behind cleanup on the server queue, so release here
+        // before joining a drain that may be waiting at that gate.
+        scheduler.backupGate.finishBackup()
+        scheduler.queue.sync { scheduler.stopped = true }
+        entityCache.stopRefreshTimer()
+    }
+
     private let vacuumActivity = NSLock()
     private var activeVacuumCount = 0
 
@@ -492,9 +515,7 @@ final class MCPRouter: @unchecked Sendable {
     ) {
         scheduler.queue.asyncAfter(deadline: .now() + delay) { [weak scheduler, weak db] in
             guard let scheduler, let db, db.isOpen else { return }
-#if DEBUG
-            guard !scheduler.stoppedForTesting else { return }
-#endif
+            guard !scheduler.stopped else { return }
             scheduler.backupGate.withDrain {
                 guard let snapshot = db.pendingStoreQueueSnapshotIfReadable() else {
                     scheduleExistingPendingStoreScan(
@@ -538,9 +559,7 @@ final class MCPRouter: @unchecked Sendable {
     ) {
         scheduler.queue.asyncAfter(deadline: .now() + delay) { [weak scheduler, weak db] in
             guard let scheduler, let db, db.isOpen else { return }
-#if DEBUG
-            guard !scheduler.stoppedForTesting else { return }
-#endif
+            guard !scheduler.stopped else { return }
             scheduler.backupGate.withDrain {
                 let flushedStores = db.flushPendingStores(
                     busyTimeoutMillis: mcpStoreBusyTimeoutMillis,
@@ -1254,9 +1273,7 @@ final class MCPRouter: @unchecked Sendable {
 
         scheduler.queue.asyncAfter(deadline: .now() + delay) { [weak scheduler, weak db] in
             guard let scheduler, let db else { return }
-#if DEBUG
-            guard !scheduler.stoppedForTesting else { return }
-#endif
+            guard !scheduler.stopped else { return }
             scheduler.backupGate.withDrain {
                 drainPendingStoreTarget(
                     scheduler: scheduler,
@@ -1347,9 +1364,7 @@ final class MCPRouter: @unchecked Sendable {
             : min(pendingStoreDrainMaxDelay, max(pendingStoreDrainInitialDelay, delay * 2.0))
         scheduler.queue.asyncAfter(deadline: .now() + nextDelay) { [weak scheduler, weak db] in
             guard let scheduler, let db else { return }
-#if DEBUG
-            guard !scheduler.stoppedForTesting else { return }
-#endif
+            guard !scheduler.stopped else { return }
             scheduler.backupGate.withDrain {
                 drainPendingStoreTarget(
                     scheduler: scheduler,

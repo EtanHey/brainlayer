@@ -162,6 +162,10 @@ final class BrainBarServer: @unchecked Sendable {
     var beforeDatabaseOpenForTesting: (@Sendable () -> Void)?
     var onFixtureDrainStartedForTesting: (@Sendable () -> Void)?
 
+    func enqueueStoreDrainForTesting(_ work: @escaping @Sendable () -> Void) {
+        queue.sync { router.enqueueStoreDrainForTesting(work) }
+    }
+
     /// A timeout retains every unfinished DB owner; callers must not remove files.
     func stopAndDrainForTesting(deadline: DispatchTime = .now() + 5) -> FixtureShutdownResult {
         guard drainFixtureQueueForTesting(queue, deadline: deadline, work: {
@@ -1221,6 +1225,7 @@ final class BrainBarServer: @unchecked Sendable {
     }
 
     private func finishCleanup() {
+        router?.stopPendingStoreDrains()
         flushDeferredSubscriberDisconnects()
         let writeDatabase = database
         if providedDatabase == nil {
