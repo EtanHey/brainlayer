@@ -1348,6 +1348,14 @@
         "target": "import socket"
       }
     },
+    "34d609fb58832cb07d51146c938cbb81cf63b3a9074938a6deeb370c6d7196dc": {
+      "non_cloud_purpose": "Homebrew release/tap metadata fetch, formula upgrade and cask reinstall for the explicitly requested BrainBar update; no model call. Other commands are local process sampling, package signature verification, bundle custody/restore and verified BrainBar activation. No credential prompt or source checkout update.",
+      "site": {
+        "body_sha256": "7b2feb1eef6860313f3bb7251100d2612e1216058636f57e69232d3fe7d2074d",
+        "kind": "non_python_source",
+        "path": "scripts/brainbar-update.sh"
+      }
+    },
     "34e69277091eabe06e1d49fbf6c83d3edd069a45aaa0d19c5d273b9d714bb7dd": {
       "non_cloud_purpose": "Local zstd CLI decoding of an explicitly admitted immutable Codex archive to bounded stdout reads; decoder errors are reported and the owned child is reaped. Resolved executable is the existing zstd tool, with no model arguments or network sender.",
       "site": {
@@ -1706,6 +1714,16 @@
         "target": "socket.socket"
       }
     },
+    "417efb5945b5fc6d37f5ee82bdc4f3eea5f76caa6883cd6eb48e898fcef4aa6d": {
+      "non_cloud_purpose": "Offline local updater verification harness: subprocess runs only targeted pytest cases with injected fake brew, app, process sampler and keg against isolated deliberately broken script copies. No real brew, network, production data or model call.",
+      "site": {
+        "call_sha256": "9d97d469cf8d66465563e1e22c6dab3b6107819aba2d9956c7080016c1ab9c1b",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/check_brainbar_update_mutations.py",
+        "target": "import subprocess"
+      }
+    },
     "4181c872eb9212dc9ad6ae2f349275cfff79450c8f32d365d092a84c7742fa51": {
       "non_cloud_purpose": "Existing local hostname metadata or AF_UNIX BrainBar/MCP helper transport; not an Internet model endpoint. Site: src/brainlayer/mcp_stdio_bridge.py <module>._close_socket socket.socket().close.",
       "site": {
@@ -2004,6 +2022,14 @@
         "owner": "<module>",
         "path": "scripts/ci/crash_sweep_gate.py",
         "target": "from importlib.machinery import PathFinder"
+      }
+    },
+    "4bd7dc859133e0115a9f5c92410db6dcd33246c3590de3d37a4b03d2d748d059": {
+      "non_cloud_purpose": "Read-only GitHub release feed and Homebrew tap metadata with five-second URLSession timeouts; no model call. Also resolves the installed local package resource and detaches the explicitly requested shared Homebrew update helper; no model provider subprocess.",
+      "site": {
+        "body_sha256": "ba7a49de2508c513d134c1bb07758c6071e92cf2dda7acd665ec0c696ec2559c",
+        "kind": "non_python_source",
+        "path": "brain-bar/Sources/BrainBar/BrainBarUpdates.swift"
       }
     },
     "4c2d63c91d45ff3e5cff002fc599c7972d353f8df0cf5d6a0305342f752610ab": {
@@ -3390,6 +3416,16 @@
         "owner": "<module>.load_whatsapp_messages",
         "path": "src/brainlayer/pipeline/unified_timeline.py",
         "target": "sqlite3.connect"
+      }
+    },
+    "7e7a7d02dad0ceb76b01801c3a8db952a68ab45a23ab55fdf3ee5413f03e715f": {
+      "non_cloud_purpose": "Offline local updater verification harness: subprocess runs only targeted pytest cases with injected fake brew, app, process sampler and keg against isolated deliberately broken script copies. No real brew, network, production data or model call.",
+      "site": {
+        "call_sha256": "bafb4781a34419c28271059706bf2912b46a50c97d586020217f622f2c8ec1f3",
+        "kind": "child_process",
+        "owner": "<module>.main",
+        "path": "scripts/check_brainbar_update_mutations.py",
+        "target": "subprocess.run"
       }
     },
     "7f473b9df716b6697971d1b0573a23c86bcd4cde3438f886459a3fc4d9f0819f": {

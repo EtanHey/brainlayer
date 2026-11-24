@@ -2,11 +2,12 @@
 
 import os
 import subprocess
+import zipfile
 from pathlib import Path
 
 import pytest
 
-SCRIPT = Path(__file__).parents[1] / "scripts/brainbar-update.sh"
+SCRIPT = Path(os.environ.get("BRAINBAR_UPDATE_SCRIPT", Path(__file__).parents[1] / "scripts/brainbar-update.sh"))
 
 
 @pytest.fixture
@@ -33,16 +34,23 @@ if [ "$1" = info ]; then
   if [ "$3" = --formula ]; then echo '{"formulae":[{"versions":{"stable":"2.0.0"}}]}'
   elif [ "$FAIL_STEP" = mismatch ]; then echo '{"casks":[{"version":"1.9.9"}]}'
   else echo '{"casks":[{"version":"2.0.0"}]}' ; fi
-elif [ "$1" = update ]; then exit 0
+elif [ "$1" = update ]; then
+  if [ "$FAIL_STEP" = late-busy ]; then touch "$TEST_PREFIX/busy"; fi
+  exit 0
 elif [ "$1" = --prefix ]; then echo "$TEST_PREFIX"
 elif [ "$2" = --cask ]; then
+  if [ "$1" = upgrade ] && [ -f "$TEST_PREFIX/cask-recorded" ]; then exit 0; fi
+  touch "$TEST_PREFIX/cask-recorded"
   mkdir -p "$BRAINBAR_UPDATE_APP"
   echo new > "$BRAINBAR_UPDATE_APP/identity"
   [ "$FAIL_STEP" != cask ]
 else [ "$FAIL_STEP" != formula ]; fi
 """,
     )
-    command(commands / "pgrep", '[ "$FAIL_STEP" = busy ] && echo "123 backup_daily"; exit 0\n')
+    command(
+        commands / "pgrep",
+        'if [ "$FAIL_STEP" = busy ] || [ -f "$TEST_PREFIX/busy" ]; then echo "123 backup_daily"; fi; exit 0\n',
+    )
     command(
         commands / "plist",
         'if [ -d "$BRAINBAR_UPDATE_APP" ] && [ "$(cat "$BRAINBAR_UPDATE_APP/identity")" = old ]; then echo 1.0.0; elif [ "$FAIL_STEP" = health ]; then echo 1.9.9; else echo 2.0.0; fi\n',
@@ -53,6 +61,7 @@ else [ "$FAIL_STEP" != formula ]; fi
         commands / "brainlayer",
         """
 echo activate >> "$TEST_LOG"
+[ -d "$BRAINBAR_UPDATE_APP" ] || exit 1
 if [ "$FAIL_STEP" = activate ] && [ "$(cat "$BRAINBAR_UPDATE_APP/identity")" != old ]; then exit 1; fi
 """,
     )
@@ -68,11 +77,11 @@ if [ "$FAIL_STEP" = activate ] && [ "$(cat "$BRAINBAR_UPDATE_APP/identity")" != 
     )
 
     # The installer calls the canonical prefix/bin/brainlayer.
-    def run(step=""):
+    def run(step="", *, jobs=None, operation="test-operation"):
         env["FAIL_STEP"] = step
-        result = subprocess.run(
-            ["bash", str(SCRIPT), "2.0.0", "test-operation"], env=env, capture_output=True, text=True
-        )
+        if jobs is not None:
+            env["BRAINBAR_UPDATE_JOBS"] = str(jobs)
+        result = subprocess.run(["bash", str(SCRIPT), "2.0.0", operation], env=env, capture_output=True, text=True)
         return result, log.read_text() if log.exists() else "", root, app
 
     return run
@@ -104,7 +113,7 @@ def test_success_order(install):
         log.index("upgrade --formula")
         < log.index("signatures")
         < log.index("consolidate")
-        < log.index("upgrade --cask")
+        < log.index("reinstall --cask")
         < log.index("activate")
     )
     assert "success" in (root / "update-state").read_text()
@@ -164,3 +173,82 @@ def test_mismatched_tap_refuses_before_mutation(install):
     assert "upgrade" not in log
     assert (app / "identity").read_text() == "old"
     assert not (root / "update.lock").exists()
+
+
+def test_retry_after_restoration_reinstalls_recorded_cask(install):
+    result, _, _, app = install("activate")
+    assert result.returncode != 0
+    assert (app / "identity").read_text() == "old"
+    result, log, _, app = install(operation="retry-operation")
+    assert result.returncode == 0, result.stderr
+    assert "reinstall --cask" in log
+    assert (app / "identity").read_text().strip() == "new"
+
+
+def test_second_preflight_catches_work_started_during_update(install):
+    result, log, root, _ = install("late-busy")
+    assert result.returncode == 0, result.stderr
+    assert "upgrade" not in log
+    assert "waiting" in (root / "update-state").read_text()
+
+
+def test_update_script_is_executable():
+    assert SCRIPT.stat().st_mode & 0o111 == 0o111
+
+
+def test_update_script_git_mode():
+    result = subprocess.check_output(["git", "ls-files", "--stage", "scripts/brainbar-update.sh"], text=True)
+    assert result.startswith("100755 ")
+
+
+def test_update_script_packaged_mode(tmp_path):
+    root = Path(__file__).parents[1]
+    configured = os.environ.get("BRAINBAR_UPDATE_WHEEL")
+    if not configured:
+        pytest.skip("Set BRAINBAR_UPDATE_WHEEL to the built release wheel for packaging proof")
+    wheel = Path(configured).resolve(strict=True)
+    with zipfile.ZipFile(wheel) as archive:
+        entry = archive.getinfo("brainlayer/launchd/brainbar-update.sh")
+        assert (entry.external_attr >> 16) & 0o111 == 0o111
+    package = tmp_path / "installed"
+    result = subprocess.run(
+        ["uv", "pip", "install", "--offline", "--no-deps", "--target", str(package), str(wheel)],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert result.returncode == 0, result.stderr
+    assert os.access(package / "brainlayer/launchd/brainbar-update.sh", os.X_OK)
+
+
+@pytest.mark.parametrize("status", ["idle", "busy", "stale", "missing"])
+def test_job_snapshot_preflight(install, tmp_path, status):
+    import json
+    import time
+
+    jobs = tmp_path / "jobs.json"
+    if status != "missing":
+        jobs.write_text(
+            json.dumps(
+                {"at": time.time() - (20 if status == "stale" else 0), "busy": "backup" if status == "busy" else ""}
+            )
+        )
+    result, log, root, _ = install(jobs=jobs)
+    assert result.returncode == 0, result.stderr
+    if status == "idle":
+        assert "success" in (root / "update-state").read_text()
+    else:
+        assert "upgrade" not in log
+        assert "waiting" in (root / "update-state").read_text()
+
+
+def test_dead_owner_with_settled_state_can_retry(install):
+    _, _, root, _ = install("busy")
+    lock = root / "update.lock"
+    lock.mkdir()
+    (lock / "pid").write_text("2147483647")
+    (lock / "operation").write_text("dead-operation")
+    result, _, _, app = install()
+    assert result.returncode == 0, result.stderr
+    assert (app / "identity").read_text().strip() == "new"

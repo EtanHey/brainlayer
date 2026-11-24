@@ -14,10 +14,12 @@ The helper refreshes Homebrew metadata and rechecks both tap versions immediatel
 before the formula upgrade. It never pulls a source checkout or takes release
 receipts. Homebrew runs noninteractively, with stdin closed and askpass disabled.
 
-The UI refuses while its backup, upload, nightly or weekly job observations show
+The UI refuses while the consolidated maintenance calendar or its backup,
+upload, nightly or weekly job observations show
 work running. The helper rechecks the fresh UI snapshot and the release installer's
 maintenance/backup process sample before mutation. Busy work is allowed to finish;
-the offer retries when it becomes idle. The watcher flush is not fenced.
+the offer retries at the next scheduled six-hour check, using the same operation
+and copied helper. The watcher flush is not fenced.
 
 This is a preflight sample, not an admission lease. Work can start after the
 last sample and encounter the same supervisor restart as a release installation.
@@ -25,7 +27,7 @@ A separate BrainLayer protected-operation admission follow-up is required to
 close that race; see the UI overhaul phase-14 lead decision 2.
 
 Order: formula upgrade, installed-keg signature verification, service consolidation,
-old-app backup, cask upgrade, activation with a real MCP handshake, installed bundle
+old-app backup, cask reinstall, activation with a real MCP handshake, installed bundle
 version check. A signature failure leaves the cask and services untouched.
 App replacement or activation failure restores the saved bundle and verifies
 activation again. A failed restore leaves custody and its recovery instruction
@@ -52,3 +54,17 @@ They never install software, restart services or connect to production data.
 The opt-in `BRAINBAR_UPDATE_NETWORK_PROBE=1` test checks only the public feed.
 Offscreen renders use invented versions and no windows. Installed update proof
 belongs to the release mission.
+
+The shared script must remain executable in git, the wheel and the installed
+package. The app resolves and checks it off the main thread before showing Update.
+Backups and one retained failed replacement live under `Backups.noindex`.
+
+A pid-less lock or unknown contents in `update.lock` require operator inspection;
+neither is assumed stale. A failed reap releases the reaper lock. Interrupted
+mutation remains refused until the release operator verifies bundle, cask ledger
+and daemon identity and settles the attempt. An automated `--settle` mode is
+deferred from v1. Never clear custody merely because the PID is gone.
+
+Release acceptance must prove the detached helper survives bootout of the running
+app LaunchAgent and completes activation end to end. Unit tests do not establish
+that process-group behavior.

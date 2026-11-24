@@ -103,10 +103,6 @@ struct NDSettingsView: View {
                 .overlay(alignment: .bottom) { ND.hair.frame(height: 0.5) }
             VStack(alignment: .leading, spacing: 0) {
                 VStack(spacing: 0) {
-                    if showsUpdateControl {
-                        BrainBarUpdateRow(updates: store.updates)
-                        ND.hair.frame(height: 0.5)
-                    }
                     row(Say.design) {
                         Spacer()
                         NDSegments(titles: BrainBarDesign.allCases.map(\.title),
@@ -141,6 +137,10 @@ struct NDSettingsView: View {
                     row(Say.diagnostics) {
                         Spacer()
                         NDButton(label: Say.openDiagnostics, small: true) { store.showDiagnostics() }
+                    }
+                    if showsUpdateControl {
+                        ND.hair.frame(height: 0.5)
+                        BrainBarUpdateRow(updates: store.updates)
                     }
                 }
                 .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(ND.raised))

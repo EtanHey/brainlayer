@@ -4,6 +4,7 @@ import SwiftUI
 import Darwin
 
 enum BrainBarReleaseFeed {
+    enum FeedError: Error { case tapPending }
     static func components(_ value: String) -> [Int]? {
         let parts = value.split(separator: ".", omittingEmptySubsequences: false)
         guard parts.count == 3, parts.allSatisfy({ !$0.isEmpty && $0.allSatisfy(\.isNumber) }) else { return nil }
@@ -50,7 +51,7 @@ enum BrainBarReleaseFeed {
         for path in ["Casks/brainbar.rb", "Formula/brainlayer.rb"] {
             let data = try await fetch("https://raw.githubusercontent.com/EtanHey/homebrew-layers/main/\(path)")
             let text = String(decoding: data, as: UTF8.self)
-            guard try tapVersion(text, cask: path.hasPrefix("Casks")) == version else { throw URLError(.cannotParseResponse) }
+            guard try tapVersion(text, cask: path.hasPrefix("Casks")) == version else { throw FeedError.tapPending }
         }
         return version
     }
@@ -63,57 +64,86 @@ enum BrainBarReleaseFeed {
     @Published var detail = ""
     @Published var snoozed = false
     @Published private(set) var canCancel = false
+    @Published private(set) var installerAvailable = false
+    private var installerPath: String?
     let installed: String
     private let stateRoot: String
     private let defaults: UserDefaults
     private let feed: () async throws -> String
     private let now: () -> Date
-    private let launch: (String, String, String) throws -> Void
+    private let launch: (String, String, String, String) throws -> Void
     private var operation: String?
     private var lastCheck: Date?
     private var lastAttempt: Date?
     private var checking = false
     private var launchedAt: Date?
+    private var transientResultUntil: Date?
     nonisolated static let root = NSHomeDirectory() + "/Library/Application Support/BrainBar"
     var busy: () -> String? = { "Job status unavailable" }
 
-    init(installed: String = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "unknown",
+    init(installerPath: String? = nil, installed: String = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "unknown",
          stateRoot: String = BrainBarUpdates.root,
          defaults: UserDefaults = .standard,
          now: @escaping () -> Date = Date.init,
          feed: @escaping () async throws -> String = BrainBarReleaseFeed.latest,
-         launch: @escaping (String, String, String) throws -> Void = BrainBarUpdates.spawn) {
+         launch: @escaping (String, String, String, String) throws -> Void = BrainBarUpdates.spawn) {
+        self.installerPath = installerPath; installerAvailable = installerPath != nil
         self.stateRoot = stateRoot
         self.installed = installed; self.defaults = defaults; self.now = now; self.feed = feed; self.launch = launch
         if let saved = defaults.string(forKey: "update.offer"), BrainBarReleaseFeed.newer(saved, than: installed) { offer = saved }
     }
 
+    func prepareInstaller() async {
+        guard installerPath == nil else { return }
+        let path = await Task.detached {
+            let p = Process(); let pipe = Pipe()
+            p.executableURL = URL(fileURLWithPath: "/opt/homebrew/opt/brainlayer/libexec/venv/bin/python")
+            p.arguments = ["-c", "import importlib.resources; print(importlib.resources.files(\"brainlayer\") / \"launchd/brainbar-update.sh\")"]
+            p.standardOutput = pipe; p.standardError = FileHandle.nullDevice
+            do { try p.run() } catch { return Optional<String>.none }
+            let data = pipe.fileHandleForReading.readDataToEndOfFile(); p.waitUntilExit()
+            let path = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+            return p.terminationStatus == 0 && FileManager.default.isExecutableFile(atPath: path) ? path : nil
+        }.value
+        installerPath = path; installerAvailable = path != nil
+        if path == nil { detail = "Update unavailable — reinstall brainlayer" }
+    }
+
     func check(force: Bool = false) async {
-        guard !checking, phase != .installing, phase != .failed || force else { return }
+        guard !checking, phase != .installing else { return }
         if !force, let lastCheck, now().timeIntervalSince(lastCheck) < 6 * 3600 { return }
-        checking = true; phase = .checking
+        let previousPhase = phase, previousDetail = detail
+        checking = true
+        if force { phase = .checking }
         lastAttempt = now()
         defer { checking = false }
         do {
             let latest = try await feed()
             guard BrainBarReleaseFeed.components(latest) != nil else { throw URLError(.cannotParseResponse) }
             lastCheck = now()
-            if BrainBarReleaseFeed.newer(latest, than: installed),
-               offer == nil || BrainBarReleaseFeed.newer(latest, than: offer!) {
+            let superseded = offer == nil || BrainBarReleaseFeed.newer(latest, than: offer!)
+            if BrainBarReleaseFeed.newer(latest, than: installed), superseded {
                 offer = latest; defaults.set(latest, forKey: "update.offer"); snoozed = false
             }
-            phase = .idle; detail = offer == nil ? "Up to date" : ""
-            if operation != nil { install() }
-        } catch { phase = .idle; detail = "Could not check" }
+            phase = previousPhase == .failed && !superseded ? .failed : .idle
+            detail = phase == .failed ? previousDetail : (force && offer == nil ? "Up to date" : "")
+            transientResultUntil = detail == "Up to date" ? now().addingTimeInterval(5) : nil
+            if !installerAvailable { detail = "Update unavailable — reinstall brainlayer" }
+            if previousPhase == .waiting, operation != nil { install() }
+        } catch BrainBarReleaseFeed.FeedError.tapPending {
+            phase = previousPhase; detail = "Release is reaching Homebrew"
+        } catch {
+            phase = previousPhase; detail = previousPhase == .failed ? previousDetail : "Could not check"
+        }
     }
 
     func install() {
-        guard phase != .installing, let offer else { return }
-        if let job = busy() { phase = .waiting; detail = "Will update when \(job) finishes"; operation = operation ?? UUID().uuidString; return }
-        let id = UUID().uuidString
+        guard phase != .installing, let offer, let installerPath else { return }
+        if let job = busy() { phase = .waiting; detail = job == "Job status unavailable" ? "Will update when job status is available" : "Will update when \(job) finishes"; operation = operation ?? UUID().uuidString; return }
+        let id = operation ?? UUID().uuidString
         do {
             try publishJobs()
-            try launch(offer, id, stateRoot + "/update-jobs.json")
+            try launch(offer, id, stateRoot + "/update-jobs.json", installerPath)
             operation = id; launchedAt = now(); phase = .installing; canCancel = true; detail = "Updating…"
         } catch { phase = .failed; detail = "Could not start update" }
     }
@@ -122,22 +152,27 @@ enum BrainBarReleaseFeed {
         guard let operation else { return }
         if phase == .waiting { self.operation = nil; phase = .idle; detail = ""; return }
         // The helper checks this only before formula mutation. It is never killed mid-swap.
+        canCancel = false; detail = "Cancelling…"
         _ = FileManager.default.createFile(atPath: stateRoot + "/cancel-" + operation, contents: Data())
     }
 
     func tick() async {
+        if let until = transientResultUntil, now() >= until {
+            if detail == "Up to date" { detail = "" }
+            transientResultUntil = nil
+        }
         if phase == .installing {
             try? publishJobs()
             if let text = try? String(contentsOfFile: stateRoot + "/update-state", encoding: .utf8) {
                 let lines = text.components(separatedBy: "\n")
                 if lines.count >= 3, lines[0] == operation {
-                    canCancel = lines[1] == "preflight"
+                    canCancel = lines[1] == "preflight" && detail != "Cancelling…"
                     switch lines[1] {
-                    case "success": phase = .idle; detail = "Updated — relaunching"
-                    case "failed", "recovery-required": phase = .failed; detail = lines[2]
-                    case "waiting": phase = .waiting; detail = lines[2]
+                    case "success": operation = nil; phase = .idle; detail = "Updated — relaunching"
+                    case "failed", "recovery-required": operation = nil; phase = .failed; detail = lines[2]
+                    case "waiting": phase = .waiting; lastAttempt = now(); lastCheck = nil; detail = lines[2]
                     case "cancelled": phase = .idle; operation = nil; detail = "Cancelled"
-                    default: detail = "Updating…"
+                    default: if detail != "Cancelling…" { detail = "Updating…" }
                     }
                 } else if let launchedAt, now().timeIntervalSince(launchedAt) > 15 {
                     phase = .failed; detail = "Update did not acquire custody. See update.log."
@@ -145,7 +180,7 @@ enum BrainBarReleaseFeed {
             } else if let launchedAt, now().timeIntervalSince(launchedAt) > 15 {
                 phase = .failed; detail = "Update helper did not start. See update.log."
             }
-        } else if phase == .waiting, busy() == nil { install() }
+        }
         if lastAttempt == nil || now().timeIntervalSince(lastAttempt!) >= 6 * 3600 { await check() }
     }
 
@@ -155,7 +190,7 @@ enum BrainBarReleaseFeed {
         guard lines.count >= 3 else { phase = .failed; detail = "Unreadable update state"; return }
         switch lines[1] {
         case "success", "cancelled", "waiting": break
-        case "failed", "recovery-required": phase = .failed; detail = lines[2]
+        case "failed", "recovery-required": operation = nil; phase = .failed; detail = lines[2]
         default:
             operation = lines[0]
             if let text = try? String(contentsOfFile: stateRoot + "/update.lock/pid", encoding: .utf8),
@@ -174,40 +209,45 @@ enum BrainBarReleaseFeed {
         try data.write(to: URL(fileURLWithPath: stateRoot + "/update-jobs.json"), options: .atomic)
     }
 
-    nonisolated static func spawn(_ version: String, _ id: String, _ jobs: String) throws {
-        let python = "/opt/homebrew/opt/brainlayer/libexec/venv/bin/python"
-        // Resolve the shipped resource using the installed interpreter, then copy outside the keg before upgrade.
+    nonisolated static func spawn(_ version: String, _ id: String, _ jobs: String, _ script: String) throws {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/bin/bash")
-        p.arguments = ["-c", #"set -e; mkdir -p "$3"; source_path=$("$0" -c 'import importlib.resources; print(importlib.resources.files("brainlayer") / "launchd/brainbar-update.sh")'); cp "$source_path" "$3/update-$2.sh"; BRAINBAR_UPDATE_JOBS="$4" nohup /bin/bash "$3/update-$2.sh" "$1" "$2" >>"$3/update.log" 2>&1 </dev/null &"#, python, version, id, Self.root, jobs]
-        try p.run(); p.waitUntilExit()
-        guard p.terminationStatus == 0 else { throw CocoaError(.executableLoad) }
+        p.arguments = ["-c", #"set -e; mkdir -p "$3"; test -x "$0"; if [ ! -f "$3/update-$2.sh" ]; then cp "$0" "$3/update-$2.sh"; fi; BRAINBAR_UPDATE_JOBS="$4" nohup /bin/bash "$3/update-$2.sh" "$1" "$2" >>"$3/update.log" 2>&1 </dev/null &"#, script, version, id, Self.root, jobs]
+        try p.run()
     }
 }
 
 struct BrainBarUpdateRow: View {
     @ObservedObject var updates: BrainBarUpdates
     var header = false
+    var showDetails: (() -> Void)? = nil
     var body: some View {
         if !header || (updates.offer != nil && !updates.snoozed) {
             HStack(spacing: 10) {
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("BrainBar \(updates.installed)" + (updates.offer.map { " → \($0)" } ?? ""))
+                    Text(updates.offer == nil && !header ? "BrainBar" : "BrainBar \(updates.installed)" + (updates.offer.map { " → \($0)" } ?? ""))
                         .font(NDType.body)
-                    if !updates.detail.isEmpty { Text(updates.detail).font(NDType.caption).foregroundStyle(ND.t2).textSelection(.enabled) }
+                    if header && updates.phase == .failed {
+                        Text("Update failed").font(NDType.caption).foregroundStyle(ND.t2)
+                    } else if !updates.detail.isEmpty {
+                        Text(updates.detail).font(NDType.caption).foregroundStyle(ND.t2).textSelection(.enabled)
+                    }
                 }
                 Spacer(minLength: 0)
-                if updates.phase == .waiting || (updates.phase == .installing && updates.canCancel) {
+                if updates.offer == nil { Text(updates.installed).font(NDType.body).foregroundStyle(ND.t2) }
+                if header && updates.phase == .failed, let showDetails {
+                    NDButton(label: "Details", small: true, action: showDetails)
+                } else if updates.phase == .waiting || (updates.phase == .installing && updates.canCancel) {
                     NDButton(label: "Cancel", small: true) { updates.cancel() }
                 } else if updates.phase == .installing {
                     Text("Installing…").font(NDType.caption).foregroundStyle(ND.t2)
                 } else if updates.phase == .checking {
                     Text("Checking…").font(NDType.caption).foregroundStyle(ND.t2)
-                } else if updates.offer != nil {
-                    NDButton(label: "Update", small: true) { updates.install() }
-                    if header { NDButton(label: "Later", small: true) { updates.snoozed = true } }
+                } else if updates.offer != nil && updates.installerAvailable {
+                    NDButton(label: "Update", filled: header, small: true) { updates.install() }
+                    if header { Button("Later") { updates.snoozed = true }.buttonStyle(.plain).font(NDType.caption).foregroundStyle(ND.t2) }
                 } else {
-                    NDButton(label: "Check for updates", small: true) { Task { await updates.check(force: true) } }
+                    NDButton(label: "Check", small: true) { Task { await updates.check(force: true) } }
                 }
             }.padding(.horizontal, 12).padding(.vertical, 10)
         }

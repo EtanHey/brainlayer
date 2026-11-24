@@ -11,7 +11,7 @@ OP=${2:?operation id required}
 ROOT=${BRAINBAR_UPDATE_ROOT:-"$HOME/Library/Application Support/BrainBar"}
 APP=${BRAINBAR_UPDATE_APP:-/Applications/BrainBar.app}
 PLIST=${BRAINBAR_UPDATE_PLIST:-/usr/libexec/PlistBuddy}
-mkdir -p "$ROOT/Backups"
+mkdir -p "$ROOT/Backups.noindex"
 LOCK="$ROOT/update.lock"
 # A dead controller's unsettled attempt is retained for recovery, never silently retried.
 if ! mkdir "$LOCK" 2>/dev/null; then
@@ -22,7 +22,11 @@ if ! mkdir "$LOCK" 2>/dev/null; then
     if [[ "$owner" =~ ^[0-9]+$ ]] && ! kill -0 "$owner" 2>/dev/null; then
       # Reap only our known lock files. Durable unsettled state below still blocks retries.
       rm -f "$LOCK/pid" "$LOCK/operation" "$LOCK/formula.json" "$LOCK/cask.json"
-      rmdir "$LOCK"
+      if ! rmdir "$LOCK"; then
+        rmdir "$ROOT/update-reaper.lock"
+        echo 'Unknown lock contents; inspect update.lock before recovery.' >&2
+        exit 75
+      fi
       if mkdir "$LOCK" 2>/dev/null; then REAPED=1; fi
     fi
    fi
@@ -38,6 +42,7 @@ printf '%s\n' "$OP" > "$LOCK/operation"
 STEP=preflight
 MUTATED=0
 BACKUP=""
+FAILURE=""
 state() { printf '%s\n%s\n%s\n' "$OP" "$1" "${2:-}" > "$ROOT/update-state.new"; mv "$ROOT/update-state.new" "$ROOT/update-state"; }
 cleanup() { rm -f "$LOCK/pid" "$LOCK/operation" "$LOCK/formula.json" "$LOCK/cask.json"; rmdir "$LOCK"; }
 finish() {
@@ -46,14 +51,28 @@ finish() {
   if [ "$rc" -ne 0 ]; then
     if [ -n "$BACKUP" ] && [ -d "$BACKUP" ]; then
       # Preserve the failed replacement rather than delete a bundle we did not create.
-      if [ -e "$APP" ]; then mv "$APP" "$ROOT/Backups/BrainBar.failed-$OP.app" || { state recovery-required "$APP"; exit 1; }; fi
+      if [ -e "$APP" ]; then
+        failed="$ROOT/Backups.noindex/BrainBar.failed-$OP.app"
+        mv "$APP" "$failed" || { state recovery-required "Restore $BACKUP to $APP"; exit 1; }
+        if [ -f "$ROOT/last-failed" ]; then
+          previous_failed=$(cat "$ROOT/last-failed")
+          case "$previous_failed" in "$ROOT/Backups.noindex/BrainBar.failed-"*.app)
+            ruby -rfileutils -e 'FileUtils.remove_entry_secure(ARGV[0]) if File.directory?(ARGV[0])' "$previous_failed" ;;
+          esac
+        fi
+        printf '%s\n' "$failed" > "$ROOT/last-failed"
+      fi
       mv "$BACKUP" "$APP" || { state recovery-required "$BACKUP"; exit 1; }
       if ! "$CLI" brainbar activate --verify --timeout 90; then
         state recovery-required "Run: $CLI brainbar activate --verify --timeout 90"
         exit 1
       fi
     fi
-    state failed "Step $STEP failed. Run: /opt/homebrew/bin/brainlayer brainbar activate --verify --timeout 90"
+    if [ "$MUTATED" = 0 ]; then
+      state failed "${FAILURE:-Update preflight failed. Check Homebrew and try again. See update.log.}"
+    else
+      state failed "Step $STEP failed. Run: /opt/homebrew/bin/brainlayer brainbar activate --verify --timeout 90"
+    fi
   fi
   cleanup
   exit "$rc"
@@ -76,6 +95,8 @@ preflight() {
   if busy; then state waiting 'Will update when background jobs finish'; exit 0; fi
   if [ -e "$ROOT/cancel-$OP" ]; then rm -f "$ROOT/cancel-$OP"; state cancelled; exit 0; fi
 }
+# Homebrew release/tap metadata fetch; no model call.
+fetch() { brew update </dev/null; }
 pin() {
   brew info --json=v2 --formula etanhey/layers/brainlayer > "$LOCK/formula.json"
   brew info --json=v2 --cask etanhey/layers/brainbar > "$LOCK/cask.json"
@@ -83,12 +104,12 @@ pin() {
   rm -f "$LOCK/formula.json" "$LOCK/cask.json"
 }
 preflight
-brew update </dev/null
+fetch
 pin
 PREFIX=$(brew --prefix)
 CLI="$PREFIX/bin/brainlayer"
 K="$PREFIX/Cellar/brainlayer/$V"
-[ -w "$(dirname "$APP")" ] || { echo "Run: brew upgrade --formula etanhey/layers/brainlayer; brew upgrade --cask etanhey/layers/brainbar" >&2; exit 1; }
+[ -w "$(dirname "$APP")" ] || { FAILURE="Homebrew needs permission. Run: brew upgrade --formula etanhey/layers/brainlayer; brew reinstall --cask etanhey/layers/brainbar"; echo "$FAILURE" >&2; exit 1; }
 pin
 preflight
 STEP=formula
@@ -107,11 +128,12 @@ STEP=backup
 state "$STEP"
 OLD=$("$PLIST" -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist")
 [[ "$OLD" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
-BACKUP="$ROOT/Backups/BrainBar.backup-$OLD-$OP.app"
+BACKUP="$ROOT/Backups.noindex/BrainBar.backup-$OLD-$OP.app"
 mv "$APP" "$BACKUP"
 STEP=cask
 state "$STEP"
-brew upgrade --cask etanhey/layers/brainbar </dev/null
+brew reinstall --cask etanhey/layers/brainbar </dev/null
+[ -d "$APP" ]
 STEP=activate
 state "$STEP"
 "$CLI" brainbar activate --verify --timeout 90
@@ -123,7 +145,7 @@ state success
 # Prune only a backup explicitly recorded by a previous successful invocation.
 if [ -f "$ROOT/last-backup" ]; then
   previous_backup=$(cat "$ROOT/last-backup")
-  case "$previous_backup" in "$ROOT/Backups/BrainBar.backup-"*.app)
+  case "$previous_backup" in "$ROOT/Backups.noindex/BrainBar.backup-"*.app)
     if [ "$previous_backup" != "$BACKUP" ]; then
       ruby -rfileutils -e 'FileUtils.remove_entry_secure(ARGV[0]) if File.directory?(ARGV[0])' "$previous_backup"
     fi ;;
