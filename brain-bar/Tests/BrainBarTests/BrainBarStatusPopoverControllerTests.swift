@@ -41,114 +41,38 @@ final class BrainBarStatusPopoverControllerTests: XCTestCase {
         XCTAssertEqual(overLimit, "Needs attention: \(String(reason.prefix(42)))…")
     }
 
-    func testStatusRowTooltipPreservesTheFullReasonAndClearsOnRecovery() throws {
-        let runtime = BrainBarRuntime(launchMode: .menuItemDaemon)
-        let panelController = BrainBarDashboardPanelController(workspace: BrainBarRecordingWorkspace(), runtime: runtime, designDefaults: brainBarLegacyMenuDefaults())
-        let controller = BrainBarStatusPopoverController(workspace: BrainBarRecordingWorkspace(), runtime: runtime, dashboardPanelController: panelController, statusBar: TestStatusItemHost(), menuDefaults: brainBarLegacyMenuDefaults())
-        defer { controller.stop() }
-        let menu = controller.contextMenuForTesting
-        let statusRow = try XCTUnwrap(menu.items.first)
-        XCTAssertEqual(statusRow.toolTip, "Badge state has not been read yet.")
-
-        let alertsURL = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString)
-        let reason = String(repeating: "The example status reason keeps growing as neutral words repeat. ", count: 10)
-        controller.setBadgeForTesting(.failVisible(reason), alertsURL: alertsURL)
-        controller.menuNeedsUpdate(menu)
-        XCTAssertLessThanOrEqual(statusRow.title.count, 60)
-        XCTAssertTrue(statusRow.title.hasSuffix("…"))
-        XCTAssertEqual(statusRow.toolTip, reason)
-
-        let unboundedMenu = NSMenu(title: "Neutral width reference")
-        unboundedMenu.addItem(NSMenuItem(title: "Needs attention: \(reason)", action: nil, keyEquivalent: ""))
-        XCTAssertLessThan(menu.size.width, unboundedMenu.size.width)
-        print("[menu-width] capped=\(menu.size.width) unbounded=\(unboundedMenu.size.width)")
-
-        controller.setBadgeForTesting(.failVisible("Watcher stopped"), alertsURL: alertsURL)
-        controller.menuNeedsUpdate(menu)
-        XCTAssertEqual(statusRow.title, "Needs attention: Watcher stopped")
-        XCTAssertEqual(statusRow.toolTip, "Watcher stopped")
-
-        controller.setBadgeForTesting(.init(badgeOn: false, reason: "", activeCodes: []), alertsURL: alertsURL)
-        controller.menuNeedsUpdate(menu)
-        XCTAssertEqual(statusRow.title, "Nothing needs attention")
-        XCTAssertNil(statusRow.toolTip)
-    }
-
     func testControllerWiresVariableLengthStatusItemToTheWindow() {
         let runtime = BrainBarRuntime(launchMode: .menuItemDaemon)
-        let panelController = BrainBarDashboardPanelController(workspace: BrainBarRecordingWorkspace(), runtime: runtime, designDefaults: brainBarLegacyMenuDefaults())
+        let panelController = BrainBarDashboardPanelController(workspace: BrainBarRecordingWorkspace(), runtime: runtime, designDefaults: brainBarIsolatedDefaults())
         let controller = BrainBarStatusPopoverController(workspace: BrainBarRecordingWorkspace(), runtime: runtime,
             dashboardPanelController: panelController,
-            statusBar: TestStatusItemHost(), menuDefaults: brainBarLegacyMenuDefaults())
+            statusBar: TestStatusItemHost(), menuDefaults: brainBarIsolatedDefaults())
         defer { controller.stop() }
 
         XCTAssertEqual(controller.statusItemForTesting.length, NSStatusItem.variableLength)
         XCTAssertTrue(controller.statusItemForTesting.menu === controller.contextMenuForTesting)
         XCTAssertEqual(panelController.windowForTesting.contentViewController, panelController.contentViewControllerForTesting)
-        XCTAssertEqual(panelController.windowForTesting.contentViewController?.view.frame.size, NSSize(width: 900, height: 640))
+        XCTAssertEqual(panelController.windowForTesting.contentViewController?.view.frame.width, NDGrid.windowWidth)
         XCTAssertTrue(panelController.windowForTesting.styleMask.contains(.resizable))
     }
 
     func testStatusItemContextMenuContainsNoLaunchModeSwitchingChoices() {
         let runtime = BrainBarRuntime(launchMode: .menuItemDaemon)
-        let windowController = BrainBarDashboardPanelController(workspace: BrainBarRecordingWorkspace(), runtime: runtime, designDefaults: brainBarLegacyMenuDefaults())
+        let windowController = BrainBarDashboardPanelController(workspace: BrainBarRecordingWorkspace(), runtime: runtime, designDefaults: brainBarIsolatedDefaults())
         let controller = BrainBarStatusPopoverController(workspace: BrainBarRecordingWorkspace(), runtime: runtime,
             dashboardPanelController: windowController,
-            statusBar: TestStatusItemHost(), menuDefaults: brainBarLegacyMenuDefaults())
+            statusBar: TestStatusItemHost(), menuDefaults: brainBarIsolatedDefaults())
         defer { controller.stop() }
 
+        controller.menuNeedsUpdate(controller.contextMenuForTesting)
         let itemTitles = controller.contextMenuForTesting.items.map(\.title)
 
-        XCTAssertTrue(itemTitles.contains("Open Dashboard"))
+        XCTAssertFalse(itemTitles.contains("Open Dashboard"))
         XCTAssertTrue(itemTitles.contains("Settings…"))
-        XCTAssertTrue(itemTitles.contains("Restart BrainBar"))
+        XCTAssertTrue(controller.contextMenuForTesting.items.contains { ($0.representedObject as? BrainBarMenuAction) == .restart })
         XCTAssertFalse(itemTitles.contains("Run as App Window"))
         XCTAssertFalse(itemTitles.contains("Run as Menu Item Daemon"))
-        XCTAssertTrue(itemTitles.contains("Quit BrainBar"))
-    }
-
-    func testStatusItemOwnsOneActionableSettingsMenu() throws {
-        let runtime = BrainBarRuntime(launchMode: .menuItemDaemon)
-        let windowController = BrainBarDashboardPanelController(workspace: BrainBarRecordingWorkspace(), runtime: runtime, designDefaults: brainBarLegacyMenuDefaults())
-        let controller = BrainBarStatusPopoverController(workspace: BrainBarRecordingWorkspace(), runtime: runtime,
-            dashboardPanelController: windowController,
-            statusBar: TestStatusItemHost(), menuDefaults: brainBarLegacyMenuDefaults())
-        defer { controller.stop() }
-
-        let menu = controller.contextMenuForTesting
-        // The first row is the informational status line; the rest are actions.
-        // Show log stays hidden while no job alert is active (lead ruling 2026-10-04).
-        let actionableItems = menu.items.filter { !$0.isSeparatorItem && !$0.isHidden }.dropFirst()
-
-        XCTAssertTrue(controller.statusItemForTesting.menu === menu, "every click opens this one menu (#963)")
-        XCTAssertFalse(menu === NSApp.mainMenu)
-        XCTAssertEqual(actionableItems.filter { $0.title.hasPrefix("Settings") }.count, 1)
-        // Gap 26, lead ruling 21 Nov 2026: assert the one Diagnostics insertion, then retain main's expectation.
-        let mainItems = try brainBarItemsWithoutApprovedDiagnostics(menu)
-        XCTAssertEqual(mainItems.filter { !$0.isSeparatorItem && !$0.isHidden }.dropFirst().map(\.title),
-                       ["Open Dashboard", "Settings…", "Restart BrainBar", "Quit BrainBar"])
-        for item in actionableItems {
-            XCTAssertNotNil(item.action, "\(item.title) must have an action")
-            XCTAssertTrue(item.target === controller, "\(item.title) must target the status controller")
-            if let action = item.action {
-                XCTAssertTrue(controller.responds(to: action), "\(item.title) target must respond to its action")
-            }
-        }
-    }
-
-    func testContextMenuOpenDashboardUsesTheStatusPopoverController() {
-        let runtime = BrainBarRuntime(launchMode: .menuItemDaemon)
-        let windowController = BrainBarDashboardPanelController(workspace: BrainBarRecordingWorkspace(), runtime: runtime, designDefaults: brainBarLegacyMenuDefaults())
-        let controller = BrainBarStatusPopoverController(workspace: BrainBarRecordingWorkspace(), runtime: runtime,
-            dashboardPanelController: windowController,
-            statusBar: TestStatusItemHost(), menuDefaults: brainBarLegacyMenuDefaults())
-        defer { controller.stop() }
-
-        let toggle = controller.contextMenuForTesting.items.first { $0.title == "Open Dashboard" }
-
-        XCTAssertNotNil(toggle?.action)
-        XCTAssertTrue(toggle?.target === controller)
-        XCTAssertTrue(toggle.map { controller.responds(to: $0.action!) } ?? false)
+        XCTAssertTrue(controller.contextMenuForTesting.items.contains { ($0.representedObject as? BrainBarMenuAction) == .quit })
     }
 
     func testAppSupportCollectorFactoryWiresBrainBusEvents() {
@@ -194,9 +118,9 @@ final class BrainBarStatusPopoverControllerTests: XCTestCase {
 
     func testControllerStatusItemBelongsToTheInMemoryHostAndStopsOnThatHost() {
         let runtime = BrainBarRuntime(launchMode: .menuItemDaemon)
-        let panelController = BrainBarDashboardPanelController(workspace: BrainBarRecordingWorkspace(), runtime: runtime, designDefaults: brainBarLegacyMenuDefaults())
+        let panelController = BrainBarDashboardPanelController(workspace: BrainBarRecordingWorkspace(), runtime: runtime, designDefaults: brainBarIsolatedDefaults())
         let host = TestStatusItemHost()
-        let controller = BrainBarStatusPopoverController(workspace: BrainBarRecordingWorkspace(), runtime: runtime, dashboardPanelController: panelController, statusBar: host, menuDefaults: brainBarLegacyMenuDefaults())
+        let controller = BrainBarStatusPopoverController(workspace: BrainBarRecordingWorkspace(), runtime: runtime, dashboardPanelController: panelController, statusBar: host, menuDefaults: brainBarIsolatedDefaults())
         defer { controller.stop() }
 
         XCTAssertTrue(controller.statusItemForTesting === host.createdItem,
@@ -218,9 +142,9 @@ final class BrainBarStatusPopoverControllerTests: XCTestCase {
         weak var releasedButton: NSButton?
         autoreleasepool {
             let runtime = BrainBarRuntime(launchMode: .menuItemDaemon)
-            let panelController = BrainBarDashboardPanelController(workspace: BrainBarRecordingWorkspace(), runtime: runtime, designDefaults: brainBarLegacyMenuDefaults())
+            let panelController = BrainBarDashboardPanelController(workspace: BrainBarRecordingWorkspace(), runtime: runtime, designDefaults: brainBarIsolatedDefaults())
             let host = TestStatusItemHost()
-            let controller = BrainBarStatusPopoverController(workspace: BrainBarRecordingWorkspace(), runtime: runtime, dashboardPanelController: panelController, statusBar: host, menuDefaults: brainBarLegacyMenuDefaults())
+            let controller = BrainBarStatusPopoverController(workspace: BrainBarRecordingWorkspace(), runtime: runtime, dashboardPanelController: panelController, statusBar: host, menuDefaults: brainBarIsolatedDefaults())
             releasedController = controller
             releasedHost = host
             releasedItem = host.createdItem
@@ -245,64 +169,6 @@ final class BrainBarStatusPopoverControllerTests: XCTestCase {
         }
     }
 
-    func test_D1_native_menu_action_opens_file_or_folder_and_scopes_failure_feedback() throws {
-        let root = URL(fileURLWithPath: brainBarTestTemporaryPath()).appendingPathComponent("brainbar-d1-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: root) }
-        let paths = BrainBarBackupSources.Paths(launchAgents: root, databaseLog: root.appendingPathComponent("backup.log"),
-            archiveLog: root.appendingPathComponent("archive.log"), maintenanceLog: root.appendingPathComponent("maintenance.log"),
-            snapshotDirectory: root, archiveDirectory: root)
-        let workspace = D1Workspace()
-        let runtime = BrainBarRuntime(launchMode: .menuItemDaemon)
-        let panel = BrainBarDashboardPanelController(workspace: workspace, runtime: runtime, designDefaults: brainBarLegacyMenuDefaults())
-        let controller = BrainBarStatusPopoverController(workspace: workspace, runtime: runtime,
-            dashboardPanelController: panel, statusBar: TestStatusItemHost(), menuDefaults: brainBarLegacyMenuDefaults())
-        controller.setLogPathsForTesting(paths)
-        defer { controller.stop() }
-        let menu = controller.contextMenuForTesting
-        let action = try XCTUnwrap(menu.items.first { $0.action == NSSelectorFromString("showJobAlertLog:") })
-        XCTAssertTrue(action.target === controller)
-        XCTAssertFalse(menu.autoenablesItems)
-        func badge(_ key: String, reason: String = "Failed") {
-            controller.setBadgeForTesting(.init(badgeOn: true, reason: reason, activeCodes: ["job_alert_\(key)"]),
-                alertsURL: root.appendingPathComponent("absent-alerts.json"))
-            controller.menuNeedsUpdate(menu)
-        }
-        for key in ["unknown-job", "maintenance-light"] {
-            badge(key)
-            XCTAssertFalse(action.isHidden)
-            XCTAssertTrue(action.isEnabled, "the fallback must be clickable")
-            if action.isEnabled {
-                XCTAssertTrue(NSApplication.shared.sendAction(try XCTUnwrap(action.action), to: action.target, from: action))
-            }
-            XCTAssertEqual(workspace.opened.last?.path, root.path)
-        }
-        try Data("log".utf8).write(to: paths.maintenanceLog)
-        badge("maintenance-light")
-        XCTAssertEqual(action.title, "Show log")
-        XCTAssertTrue(NSApplication.shared.sendAction(try XCTUnwrap(action.action), to: action.target, from: action))
-        XCTAssertEqual(workspace.opened.last, paths.maintenanceLog)
-
-        workspace.acceptsOpen = false
-        XCTAssertTrue(NSApplication.shared.sendAction(try XCTUnwrap(action.action), to: action.target, from: action))
-        controller.menuNeedsUpdate(menu)
-        let note = menu.items.first { !$0.isHidden && $0.title.contains("Could not open") }
-        XCTAssertNotNil(note)
-        XCTAssertNil(note?.action, "feedback must not pretend to be an opener")
-        XCTAssertEqual(note?.isEnabled, false)
-        XCTAssertTrue(action.isEnabled, "failure feedback must not disable retry")
-        workspace.acceptsOpen = true
-        XCTAssertTrue(NSApplication.shared.sendAction(try XCTUnwrap(action.action), to: action.target, from: action))
-        XCTAssertFalse(menu.items.contains { !$0.isHidden && $0.title.contains("Could not open") })
-        workspace.acceptsOpen = false
-        XCTAssertTrue(NSApplication.shared.sendAction(try XCTUnwrap(action.action), to: action.target, from: action))
-        badge("maintenance-light", reason: "A different failure")
-        XCTAssertFalse(menu.items.contains { !$0.isHidden && $0.title.contains("Could not open") })
-        controller.setBadgeForTesting(.init(badgeOn: false, reason: "", activeCodes: []), alertsURL: root)
-        controller.menuNeedsUpdate(menu)
-        XCTAssertTrue(action.isHidden)
-    }
-
     private func packageRoot() -> URL {
         URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
@@ -310,129 +176,8 @@ final class BrainBarStatusPopoverControllerTests: XCTestCase {
             .deletingLastPathComponent()
     }
 
-    func testStoppedCalendarBackupWithoutJobAlertHasReachableAcknowledgedLogAction() throws {
-        let root = brainBarTestTemporaryDirectory().appendingPathComponent("brainbar-stopped-log-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: root) }
-        let paths = BrainBarBackupSources.Paths(launchAgents: root, databaseLog: root.appendingPathComponent("backup.log"),
-            archiveLog: root.appendingPathComponent("archive.log"), maintenanceLog: root.appendingPathComponent("maintenance.log"),
-            snapshotDirectory: root, archiveDirectory: root)
-        let workspace = D1Workspace()
-        let store = BrainLayerConfigStore(configURL: root.appendingPathComponent("fixture.env"))
-        try store.save(.defaultConfig)
-        let reason = "Backup Daily: calendar result stopped, exit 143"
-        let clock = Date(timeIntervalSince1970: 1_792_814_400)
-        let runtime = BrainBarRuntime(launchMode: .menuItemDaemon)
-        runtime.jobsModel = BrainBarSettingsViewModel(workspace: workspace, store: store,
-            initialLaunchdStates: [.backupDaily: .failed(reason)], refreshStatusOnLoad: false, now: { clock })
-        let panel = BrainBarDashboardPanelController(workspace: workspace, runtime: runtime, designDefaults: brainBarLegacyMenuDefaults())
-        let controller = BrainBarStatusPopoverController(workspace: workspace, runtime: runtime,
-            dashboardPanelController: panel, statusBar: TestStatusItemHost(), menuDefaults: brainBarLegacyMenuDefaults())
-        defer { controller.stop() }
-        controller.setLogPathsForTesting(paths)
-        controller.setBadgeForTesting(.init(badgeOn: false, reason: "", activeCodes: []),
-            alertsURL: root.appendingPathComponent("absent-alerts.json"))
-        let menu = controller.contextMenuForTesting
-        controller.menuNeedsUpdate(menu)
-        // Backup failures are first among notices, without a dot; log actions remain reachable.
-        XCTAssertTrue(menu.items.first?.toolTip?.hasPrefix(reason) == true, menu.items.first?.toolTip ?? "nil")
-        XCTAssertFalse(controller.statusDotForTesting)
-        let action = try XCTUnwrap(menu.items.first {
-            !$0.isHidden && $0.isEnabled && $0.action == NSSelectorFromString("showJobAlertLog:")
-        }, "The actual stopped-backup menu must expose a log action without a job-alert badge")
-        func click() throws {
-            XCTAssertTrue(NSApplication.shared.sendAction(try XCTUnwrap(action.action), to: action.target, from: action))
-        }
-        XCTAssertEqual(action.title, "Open logs folder")
-        try click()
-        XCTAssertEqual(workspace.opened.last?.path, root.path)
-        XCTAssertTrue(menu.items.contains { !$0.isHidden && $0.title.contains("Opened the logs folder") })
-        try Data("private fixture".utf8).write(to: paths.databaseLog)
-        controller.menuNeedsUpdate(menu)
-        XCTAssertEqual(action.title, "Show log")
-        try click()
-        XCTAssertEqual(workspace.opened.last, paths.databaseLog)
-        workspace.acceptsOpen = false
-        try click()
-        XCTAssertTrue(menu.items.contains { !$0.isHidden && $0.title.contains("Could not open log") })
-        workspace.acceptsOpen = true
-        try click()
-        XCTAssertFalse(menu.items.contains { !$0.isHidden && $0.title.contains("Could not open") })
-        runtime.jobsModel?.config.launchdJobs[.backupDaily]?.loadState = .loaded
-        controller.menuNeedsUpdate(menu)
-        XCTAssertTrue(action.isHidden)
-    }
-
     func testJobsExposeStoppedBackupControlWithoutJobAlert() throws {
         try assertStoppedBackupControl(on: .jobs)
-    }
-
-    func testR1MenuRoutesToEnabledFailureAndHandlesReverseRecoveryAndAlertPrecedence() throws {
-        let root = brainBarTestTemporaryDirectory().appendingPathComponent("brainbar-r1-menu-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: root) }
-        let paths = BrainBarBackupSources.Paths(launchAgents: root, databaseLog: root.appendingPathComponent("backup.log"),
-            archiveLog: root.appendingPathComponent("archive.log"), maintenanceLog: root.appendingPathComponent("maintenance.log"),
-            snapshotDirectory: root, archiveDirectory: root)
-        for log in [paths.databaseLog, paths.archiveLog, paths.maintenanceLog] { try Data("private fixture".utf8).write(to: log) }
-        let store = BrainLayerConfigStore(configURL: root.appendingPathComponent("fixture.env"))
-        let workspace = D1Workspace()
-        let runtime = BrainBarRuntime(launchMode: .menuItemDaemon)
-        let panel = BrainBarDashboardPanelController(workspace: workspace, runtime: runtime, designDefaults: brainBarLegacyMenuDefaults())
-        let controller = BrainBarStatusPopoverController(workspace: workspace, runtime: runtime,
-            dashboardPanelController: panel, statusBar: TestStatusItemHost(), menuDefaults: brainBarLegacyMenuDefaults())
-        defer { controller.stop() }
-        controller.setLogPathsForTesting(paths)
-        controller.setBadgeForTesting(.init(badgeOn: false, reason: "", activeCodes: []),
-            alertsURL: root.appendingPathComponent("absent-alerts.json"))
-        let menu = controller.contextMenuForTesting
-        let action = try XCTUnwrap(menu.items.first { $0.action == NSSelectorFromString("showJobAlertLog:") })
-        let dailyReason = "Daily stopped", jsonlReason = "JSONL stopped"
-        let clock = Date(timeIntervalSince1970: 1_792_814_400)
-        func install(daily: Bool, jsonl: Bool, recovered: Bool = false) throws {
-            var config = BrainLayerConfig.defaultConfig
-            config.launchdJobs[.backupDaily]?.enabled = daily
-            config.launchdJobs[.jsonlBackup]?.enabled = jsonl
-            try store.save(config)
-            let states: [BrainLayerLaunchdJob: BrainLayerLaunchdLoadState] = [
-                .backupDaily: .failed(dailyReason), .jsonlBackup: recovered ? .loaded : .failed(jsonlReason)]
-            let model = BrainBarSettingsViewModel(workspace: workspace, store: store,
-                launchdStatusProvider: StaticBrainLayerLaunchdStatusProvider(states: states),
-                embeddingResidencyProbe: StaticBrainBarEmbeddingResidencyProbe(state: .unmeasurable),
-                initialLaunchdStates: states, refreshStatusOnLoad: false, now: { clock })
-            XCTAssertTrue(model.reloadConfigFromDisk(), "reload must retain the sampled failure alongside desired OFF")
-            runtime.jobsModel = model
-            controller.menuNeedsUpdate(menu)
-        }
-        func click(expected: URL, warning: String) throws {
-            // S5: the status row's tooltip lists every current reason, including the routed one.
-            XCTAssertTrue(menu.items.first?.toolTip?.contains(warning) == true, menu.items.first?.toolTip ?? "nil")
-            XCTAssertFalse(action.isHidden)
-            XCTAssertTrue(action.isEnabled)
-            let count = workspace.opened.count
-            XCTAssertTrue(NSApplication.shared.sendAction(try XCTUnwrap(action.action), to: action.target, from: action))
-            XCTAssertEqual(workspace.opened.count, count + 1)
-            XCTAssertEqual(workspace.opened.last, expected)
-        }
-        try install(daily: false, jsonl: true)
-        try click(expected: paths.archiveLog, warning: jsonlReason)
-        try install(daily: true, jsonl: false)
-        try click(expected: paths.databaseLog, warning: dailyReason)
-        try install(daily: true, jsonl: true)
-        try click(expected: paths.databaseLog, warning: dailyReason)
-        for recovered in [false, true] {
-            try install(daily: false, jsonl: recovered, recovered: recovered)
-            XCTAssertTrue(action.isHidden, "disabled history and recovered enabled jobs must not offer a menu action")
-            let count = workspace.opened.count
-            XCTAssertTrue(NSApplication.shared.sendAction(try XCTUnwrap(action.action), to: action.target, from: action))
-            XCTAssertEqual(workspace.opened.count, count, "a stale action must not open a historical failure")
-        }
-        try install(daily: false, jsonl: true)
-        try click(expected: paths.archiveLog, warning: jsonlReason)
-        controller.setBadgeForTesting(.init(badgeOn: true, reason: "Maintenance stopped", activeCodes: ["job_alert_maintenance-light"]),
-            alertsURL: root.appendingPathComponent("absent-alerts.json"))
-        controller.menuNeedsUpdate(menu)
-        try click(expected: paths.maintenanceLog, warning: "Maintenance stopped")
     }
 
     func testBackupLogTargetsUseTypedIdentityAndExcludeNonfailures() {

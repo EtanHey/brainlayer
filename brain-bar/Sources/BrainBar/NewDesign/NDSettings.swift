@@ -1,7 +1,7 @@
 import AppKit
 import SwiftUI
 
-/// Settings (⌘,): account, design, settings file, Diagnostics and the meaning-search explanation.
+/// Settings (⌘,): account, settings file, Diagnostics and the meaning-search explanation.
 @MainActor final class NDSettingsWindowController: NSObject, NSWindowDelegate {
     static let width: CGFloat = 480
     private static var current: NDSettingsWindowController?
@@ -11,7 +11,6 @@ import SwiftUI
 
     init(store: NDStore) {
         self.store = store
-        // The Design control writes the store's preferences: the app's own, or a capture fixture's separate suite (F06).
         let hosting = NSHostingController(rootView: NDSettingsView(store: store).defaultAppStorage(store.preferences))
         // Review blocker 2: the window opened larger than its three rows (the first capture shows them as a strip at the
         // top of an empty window). Its size is now its content's, measured and fixed before it is ever shown.
@@ -69,7 +68,7 @@ import SwiftUI
         controller.window.makeKeyAndOrderFront(nil)
     }
 
-    /// Switching to Classic closes the new design's Settings window and lets it go (N02).
+    /// Releases the Settings window when its owner shuts down.
     static func closeIfOpen() {
         current?.window.close()
         current = nil
@@ -86,14 +85,10 @@ import SwiftUI
 
 struct NDSettingsView: View {
     @ObservedObject var store: NDStore
-    @AppStorage(BrainBarDesign.key) private var design: String = BrainBarDesign.defaultValue.rawValue
     var configPath: String = "~/.config/brainlayer/brainlayer.env"
     private typealias Say = BrainBarMenuPresenter.SurfaceSay
 
-    static func designIndex(for stored: String) -> Int {
-        let resolved = BrainBarDesign(rawValue: stored) ?? BrainBarDesign.defaultValue
-        return BrainBarDesign.allCases.firstIndex(of: resolved)!
-    }
+
 
     var body: some View {
         let modelLines = BrainBarSettingsExplanation.model(BrainBarEmbeddingModel.configuredName)
@@ -102,15 +97,6 @@ struct NDSettingsView: View {
                 .overlay(alignment: .bottom) { ND.hair.frame(height: 0.5) }
             VStack(alignment: .leading, spacing: 0) {
                 VStack(spacing: 0) {
-                    row(Say.design) {
-                        Spacer()
-                        NDSegments(titles: BrainBarDesign.allCases.map(\.title),
-                                   selection: Binding(get: { Self.designIndex(for: design) },
-                                                      set: { design = BrainBarDesign.allCases[$0].rawValue }),
-                                   accessibilityLabel: Say.design, fontSize: 11, padding: 10, controlSize: .small)
-                            .fixedSize()
-                    }
-                    ND.hair.frame(height: 0.5)
                     row(Say.stageDrive) {
                         Spacer()
                         Text(driveState).font(NDType.body).foregroundStyle(store.model.drive.action != nil ? ND.redText : ND.t2)
@@ -140,8 +126,6 @@ struct NDSettingsView: View {
                 }
                 .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(ND.raised))
                 .ndDecoration(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(ND.hair2, lineWidth: 0.5))
-                Text(Say.classicCaption).font(NDType.caption).foregroundStyle(ND.t3)
-                    .padding(.horizontal, 12).padding(.top, 8)
                 if !modelLines.isEmpty {
                     Text(Say.meaningModel).font(NDType.bodyStrong).padding(.top, 16)
                     ForEach(modelLines, id: \.self) { line in

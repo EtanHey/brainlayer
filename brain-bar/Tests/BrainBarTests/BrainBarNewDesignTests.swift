@@ -43,8 +43,6 @@ import SwiftUI
             let controller = BrainBarDashboardPanelController(workspace: BrainBarRecordingWorkspace(), runtime: BrainBarRuntime())
             controller.visibleHeightOverride = 2000
             controller.reduceMotionForTesting = false
-            controller.designDefaults = d
-            controller.applyDesign()
             let store = controller.newDesignStore
             store.setInputsForTesting(BrainBarDesignFixture.inputs(name))
             let window = controller.windowForTesting
@@ -101,8 +99,6 @@ import SwiftUI
         // counts as visible (it is never shown).
         controller.visibleHeightOverride = 2000
         controller.reduceMotionForTesting = false
-        controller.designDefaults = d
-        controller.applyDesign()
         let store = controller.newDesignStore
         let window = controller.windowForTesting
         store.page = .backups
@@ -178,7 +174,7 @@ import SwiftUI
                                                                    hostedNew: Int) {
         let d = defaults()
         if let design { d.set(design, forKey: BrainBarDesign.key) }
-        if let newMenu { d.set(newMenu, forKey: BrainBarNewMenuPreference.key) }
+        if let newMenu { d.set(newMenu, forKey: "BrainBarNewMenuEnabled") }
         let host = Host()
         let controller = BrainBarStatusPopoverController(workspace: BrainBarRecordingWorkspace(),
             runtime: BrainBarRuntime(launchMode: .menuItemDaemon), dashboardPanelController: nil, statusBar: host, menuDefaults: d)
@@ -187,35 +183,24 @@ import SwiftUI
             alertsURL: URL(fileURLWithPath: "/tmp/nd-absent-" + UUID().uuidString))
         controller.menuNeedsUpdate(controller.contextMenuForTesting)
         controller.renderStatusIconForTesting(stats: stats(), state: .idle)
-        // Gap 26, lead ruling 21 Nov 2026: compare Classic to main after asserting its sole Diagnostics insertion.
-        let items = BrainBarDesign.current(in: d) == .classic
-            ? try brainBarItemsWithoutApprovedDiagnostics(controller.contextMenuForTesting)
-            : controller.contextMenuForTesting.items
+        let items = controller.contextMenuForTesting.items
         return (items.map(\.title), items.map { ($0.representedObject as? BrainBarMenuAction).map { "\($0)" } ?? "" },
                 try png(host.item.view.image), host.item.view.image?.size ?? .zero,
                 items.filter { $0.view is NDMenuRowHost }.count)
     }
 
-    /// The default matches stored New; Classic keeps its menu and icon plus the asserted Diagnostics insertion.
-    func testDefaultMatchesNewAndStoredClassicKeepsItsMenuAndIcon() throws {
+    /// Every stored legacy value draws the same current menu and icon.
+    func testEveryStoredDesignShowsTheNewMenuAndIcon() throws {
         for newMenu in [nil, false, true] as [Bool?] {
-            let absent = try shown(design: nil, newMenu: newMenu)
-            let stored = try shown(design: "new", newMenu: newMenu)
-            XCTAssertEqual(stored.titles, absent.titles, "menu titles, new menu \(String(describing: newMenu))")
-            XCTAssertEqual(stored.actions, absent.actions)
-            XCTAssertEqual(stored.image, absent.image, "icon pixels, new menu \(String(describing: newMenu))")
-            XCTAssertGreaterThanOrEqual(stored.hostedNew, 5)
+            let expected = try shown(design: "new", newMenu: newMenu)
+            for value in [nil, "classic", "unknown", ""] as [String?] {
+                let actual = try shown(design: value, newMenu: newMenu)
+                XCTAssertEqual(actual.titles, expected.titles)
+                XCTAssertEqual(actual.actions, expected.actions)
+                XCTAssertEqual(actual.image, expected.image)
+                XCTAssertGreaterThanOrEqual(actual.hostedNew, 5)
+            }
         }
-        // Main's own expectations for the two menu settings (BrainBarBrainIconTests): charts and the legacy rows when off,
-        // the 22 pt brain and the presenter's standing items when on.
-        let off = try shown(design: "classic", newMenu: false)
-        XCTAssertEqual(off.hostedNew, 0)
-        XCTAssertEqual(off.titles, ["Nothing needs attention", "Show log", "", "", "Open Dashboard", "Settings…", "", "Restart BrainBar", "", "Quit BrainBar"])
-        XCTAssertEqual(off.size, NSSize(width: 26, height: 14))
-        let on = try shown(design: "classic", newMenu: nil)
-        XCTAssertEqual(on.hostedNew, 0)
-        XCTAssertEqual(on.size, NSSize(width: 22, height: 22))
-        XCTAssertFalse(on.titles.contains("Open Dashboard"))
     }
 
     func testAbsentDesignIsNewAndReadingNeverWrites() {
@@ -227,10 +212,10 @@ import SwiftUI
         d.set("something else", forKey: BrainBarDesign.key)
         XCTAssertEqual(BrainBarDesign.current(in: d), .new, "an unknown value uses the default")
         d.set("classic", forKey: BrainBarDesign.key)
-        XCTAssertEqual(BrainBarDesign.current(in: d), .classic)
+        XCTAssertEqual(BrainBarDesign.current(in: d), .new)
     }
 
-    func testNewDesignDrawsItsOwnMenuAndIconAndSwitchesBackLive() throws {
+    func testNewDesignDrawsItsOwnMenuAndIconDespiteOldStoredPreferences() throws {
         let new = try shown(design: "new", newMenu: nil)
         XCTAssertGreaterThanOrEqual(new.hostedNew, 5, "headline and four area rows")
         XCTAssertTrue(new.actions.contains("settings"))
@@ -249,7 +234,7 @@ import SwiftUI
         d.set("classic", forKey: BrainBarDesign.key)
         controller.menuNeedsUpdate(controller.contextMenuForTesting)
         controller.renderStatusIconForTesting(stats: stats(), state: .idle)
-        XCTAssertFalse(controller.contextMenuForTesting.items.contains { $0.view is NDMenuRowHost })
+        XCTAssertTrue(controller.contextMenuForTesting.items.contains { $0.view is NDMenuRowHost })
         XCTAssertEqual(host.item.view.alphaValue, 1)
     }
 
@@ -266,8 +251,6 @@ import SwiftUI
         let d = defaults()
         d.set("new", forKey: BrainBarDesign.key)
         let controller = BrainBarDashboardPanelController(workspace: BrainBarRecordingWorkspace(), runtime: BrainBarRuntime())
-        controller.designDefaults = d
-        controller.applyDesign()
         let window = controller.windowForTesting
         let toolbar = try XCTUnwrap(window.toolbar)
         let delegate = try XCTUnwrap(toolbar.delegate)
@@ -310,8 +293,6 @@ import SwiftUI
         d.set("new", forKey: BrainBarDesign.key)
         let controller = BrainBarDashboardPanelController(workspace: BrainBarRecordingWorkspace(), runtime: BrainBarRuntime())
         controller.visibleHeightOverride = 600
-        controller.designDefaults = d
-        controller.applyDesign()
         controller.fitPage(.overview)
         let store = controller.newDesignStore
         let cap: CGFloat = 600 - controller.fitTitleBarHeight
@@ -339,27 +320,16 @@ import SwiftUI
         XCTAssertGreaterThan(NDPageHeight.content(store, page: .overview) + NDGrid.pageTop + 20, frame.height + 1, "the page scrolls")
     }
 
-    /// The window: classic keeps main's hosting controller and root type; new swaps in its own and swaps back.
-    func testWindowRootIsMainsInClassicAndSwapsLive() async throws {
-        _ = defaults()
-        let controller = BrainBarDashboardPanelController(workspace: BrainBarRecordingWorkspace(), runtime: BrainBarRuntime(),
-                                                          designDefaults: brainBarLegacyMenuDefaults())
-        let classic = controller.contentViewControllerForTesting
-        XCTAssertTrue(controller.windowForTesting.contentViewController === classic)
-        XCTAssertTrue(String(describing: type(of: classic)).contains("BrainBarWindowRootView"), String(describing: type(of: classic)))
-        XCTAssertEqual(controller.windowForTesting.minSize, BrainBarDashboardPanelController.minSize)
-        XCTAssertFalse(controller.isShownForTesting)
-
+    /// Stored preferences cannot replace the current window content or page sizing.
+    func testEveryStoredDesignKeepsTheNewWindowAndPageSizing() throws {
         let d = defaults()
-        d.set("new", forKey: BrainBarDesign.key)
-        controller.designDefaults = d
-        NotificationCenter.default.post(name: UserDefaults.didChangeNotification, object: d)
-        XCTAssertTrue(controller.windowForTesting.contentViewController === classic, "defaults notifications never swap reentrantly")
-        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-            DispatchQueue.main.async { continuation.resume() }
-        }
+        d.set("classic", forKey: BrainBarDesign.key)
+        let controller = BrainBarDashboardPanelController(workspace: BrainBarRecordingWorkspace(), runtime: BrainBarRuntime(),
+                                                          designDefaults: d)
         let new = try XCTUnwrap(controller.windowForTesting.contentViewController)
-        XCTAssertTrue(String(describing: type(of: new)).contains("NDWindowRoot"), String(describing: type(of: new)))
+        XCTAssertTrue(String(describing: type(of: new)).contains("NDWindowRoot"))
+        XCTAssertTrue(controller.contentViewControllerForTesting === new)
+        XCTAssertFalse(controller.isShownForTesting)
         // Review blocker 1: one unified 52 pt row, the pages control centred in the toolbar.
         XCTAssertEqual(controller.windowForTesting.toolbarStyle, .unified)
         XCTAssertEqual(controller.windowForTesting.toolbar?.centeredItemIdentifiers, [NDToolbar.pages])
@@ -387,18 +357,12 @@ import SwiftUI
         controller.fitPage(.overview)
         XCTAssertFalse(controller.isShownForTesting, "a design switch never opens the window")
 
-        d.set("classic", forKey: BrainBarDesign.key)
-        NotificationCenter.default.post(name: UserDefaults.didChangeNotification, object: d)
-        XCTAssertTrue(controller.windowForTesting.contentViewController === new, "the current mutation completes before swapping")
-        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-            // The observer swaps on the first hop; AppKit and the Classic size restoration
-            // finish on the next. Never call applyDesign synchronously from this test.
-            DispatchQueue.main.async { DispatchQueue.main.async { continuation.resume() } }
+        for value in ["new", "classic", "unknown"] {
+            d.set(value, forKey: BrainBarDesign.key)
+            NotificationCenter.default.post(name: UserDefaults.didChangeNotification, object: d)
+            XCTAssertTrue(controller.windowForTesting.contentViewController === new)
+            XCTAssertEqual(d.string(forKey: BrainBarDesign.key), value)
         }
-        XCTAssertTrue(controller.windowForTesting.contentViewController === classic)
-        XCTAssertEqual(controller.shownDesign, .classic, "the deferred observer completed the Classic swap")
-        XCTAssertEqual(controller.windowForTesting.minSize, BrainBarDashboardPanelController.minSize)
-        XCTAssertNil(controller.windowForTesting.toolbar, "Classic's chrome is main's: no toolbar")
     }
 
     /// Gaps 21/26/12: four rows, backup caption, design caption and model explanation; fixed before showing.
@@ -409,9 +373,8 @@ import SwiftUI
         let settings = NDSettingsWindowController(store: store)
         let size = settings.window.contentRect(forFrameRect: settings.window.frame).size
         XCTAssertEqual(size.width, 480)
-        // The old 200 pt ceiling covered only three rows. Four rows alone, with the bar and insets, need 212 pt;
-        // the backup/design captions and two-line model explanation fit within a 400 pt full-form ceiling.
-        XCTAssertGreaterThanOrEqual(size.height, NDSettingsWindowController.titleBar + 40 + 4 * NDGrid.formRow)
+        // Three account/file/diagnostics rows, the backup caption and model explanation fit within the form.
+        XCTAssertGreaterThanOrEqual(size.height, NDSettingsWindowController.titleBar + 40 + 3 * NDGrid.formRow)
         XCTAssertLessThanOrEqual(size.height, 400)
         XCTAssertFalse(settings.window.styleMask.contains(.resizable))
         XCTAssertEqual(settings.window.contentMaxSize, size)
@@ -813,14 +776,14 @@ final class BrainBarNewDesignBackupHistoryTests: XCTestCase {
 
     /// F04: no subscription or task runs unless a surface shows the new design; a history read in flight when the
     /// window closes is cancelled and publishes nothing.
-    func testNewDesignWorkStopsOnSwitchAndClose() async throws {
+    func testNewDesignWorkStopsWhenSurfacesClose() async throws {
         let runtime = BrainBarRuntime()
         let store = NDStore(runtime: runtime, workspace: BrainBarRecordingWorkspace())
         XCTAssertEqual(store.liveWorkCount, 0, "a new store does nothing until asked")
         store.setIconActive(true)
         XCTAssertGreaterThan(store.liveWorkCount, 0)
         store.setIconActive(false)
-        XCTAssertEqual(store.liveWorkCount, 0, "back to Classic: every subscription and task gone")
+        XCTAssertEqual(store.liveWorkCount, 0, "closing the icon: every subscription and task gone")
 
         let dir = URL(fileURLWithPath: "/nonexistent-nd-test")
         store.setBackupPathsForTesting(.init(launchAgents: dir, databaseLog: dir, archiveLog: dir, maintenanceLog: dir,
@@ -851,30 +814,6 @@ final class BrainBarNewDesignBackupHistoryTests: XCTestCase {
         XCTAssertEqual(store.inputs.backupHistory, .unread, "a read finishing after close publishes nothing")
     }
 
-    func testClassicControllersCreateNoNewDesignStore() {
-        let d = suite()
-        d.set("classic", forKey: BrainBarDesign.key)
-        let runtime = BrainBarRuntime(launchMode: .menuItemDaemon)
-        let panel = BrainBarDashboardPanelController(workspace: BrainBarRecordingWorkspace(), runtime: runtime, designDefaults: d)
-        panel.designDefaults = d
-        let controller = BrainBarStatusPopoverController(workspace: BrainBarRecordingWorkspace(), runtime: runtime,
-            dashboardPanelController: panel, statusBar: Host(), menuDefaults: d)
-        defer { controller.stop() }
-        controller.menuNeedsUpdate(controller.contextMenuForTesting)
-        XCTAssertNil(NDStore.existing(for: runtime), "Classic never builds the new design's store or its work")
-
-        d.set("new", forKey: BrainBarDesign.key)
-        controller.menuNeedsUpdate(controller.contextMenuForTesting)
-        let store = try? XCTUnwrap(NDStore.existing(for: runtime))
-        XCTAssertEqual(store?.iconActive, true)
-        d.set("classic", forKey: BrainBarDesign.key)
-        controller.menuNeedsUpdate(controller.contextMenuForTesting)
-        panel.applyDesign()
-        XCTAssertEqual(store?.iconActive, false)
-        XCTAssertEqual(store?.windowActive, false)
-        XCTAssertEqual(store?.liveWorkCount, 0)
-    }
-
     /// F06: a capture keeps its window frame and Design choice in its own suite; the app's defaults are untouched.
     func testCaptureWritesOnlyItsOwnPreferences() throws {
         NSApplication.shared.setActivationPolicy(.prohibited)
@@ -888,11 +827,9 @@ final class BrainBarNewDesignBackupHistoryTests: XCTestCase {
         XCTAssertNotEqual(BrainBarDesignFixture.captureSuiteName, bundleID)
         let (panel, status) = BrainBarDesignFixture.makeCaptureSurfaces(runtime: BrainBarRuntime(), activationPolicy: nil, statusBar: Host())
         defer { status.stop() }
-        XCTAssertTrue(panel.designDefaults === BrainBarDesignFixture.capturePreferences)
         XCTAssertTrue(panel.newDesignStore.preferences === BrainBarDesignFixture.capturePreferences)
         XCTAssertTrue(panel.newDesignStore.isFixture)
-        XCTAssertEqual(BrainBarDesignFixture.capturePreferences.string(forKey: BrainBarDesign.key), BrainBarDesign.new.rawValue,
-                       "fix 4: the capture's Settings shows the design it draws")
+        XCTAssertNil(BrainBarDesignFixture.capturePreferences.object(forKey: BrainBarDesign.key))
         panel.placeWindowForTesting()
         panel.prepareForClose()
         XCTAssertNotNil(BrainBarDesignFixture.capturePreferences.string(forKey: key), "the capture's frame went to its own suite")
@@ -1160,148 +1097,6 @@ final class BrainBarNewDesignBackupHistoryTests: XCTestCase {
                 XCTAssertEqual(-newest, hours, accuracy: 1, "\(name.rawValue) \(lane.name)")
             }
         }
-    }
-}
-
-/// F05: Classic against an oracle recorded from origin/main's own code (an export of `origin/main` 84b0e7a5 with a
-/// recorder test, `Fixtures/classic-main-golden.json`), never against the code under test: the menu's titles, actions,
-/// enabled states and keys, the icon's size, template flag and pixels, and the window's root type and minimum size.
-@MainActor final class BrainBarClassicGoldenTests: XCTestCase {
-    private final class Button: NSButton {}
-    private final class Item: BrainBarStatusItem {
-        let length: CGFloat = NSStatusItem.variableLength
-        var menu: NSMenu?
-        let view = Button()
-        var button: NSButton? { view }
-    }
-    private final class Host: BrainBarStatusItemHosting {
-        let item = Item()
-        func statusItem(withLength: CGFloat) -> any BrainBarStatusItem { item }
-        func removeStatusItem(_ item: any BrainBarStatusItem) {}
-    }
-
-    static func golden() throws -> [String: Any] {
-        let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("Fixtures/classic-main-golden.json")
-        return try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
-    }
-
-    /// Pixels compared on the alpha and colour channels with a small tolerance, so a different macOS's antialiasing passes
-    /// and a changed drawing does not.
-    static func pixelsMatch(_ a: Data, _ b: Data) -> (Bool, String) {
-        guard let ra = NSBitmapImageRep(data: a), let rb = NSBitmapImageRep(data: b) else { return (false, "undecodable") }
-        guard ra.pixelsWide == rb.pixelsWide, ra.pixelsHigh == rb.pixelsHigh else {
-            return (false, "size \(ra.pixelsWide)x\(ra.pixelsHigh) vs \(rb.pixelsWide)x\(rb.pixelsHigh)")
-        }
-        var total = 0, worst = 0
-        for y in 0..<ra.pixelsHigh {
-            for x in 0..<ra.pixelsWide {
-                guard let ca = ra.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB),
-                      let cb = rb.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB) else { continue }
-                let d = [abs(ca.alphaComponent - cb.alphaComponent), abs(ca.redComponent * ca.alphaComponent - cb.redComponent * cb.alphaComponent),
-                         abs(ca.greenComponent * ca.alphaComponent - cb.greenComponent * cb.alphaComponent),
-                         abs(ca.blueComponent * ca.alphaComponent - cb.blueComponent * cb.alphaComponent)].max()!
-                let v = Int(d * 255)
-                total += v
-                worst = max(worst, v)
-            }
-        }
-        let mean = Double(total) / Double(ra.pixelsWide * ra.pixelsHigh)
-        return (mean < 2 && worst < 96, "mean \(mean) worst \(worst)")
-    }
-
-    /// What an `ImageRenderer` raster depends on: Classic's chart icon (the old menu) is rendered by SwiftUI at
-    /// `NSScreen.main`'s backing scale in the app's appearance, on this OS's renderer. Measured, not assumed.
-    @MainActor static func rasterEnvironment() -> String {
-        NSApplication.shared.setActivationPolicy(.prohibited)
-        let os = ProcessInfo.processInfo.operatingSystemVersion.majorVersion
-        let scale = NSScreen.main?.backingScaleFactor ?? 0
-        let appearance = NSApplication.shared.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua])?.rawValue ?? "unknown"
-        return "macOS \(os), screen scale \(scale), \(appearance)"
-    }
-
-    func testPrintRasterEnvironment() throws {
-        guard ProcessInfo.processInfo.environment["ND_PRINT_RASTER_ENV"] != nil else { throw XCTSkip("probe only") }
-        print("ND_RASTER_ENV=\(Self.rasterEnvironment())")
-    }
-
-    func testClassicMatchesTheGoldenRecordedFromMain() throws {
-        NSApplication.shared.setActivationPolicy(.prohibited)
-        let golden = try Self.golden()
-        XCTAssertEqual(golden["source"] as? String, "origin/main")
-        XCTAssertNotNil(golden["rasterEnvironment"] as? String, "the raster icon's recording environment")
-        XCTAssertEqual(golden["commit"] as? String, "84b0e7a58c034e46cb9080071557e0574db31f3c", "re-record when main's classic path moves")
-        for expected in try XCTUnwrap(golden["cases"] as? [[String: Any]]) {
-            let newMenu = try XCTUnwrap(expected["newMenu"] as? String)
-            for design in ["classic"] as [String?] {
-                let name = "BrainBarClassicGoldenTests." + UUID().uuidString
-                let d = try XCTUnwrap(UserDefaults(suiteName: name))
-                defer { d.removePersistentDomain(forName: name) }
-                if newMenu != "absent" { d.set(newMenu == "true", forKey: BrainBarNewMenuPreference.key) }
-                if let design { d.set(design, forKey: BrainBarDesign.key) }
-                let host = Host()
-                let runtime = BrainBarRuntime(launchMode: .menuItemDaemon)
-                let controller = BrainBarStatusPopoverController(workspace: BrainBarRecordingWorkspace(), runtime: runtime,
-                    dashboardPanelController: nil, statusBar: host, menuDefaults: d)
-                controller.setBadgeForTesting(.init(badgeOn: false, reason: "", activeCodes: []),
-                    alertsURL: URL(fileURLWithPath: "/tmp/nd-absent-golden"))
-                controller.menuNeedsUpdate(controller.contextMenuForTesting)
-                let zero = Array(repeating: 0, count: 12)
-                controller.renderStatusIconForTesting(stats: DashboardStats(chunkCount: 1, enrichedChunkCount: 1, pendingEnrichmentCount: 0,
-                    enrichmentPercent: 50, enrichmentRatePerMinute: 1, databaseSizeBytes: 0, recentActivityBuckets: zero,
-                    recentAgentWriteBuckets: zero, recentWatcherWriteBuckets: zero, recentEnrichmentBuckets: zero), state: .idle)
-                // Gap 26, lead ruling 21 Nov 2026: main's golden plus one enabled, unmarked Diagnostics after Settings.
-                // Keep classic-main-golden.json as the independent record; assert everything else against it.
-                let items = try brainBarItemsWithoutApprovedDiagnostics(controller.contextMenuForTesting)
-                let label = "new menu \(newMenu), design \(design ?? "absent")"
-                XCTAssertEqual(items.map(\.title), expected["titles"] as? [String], label)
-                XCTAssertEqual(items.map { ($0.representedObject as? BrainBarMenuAction).map { "\($0)" } ?? "" }, expected["actions"] as? [String], label)
-                XCTAssertEqual(items.map(\.isEnabled), expected["enabled"] as? [Bool], label)
-                XCTAssertEqual(items.map(\.keyEquivalent), expected["keys"] as? [String], label)
-                XCTAssertEqual(items.filter { $0.view != nil }.count, expected["hosted"] as? Int, label)
-                let image = try XCTUnwrap(host.item.view.image)
-                XCTAssertEqual(image.size.width, expected["iconWidth"] as? CGFloat, label)
-                XCTAssertEqual(image.size.height, expected["iconHeight"] as? CGFloat, label)
-                XCTAssertEqual(image.isTemplate, expected["iconTemplate"] as? Bool, label)
-                let rep = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(image.size.width * 2),
-                    pixelsHigh: Int(image.size.height * 2), bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
-                    colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0))
-                rep.size = image.size
-                NSGraphicsContext.saveGraphicsState()
-                NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
-                image.draw(in: NSRect(origin: .zero, size: image.size))
-                NSGraphicsContext.restoreGraphicsState()
-                let goldenPNG = try XCTUnwrap(Data(base64Encoded: try XCTUnwrap(expected["iconPNG"] as? String)))
-                // The brain is a vector drawing at a fixed 2x: its pixels are compared on every machine. The chart icon is an
-                // ImageRenderer raster whose pixels follow the OS, the screen's scale and the appearance (the macos-15
-                // runner differed by a mean 3.7 of 255): compared only where it was recorded; its size and template
-                // flag, and the whole menu, are compared everywhere.
-                let raster = !image.isTemplate
-                if !raster || Self.rasterEnvironment() == golden["rasterEnvironment"] as? String {
-                    let (same, detail) = Self.pixelsMatch(try XCTUnwrap(rep.representation(using: .png, properties: [:])), goldenPNG)
-                    XCTAssertTrue(same, "icon pixels differ from main (\(detail)), \(label)")
-                } else {
-                    print("BrainBarClassicGoldenTests: chart-icon pixels not compared here (\(Self.rasterEnvironment())); recorded on \(golden["rasterEnvironment"] as? String ?? "?")")
-                }
-                XCTAssertNil(NDStore.existing(for: runtime), "Classic built new-design work, \(label)")
-                controller.stop()
-            }
-        }
-        let suite = "BrainBarClassicGoldenPanel." + UUID().uuidString
-        let panelDefaults = try XCTUnwrap(UserDefaults(suiteName: suite))
-        defer { panelDefaults.removePersistentDomain(forName: suite) }
-        panelDefaults.set("classic", forKey: BrainBarDesign.key)
-        let panel = BrainBarDashboardPanelController(workspace: BrainBarRecordingWorkspace(), runtime: BrainBarRuntime(),
-                                                     designDefaults: panelDefaults)
-        // The root's type, structurally everywhere (main's hosting controller around main's root view); its exact spelling,
-        // which follows the Swift toolchain's type printing, only where the golden was recorded.
-        let rootType = String(describing: type(of: panel.contentViewControllerForTesting))
-        let goldenRootType = try XCTUnwrap(golden["windowRootType"] as? String)
-        XCTAssertTrue(rootType.hasPrefix("NSHostingController<") && rootType.contains("BrainBarWindowRootView"), rootType)
-        XCTAssertEqual(rootType.components(separatedBy: "BrainBarWindowRootView").count,
-                       goldenRootType.components(separatedBy: "BrainBarWindowRootView").count, "one classic root, as on main")
-        if Self.rasterEnvironment() == golden["rasterEnvironment"] as? String { XCTAssertEqual(rootType, goldenRootType) }
-        XCTAssertEqual(panel.windowForTesting.minSize.width, golden["windowMinWidth"] as? CGFloat)
-        XCTAssertEqual(panel.windowForTesting.minSize.height, golden["windowMinHeight"] as? CGFloat)
     }
 }
 

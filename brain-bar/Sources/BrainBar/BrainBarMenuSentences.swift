@@ -966,9 +966,7 @@ extension BrainBarMenuPresenter {
         // Settings
         static let settingsTitle = "BrainBar Settings"
         static let reconnectShort = "Reconnect"
-        static let design = "Design"
         static let settingsFile = "Settings file"
-        static let classicCaption = "Classic is the BrainBar you had before. You can switch back at any time."
 
         /// V1's VoiceOver sentence for the waveform.
         static func wave(span minutes: Int, saves: Int, reads: Int) -> String {

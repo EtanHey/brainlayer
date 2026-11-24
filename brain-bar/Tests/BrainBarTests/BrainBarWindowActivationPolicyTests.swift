@@ -26,11 +26,11 @@ final class BrainBarWindowActivationPolicyTests: XCTestCase {
         }
         let window = controller.windowForTesting
 
-        controller.showDashboard()
+        controller.showPage(.jobs)
         XCTAssertEqual(app.activationPolicy(), .regular)
         XCTAssertTrue(window.isVisible)
         let frame = window.frame
-        controller.showSettings()
+        controller.showPage(.jobs)
         XCTAssertEqual(transitions, [.regular], "showing the same window twice is one open")
 
         window.performClose(nil) // Title-bar close and Cmd-W both use this path.
@@ -38,7 +38,7 @@ final class BrainBarWindowActivationPolicyTests: XCTestCase {
         XCTAssertFalse(window.isVisible)
         window.setFrameOrigin(NSPoint(x: frame.minX + 30, y: frame.minY + 30))
 
-        controller.showSettings()
+        controller.showPage(.jobs)
         XCTAssertEqual(app.activationPolicy(), .regular)
         XCTAssertTrue(window.isVisible)
         XCTAssertEqual(window.frame, frame)
@@ -94,19 +94,19 @@ final class BrainBarWindowActivationPolicyTests: XCTestCase {
             BrainBarSettingsActions.installOpenHandler {}
         }
         let window = controller.windowForTesting
-        controller.showSettings()
+        controller.showPage(.jobs)
         window.orderBack(nil)
 
         XCTAssertFalse(delegate.applicationShouldHandleReopen(NSApplication.shared, hasVisibleWindows: true))
         XCTAssertTrue(window.isVisible)
-        XCTAssertEqual(controller.selectedTabForTesting, .settings)
+        XCTAssertEqual(controller.newDesignStore.page, .jobs)
         XCTAssertEqual(transitions, [.regular])
 
         controller.dismiss()
         XCTAssertFalse(delegate.applicationShouldHandleReopen(NSApplication.shared, hasVisibleWindows: false))
         XCTAssertTrue(controller.windowForTesting === window)
         XCTAssertTrue(window.isVisible)
-        XCTAssertEqual(controller.selectedTabForTesting, .settings)
+        XCTAssertEqual(controller.newDesignStore.page, .jobs)
         XCTAssertEqual(transitions, [.regular, .accessory, .regular])
         XCTAssertFalse(delegate.applicationShouldTerminateAfterLastWindowClosed(NSApplication.shared))
     }
@@ -131,7 +131,7 @@ final class BrainBarWindowActivationPolicyTests: XCTestCase {
     private func makeController(policy: BrainBarWindowActivationPolicy? = nil) -> BrainBarDashboardPanelController {
         BrainBarDashboardPanelController(
             workspace: BrainBarRecordingWorkspace(), runtime: BrainBarRuntime(), activationPolicy: policy,
-            designDefaults: brainBarLegacyMenuDefaults()
+            designDefaults: brainBarIsolatedDefaults()
         )
     }
 }

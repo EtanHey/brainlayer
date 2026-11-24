@@ -82,12 +82,11 @@ import SwiftUI
 
     func testUploadSnapshotRed() throws {
         let i = try inputs("upload-snapshot-red")
-        let checks = try XCTUnwrap(i.captureBackupChecks)
-        let row = try XCTUnwrap(checks.checks.first { $0.id == "snapshot-upload" })
-        XCTAssertEqual(row.tone, .red)
-        XCTAssertTrue(row.value.contains("upload still pending"))
+        let page = NDBackupsPage(store: NDStore(fixture: i))
+        let lane = try XCTUnwrap(page.lanes(NDModel.make(i)).first { $0.id == "backup_offsite" })
+        XCTAssertTrue(lane.strong)
+        XCTAssertEqual(NDR1.make(i, NDModel.make(i)).pipeline.status[.drive]?.severity, .red)
         XCTAssertEqual(i.backupProgress?.percentage, 25)
-        XCTAssertEqual(BrainBarBackupChecksCard.displayedCheck(row, progress: i.backupProgress), row)
     }
 
     func testUploadDriveSignedOut() throws {

@@ -27,20 +27,18 @@ final class TestStatusItemHost: BrainBarStatusItemHosting {
     }
 }
 
-/// Legacy-menu fixtures own a stored opt-out, removed when the controller releases it.
-private final class BrainBarLegacyMenuDefaults: UserDefaults, @unchecked Sendable {
+/// Isolated preferences for controller fixtures; released with their owning fixture.
+private final class BrainBarIsolatedDefaults: UserDefaults, @unchecked Sendable {
     private let domainName: String
 
     init(domainName: String) {
         self.domainName = domainName
         super.init(suiteName: domainName)!
-        set(false, forKey: BrainBarNewMenuPreference.key)
-        set(BrainBarDesign.classic.rawValue, forKey: BrainBarDesign.key)
     }
 
     deinit { removePersistentDomain(forName: domainName) }
 }
 
-func brainBarLegacyMenuDefaults() -> UserDefaults {
-    BrainBarLegacyMenuDefaults(domainName: "BrainBarLegacyMenuTests." + UUID().uuidString)
+func brainBarIsolatedDefaults() -> UserDefaults {
+    BrainBarIsolatedDefaults(domainName: "BrainBarIsolatedTests." + UUID().uuidString)
 }
