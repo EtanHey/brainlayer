@@ -2,9 +2,27 @@ import SQLite3
 import XCTest
 @testable import BrainBar
 
+/// Parks the first SQLite progress callback only. SQLite can call the handler
+/// again after it asked for an interrupt (CI's macOS 15 SQLite did, 24 Nov). A
+/// second park would wait on a consumed release while holding transactionLock,
+/// and the test's own cleanup would then wait on that lock forever.
 private final class ShutdownReadGate: @unchecked Sendable {
     let entered = DispatchSemaphore(value: 0)
     let release = DispatchSemaphore(value: 0)
+    private let lock = NSLock()
+    private var shouldPark = true
+
+    func step() -> Int32 {
+        lock.lock()
+        let park = shouldPark
+        shouldPark = false
+        lock.unlock()
+        if park {
+            entered.signal()
+            release.wait()
+        }
+        return 1 // End the query after observing its handle lifetime protection.
+    }
 }
 
 final class StoreDrainShutdownTests: XCTestCase {
@@ -32,14 +50,13 @@ final class StoreDrainShutdownTests: XCTestCase {
     func testQueuedItemReadHoldsCloseLockAndRejectsClosedDatabase() throws {
         let path = brainBarTestTemporaryDirectory().appendingPathComponent(UUID().uuidString + ".db").path
         let database = BrainDatabase(path: path)
-        defer { database.close(); removeBrainBarTestDatabase(path) }
+        var readerFinished = true
+        // close() takes transactionLock, so a reader that never finished keeps its database.
+        defer { if readerFinished { database.close(); removeBrainBarTestDatabase(path) } }
         let gate = ShutdownReadGate()
         try database.withSQLiteHandleForTesting { handle in
             sqlite3_progress_handler(handle, 1, { context in
-                let gate = Unmanaged<ShutdownReadGate>.fromOpaque(context!).takeUnretainedValue()
-                gate.entered.signal()
-                gate.release.wait()
-                return 1 // End the query after observing its handle lifetime protection.
+                Unmanaged<ShutdownReadGate>.fromOpaque(context!).takeUnretainedValue().step()
             }, Unmanaged.passUnretained(gate).toOpaque())
         }
         let finished = DispatchSemaphore(value: 0)
@@ -51,7 +68,12 @@ final class StoreDrainShutdownTests: XCTestCase {
         XCTAssertTrue(database.transactionLockIsHeldElsewhereForTesting(),
                       "Queue dedupe must hold the lock close() uses while SQLite is reading")
         gate.release.signal()
-        XCTAssertEqual(finished.wait(timeout: .now() + 5), .success)
+        // Every wait below is bounded: a reader still holding transactionLock
+        // fails this test instead of hanging the whole suite.
+        guard finished.wait(timeout: .now() + 5) == .success else {
+            readerFinished = false
+            return XCTFail("Queue dedupe read did not finish; leaving its database open")
+        }
         try database.withSQLiteHandleForTesting { sqlite3_progress_handler($0, 0, nil, nil) }
         database.close()
         XCTAssertThrowsError(try database.hasStoredQueuedItemForTesting(queueID: "absent")) {
