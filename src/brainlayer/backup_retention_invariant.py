@@ -639,13 +639,14 @@ def main(argv: list[str] | None = None) -> int:
         path.read_text(encoding="utf-8"),
         backup_daily_source=backup_daily_path.read_text(encoding="utf-8"),
     )
-    policy_path = path.with_name("backup_retention.py")
-    if not policy_path.exists():
-        errors.append(f"required retention policy source is missing: {policy_path}")
-    else:
-        errors.extend(
-            inspect_backup_daily_retention_invariant(policy_path.read_text(encoding="utf-8"), policy_module=True)
-        )
+    for name in ("backup_retention.py", "backup_retention_observation.py"):
+        policy_path = path.with_name(name)
+        if not policy_path.exists():
+            errors.append(f"required retention policy source is missing: {policy_path}")
+        else:
+            errors.extend(
+                inspect_backup_daily_retention_invariant(policy_path.read_text(encoding="utf-8"), policy_module=True)
+            )
     if errors:
         for error in errors:
             print(f"FAIL: {error}")

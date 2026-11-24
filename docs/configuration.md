@@ -674,6 +674,10 @@ reconciliation and it cannot delete anything in the run that writes it. An exist
 receipt, including a legacy one, is never replaced. Runs report the names written in
 `local_retention_reconciled`.
 
+## Database Drive backup rule
+
+See [Backup Strategy](backup-strategy.md#database-drive-backup-rule-read-only) for the rule, runtime settings and observability fields.
+
 ### Hybrid helper keep-warm
 
 `BRAINLAYER_HYBRID_KEEP_WARM_S` sets the idle keep-warm interval (default 60 seconds,

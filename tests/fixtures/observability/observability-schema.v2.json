@@ -694,10 +694,30 @@
                 "null"
               ]
             },
-            "bytes_confirmed": {"type": ["integer", "null"], "minimum": 0},
-            "bytes_total": {"type": ["integer", "null"], "minimum": 1},
-            "verification_pending": {"type": "boolean"},
-            "bytes_confirmed_at": {"type": ["string", "null"], "format": "date-time"},
+            "bytes_confirmed": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0
+            },
+            "bytes_total": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            },
+            "verification_pending": {
+              "type": "boolean"
+            },
+            "bytes_confirmed_at": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "date-time"
+            },
             "sleep_note": {"type": "string", "minLength": 1},
             "snapshot_slept_seconds": {"type": "number", "minimum": 0},
             "snapshot_wall_seconds": {"type": "number", "minimum": 0},
@@ -719,6 +739,9 @@
               ]
             }
           }
+        },
+        "drive_retention": {
+          "$ref": "#/$defs/drive_retention"
         }
       }
     },
@@ -728,7 +751,7 @@
           "$ref": "#/$defs/backups_measured"
         },
         {
-          "$ref": "#/$defs/unmeasurable"
+          "$ref": "#/$defs/backups_unmeasurable"
         }
       ]
     },
@@ -832,6 +855,462 @@
               "minimum": 0
             }
           }
+        }
+      }
+    },
+    "drive_retention": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "rule",
+        "writes_enabled",
+        "config_error",
+        "machines"
+      ],
+      "properties": {
+        "rule": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": false,
+          "required": [
+            "daily_keep",
+            "monthly_keep",
+            "per_machine",
+            "description"
+          ],
+          "properties": {
+            "daily_keep": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "monthly_keep": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 120
+            },
+            "per_machine": {
+              "const": true
+            },
+            "description": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "writes_enabled": {
+          "const": false
+        },
+        "config_error": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "machines": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "machine_id",
+              "state",
+              "selected_at",
+              "error",
+              "on_drive",
+              "named_one_offs_count",
+              "kept",
+              "would_remove",
+              "monthly_representatives",
+              "kept_by_rule",
+              "unverified",
+              "pinned"
+            ],
+            "properties": {
+              "machine_id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "state": {
+                "enum": [
+                  "measured",
+                  "unmeasurable",
+                  "not_run",
+                  "stale"
+                ]
+              },
+              "selected_at": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "format": "date-time"
+              },
+              "error": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "on_drive": {
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "additionalProperties": false,
+                "required": [
+                  "count",
+                  "bytes",
+                  "oldest",
+                  "newest"
+                ],
+                "properties": {
+                  "count": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "bytes": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "oldest": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "newest": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                }
+              },
+              "named_one_offs_count": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "minimum": 0
+              },
+              "kept": {
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "additionalProperties": false,
+                "required": [
+                  "count",
+                  "bytes",
+                  "oldest",
+                  "newest"
+                ],
+                "properties": {
+                  "count": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "bytes": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "oldest": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "newest": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                }
+              },
+              "would_remove": {
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "additionalProperties": false,
+                "required": [
+                  "count",
+                  "bytes",
+                  "oldest",
+                  "newest"
+                ],
+                "properties": {
+                  "count": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "bytes": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "oldest": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "newest": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                }
+              },
+              "monthly_representatives": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "name",
+                    "date",
+                    "bytes"
+                  ],
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "date": {
+                      "type": "string",
+                      "format": "date"
+                    },
+                    "bytes": {
+                      "type": "integer",
+                      "minimum": 0
+                    }
+                  }
+                }
+              },
+              "kept_by_rule": {
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "additionalProperties": false,
+                "required": [
+                  "count",
+                  "bytes",
+                  "oldest",
+                  "newest"
+                ],
+                "properties": {
+                  "count": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "bytes": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "oldest": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "newest": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                }
+              },
+              "unverified": {
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "additionalProperties": false,
+                "required": [
+                  "count",
+                  "bytes",
+                  "oldest",
+                  "newest"
+                ],
+                "properties": {
+                  "count": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "bytes": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "oldest": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "newest": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                }
+              },
+              "pinned": {
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "additionalProperties": false,
+                "required": [
+                  "count",
+                  "bytes",
+                  "oldest",
+                  "newest"
+                ],
+                "properties": {
+                  "count": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "bytes": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "oldest": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "newest": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                }
+              }
+            },
+            "allOf": [
+              {
+                "if": {
+                  "properties": {
+                    "state": {
+                      "const": "measured"
+                    }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "on_drive": {
+                      "type": "object"
+                    },
+                    "kept": {
+                      "type": "object"
+                    },
+                    "would_remove": {
+                      "type": "object"
+                    },
+                    "named_one_offs_count": {
+                      "type": "integer"
+                    },
+                    "selected_at": {
+                      "type": "string"
+                    },
+                    "error": {
+                      "type": "null"
+                    },
+                    "kept_by_rule": {
+                      "type": "object"
+                    },
+                    "unverified": {
+                      "type": "object"
+                    },
+                    "pinned": {
+                      "type": "object"
+                    }
+                  }
+                },
+                "else": {
+                  "properties": {
+                    "on_drive": {
+                      "type": "null"
+                    },
+                    "kept": {
+                      "type": "null"
+                    },
+                    "would_remove": {
+                      "type": "null"
+                    },
+                    "named_one_offs_count": {
+                      "type": "null"
+                    },
+                    "monthly_representatives": {
+                      "maxItems": 0
+                    },
+                    "kept_by_rule": {
+                      "type": "null"
+                    },
+                    "unverified": {
+                      "type": "null"
+                    },
+                    "pinned": {
+                      "type": "null"
+                    }
+                  }
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "state": {
+                      "enum": [
+                        "unmeasurable",
+                        "stale"
+                      ]
+                    }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "error": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    "backups_unmeasurable": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "state",
+        "reason",
+        "inputs"
+      ],
+      "properties": {
+        "state": {
+          "const": "unmeasurable"
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        },
+        "inputs": {
+          "$ref": "#/$defs/inputs"
+        },
+        "drive_retention": {
+          "$ref": "#/$defs/drive_retention"
         }
       }
     }
