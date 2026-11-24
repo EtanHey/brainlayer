@@ -5,6 +5,7 @@ import os
 import re
 from collections.abc import Mapping, Sequence
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import yaml
@@ -155,46 +156,23 @@ def test_swift_wrapper_executes_tests_and_preserves_failure_gates(monkeypatch, s
     spec.loader.exec_module(wrapper)
     calls = []
 
-    def run(command, env, directory):
+    def run(command, *, env):
         root = Path(env["BRAINBAR_TEST_TMP_ROOT"])
         assert root.is_absolute() and root.is_dir()
         assert root.name.endswith(".noindex")
         assert env["TMPDIR"] == str(root) + "/"
-        assert directory == str(root)
-        # Unbuffered xctest output is what lets a CI hang name the test it hung in.
-        assert env["NSUnbufferedIO"] == "YES"
         assert list(root.glob("brainbar-*")) == []
         calls.append(command)
         if leak:
             (root / "brainbar-unremoved-fixture").write_text("owned test fixture")
-        return swift_exit
+        return SimpleNamespace(returncode=swift_exit)
 
-    monkeypatch.setattr(wrapper, "run_relayed", run)
+    monkeypatch.setattr(wrapper.subprocess, "run", run)
     monkeypatch.setattr(wrapper.sys, "argv", [str(path), "--filter", "FixtureTest"])
     assert wrapper.main() == expected
     assert calls == [
         ["swift", "test", "--scratch-path", str(REPO_ROOT / ".build.noindex/swift"), "--filter", "FixtureTest"]
     ]
-
-
-def test_swift_wrapper_relays_output_and_samples_a_silent_run_once_per_stall(monkeypatch, tmp_path, capsys):
-    path = REPO_ROOT / "brain-bar/Tests/BrainBarTests/Scripts/run_swift_tests.py"
-    spec = importlib.util.spec_from_file_location("swift_stall_gate", path)
-    wrapper = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(wrapper)
-    sampled = []
-    monkeypatch.setattr(wrapper, "STALL_SECONDS", 0.2)
-    monkeypatch.setattr(wrapper.time, "sleep", lambda _seconds: os.sched_yield())
-    monkeypatch.setattr(wrapper, "sample_xctest", lambda directory, number: sampled.append((directory, number)))
-    command = [
-        "python3",
-        "-c",
-        "import sys, time; print('before stall', flush=True); time.sleep(0.6); sys.exit(3)",
-    ]
-    assert wrapper.run_relayed(command, dict(os.environ), str(tmp_path)) == 3
-    assert "before stall" in capsys.readouterr().out
-    assert sampled and sampled[0] == (str(tmp_path), 1)
-    assert len(sampled) <= wrapper.MAX_STALL_SAMPLES
 
 
 def test_swift_job_runs_only_for_brain_bar_changes():
@@ -454,7 +432,7 @@ def test_swift_wrapper_split_owns_temp_roots_and_reuses_build(monkeypatch, leaki
     spec.loader.exec_module(wrapper)
     roots, commands = [], []
 
-    def run(command, env, directory):
+    def run(command, *, env):
         root = Path(env["BRAINBAR_TEST_TMP_ROOT"])
         assert root.is_dir() and not list(root.iterdir())
         assert env["TMPDIR"] == str(root) + "/"
@@ -462,9 +440,9 @@ def test_swift_wrapper_split_owns_temp_roots_and_reuses_build(monkeypatch, leaki
         commands.append(command)
         if len(roots) - 1 == leaking_call:
             (root / "brainbar-leaked-fixture").write_text("owned fixture")
-        return 0
+        return SimpleNamespace(returncode=0)
 
-    monkeypatch.setattr(wrapper, "run_relayed", run)
+    monkeypatch.setattr(wrapper.subprocess, "run", run)
     results = []
     for option in ("--skip", "--filter"):
         monkeypatch.setattr(wrapper.sys, "argv", [str(path), option, "BrainBarMenuInvariantTests"])
@@ -489,7 +467,9 @@ def test_swift_wrapper_forwards_skip_and_preserves_default(monkeypatch, argument
     wrapper = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(wrapper)
     calls = []
-    monkeypatch.setattr(wrapper, "run_relayed", lambda command, env, directory: calls.append(command) or 0)
+    monkeypatch.setattr(
+        wrapper.subprocess, "run", lambda command, **kwargs: calls.append(command) or SimpleNamespace(returncode=0)
+    )
     monkeypatch.setattr(wrapper.sys, "argv", [str(path), *arguments])
     assert wrapper.main() == 0
     assert calls == [["swift", "test", "--scratch-path", str(REPO_ROOT / ".build.noindex/swift"), *arguments]]
