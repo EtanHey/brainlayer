@@ -33,6 +33,7 @@ import SwiftUI
     var drawnPageForTesting: NDPage?
 #endif
 
+    lazy var updates: BrainBarUpdates = (!isFixture ? runtime?.updates : nil) ?? BrainBarUpdates(installed: "1.6.11", defaults: preferences, feed: { "1.6.11" })
     let runtime: BrainBarRuntime?
     private let workspace: any BrainBarWorkspaceActing
     private var cancellables: Set<AnyCancellable> = []

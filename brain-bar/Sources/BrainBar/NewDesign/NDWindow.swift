@@ -22,6 +22,7 @@ struct NDWindowRoot: View {
             } else {
                 ND.bar.frame(height: NDGrid.titleBar).overlay(alignment: .bottom) { ND.hair.frame(height: 0.5) }
             }
+            BrainBarUpdateRow(updates: store.updates, header: true, showDetails: { NDSettingsWindowController.show(store: store) })
             ScrollView(.vertical) {
                 let shown = page ?? store.shownPage
                 Group {

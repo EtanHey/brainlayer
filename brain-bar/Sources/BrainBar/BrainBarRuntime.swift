@@ -16,6 +16,7 @@ final class BrainBarRuntime: ObservableObject {
 
     #if BRAINBAR_UI
     /// The app's one status model; it reads the Drive auth state at each publication.
+    let updates = BrainBarUpdates()
     @Published var jobsModel: BrainBarSettingsViewModel? {
         didSet {
             jobsModel?.attachDriveAuth(driveAuth)
