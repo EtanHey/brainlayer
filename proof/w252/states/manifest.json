@@ -1,0 +1,222 @@
+[
+  {
+    "accessibility" : "Sessions in Google Drive: 2 attempts this week, 0 failed, newest 4 h",
+    "appearance" : "dark",
+    "events" : [
+      {
+        "hours" : -6,
+        "kind" : "ok"
+      },
+      {
+        "hours" : -3,
+        "kind" : "ok"
+      },
+      {
+        "hours" : 19,
+        "kind" : "next"
+      }
+    ],
+    "file" : "sessions-legacy-recent-dark.png",
+    "height_px" : 904,
+    "legend" : [
+      "copied",
+      "next run",
+      "late if the newest copy is left of this line"
+    ],
+    "newest" : "4 h",
+    "skipped" : 0,
+    "state" : "legacy-recent",
+    "unknown" : false,
+    "width_pt" : 900,
+    "width_px" : 1800
+  },
+  {
+    "accessibility" : "Sessions in Google Drive: 2 attempts this week, 0 failed, newest 4 h",
+    "appearance" : "light",
+    "events" : [
+      {
+        "hours" : -6,
+        "kind" : "ok"
+      },
+      {
+        "hours" : -3,
+        "kind" : "ok"
+      },
+      {
+        "hours" : 19,
+        "kind" : "next"
+      }
+    ],
+    "file" : "sessions-legacy-recent-light.png",
+    "height_px" : 904,
+    "legend" : [
+      "copied",
+      "next run",
+      "late if the newest copy is left of this line"
+    ],
+    "newest" : "4 h",
+    "skipped" : 0,
+    "state" : "legacy-recent",
+    "unknown" : false,
+    "width_pt" : 900,
+    "width_px" : 1800
+  },
+  {
+    "accessibility" : "Sessions in Google Drive: 0 attempts this week, 0 failed, newest 4 h",
+    "appearance" : "dark",
+    "events" : [
+      {
+        "hours" : 19,
+        "kind" : "next"
+      }
+    ],
+    "file" : "sessions-legacy-empty-dark.png",
+    "height_px" : 904,
+    "legend" : [
+      "copied",
+      "next run",
+      "late if the newest copy is left of this line"
+    ],
+    "newest" : "4 h",
+    "skipped" : 0,
+    "state" : "legacy-empty",
+    "unknown" : false,
+    "width_pt" : 900,
+    "width_px" : 1800
+  },
+  {
+    "accessibility" : "Sessions in Google Drive: 0 attempts this week, 0 failed, newest 4 h",
+    "appearance" : "light",
+    "events" : [
+      {
+        "hours" : 19,
+        "kind" : "next"
+      }
+    ],
+    "file" : "sessions-legacy-empty-light.png",
+    "height_px" : 904,
+    "legend" : [
+      "copied",
+      "next run",
+      "late if the newest copy is left of this line"
+    ],
+    "newest" : "4 h",
+    "skipped" : 0,
+    "state" : "legacy-empty",
+    "unknown" : false,
+    "width_pt" : 900,
+    "width_px" : 1800
+  },
+  {
+    "accessibility" : "Sessions in Google Drive: the record could not be read, newest 4 h",
+    "appearance" : "dark",
+    "events" : [
+      {
+        "hours" : 19,
+        "kind" : "next"
+      }
+    ],
+    "file" : "sessions-recent-undated-dark.png",
+    "height_px" : 944,
+    "legend" : [
+      "copied",
+      "next run",
+      "late if the newest copy is left of this line",
+      "Record couldn't be read"
+    ],
+    "newest" : "4 h",
+    "skipped" : 1,
+    "state" : "recent-undated",
+    "unknown" : true,
+    "width_pt" : 900,
+    "width_px" : 1800
+  },
+  {
+    "accessibility" : "Sessions in Google Drive: the record could not be read, newest 4 h",
+    "appearance" : "light",
+    "events" : [
+      {
+        "hours" : 19,
+        "kind" : "next"
+      }
+    ],
+    "file" : "sessions-recent-undated-light.png",
+    "height_px" : 944,
+    "legend" : [
+      "copied",
+      "next run",
+      "late if the newest copy is left of this line",
+      "Record couldn't be read"
+    ],
+    "newest" : "4 h",
+    "skipped" : 1,
+    "state" : "recent-undated",
+    "unknown" : true,
+    "width_pt" : 900,
+    "width_px" : 1800
+  },
+  {
+    "accessibility" : "Sessions in Google Drive: 2 attempts this week, 1 failed, newest 4 h",
+    "appearance" : "dark",
+    "events" : [
+      {
+        "hours" : -6,
+        "kind" : "ok"
+      },
+      {
+        "hours" : -3,
+        "kind" : "fail"
+      },
+      {
+        "hours" : 19,
+        "kind" : "next"
+      }
+    ],
+    "file" : "sessions-recent-failed-dark.png",
+    "height_px" : 904,
+    "legend" : [
+      "copied",
+      "next run",
+      "late if the newest copy is left of this line",
+      "failed"
+    ],
+    "newest" : "4 h",
+    "skipped" : 0,
+    "state" : "recent-failed",
+    "unknown" : false,
+    "width_pt" : 900,
+    "width_px" : 1800
+  },
+  {
+    "accessibility" : "Sessions in Google Drive: 2 attempts this week, 1 failed, newest 4 h",
+    "appearance" : "light",
+    "events" : [
+      {
+        "hours" : -6,
+        "kind" : "ok"
+      },
+      {
+        "hours" : -3,
+        "kind" : "fail"
+      },
+      {
+        "hours" : 19,
+        "kind" : "next"
+      }
+    ],
+    "file" : "sessions-recent-failed-light.png",
+    "height_px" : 904,
+    "legend" : [
+      "copied",
+      "next run",
+      "late if the newest copy is left of this line",
+      "failed"
+    ],
+    "newest" : "4 h",
+    "skipped" : 0,
+    "state" : "recent-failed",
+    "unknown" : false,
+    "width_pt" : 900,
+    "width_px" : 1800
+  }
+]
