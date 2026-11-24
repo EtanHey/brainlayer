@@ -10,6 +10,10 @@ import pytest
 SCRIPT = Path(os.environ.get("BRAINBAR_UPDATE_SCRIPT", Path(__file__).parents[1] / "scripts/brainbar-update.sh"))
 
 
+def _clean_git_env() -> dict[str, str]:
+    return {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+
+
 @pytest.fixture
 def install(tmp_path):
     commands = tmp_path / "bin"
@@ -197,7 +201,9 @@ def test_update_script_is_executable():
 
 
 def test_update_script_git_mode():
-    result = subprocess.check_output(["git", "ls-files", "--stage", "scripts/brainbar-update.sh"], text=True)
+    result = subprocess.check_output(
+        ["git", "ls-files", "--stage", "scripts/brainbar-update.sh"], text=True, env=_clean_git_env()
+    )
     assert result.startswith("100755 ")
 
 

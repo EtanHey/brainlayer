@@ -361,6 +361,7 @@ def test_git_shellout_tests_scrub_inherited_git_env():
 
     assert set(git_shellout_files) == {
         "test_brainbar_build_app_guards.py",
+        "test_brainbar_update.py",
         "test_build_sha.py",
         "test_ci_ratchet_table.py",
         "test_crash_sweep_gate.py",  # Registered with _clean_git_env; validated below.
