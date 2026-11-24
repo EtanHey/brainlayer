@@ -369,7 +369,11 @@ def test_clone_integrity_failure_is_not_published_and_uses_fallback(artifact_lan
         return "synthetic corrupt clone" if path.name == "snapshot.db" else check(path, pragma, **kwargs)
 
     monkeypatch.setattr(backup, "_sqlite_pragma_check", corrupt_clone)
-    artifact = backup.create_sqlite_backup_artifact(source, output, socket_path=source.parent / "unused.sock")
+    # Fixed date, distinct from the clean run's 2026-11-24 below: with today's date, this test failed on 24 Nov
+    # itself because both runs targeted the same archive name.
+    artifact = backup.create_sqlite_backup_artifact(
+        source, output, date_stamp="2026-11-23", socket_path=source.parent / "unused.sock"
+    )
     assert artifact.snapshot_method == "vacuum"
     assert "integrity_check failed" in artifact.clone_fallback
     assert artifact.local_integrity == "ok"
