@@ -598,7 +598,7 @@ struct NDActivitySection: View {
             .padding(.top, 14)
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(NDModel.waveAccessibility(wave, minutes: store.range.minutes) + " "
-                + (wave?.agentReads.map { "\($0.reduce(0, +)) reads by agents." } ?? "Reads by agents unavailable."))
+                + Say.agentReadsAccessibility(wave?.agentReads.map { $0.reduce(0, +) }))
             let axis = store.range.axis
             ZStack {
                 HStack {

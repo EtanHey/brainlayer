@@ -675,6 +675,10 @@ extension BrainBarMenuPresenter {
         static let savedByAgents = "saved by agents"
         static let readFromConversations = "session lines ingested"
         static let readsByAgents = "reads by agents"
+        static func agentReadsAccessibility(_ count: Int?) -> String {
+            guard let count else { return "Reads by agents unavailable." }
+            return "\(count) reads by agents."
+        }
         static let saved = "saved"
         static let sessionLinesWord = "lines"
         static let now = "now"
