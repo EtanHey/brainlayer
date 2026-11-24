@@ -188,7 +188,9 @@ import XCTest
                 if name == "offer" {
                     let header = BrainBarUpdateRow(updates: model, header: true).background(ND.bg).foregroundStyle(ND.t1)
                     try NDRenderHarness.write(NDRenderHarness.host(header, size: NSSize(width: 640, height: 64), appearance: appearance), name: "header-\(suffix)", in: directory)
-                    try NDRenderHarness.write(NDRenderHarness.host(NDWindowRoot(store: { let store = NDStore(fixture: BrainBarDesignFixture.inputs(.calm)); store.updates = model; return store }(), drawsTrafficLights: true), size: NSSize(width: 640, height: 760), appearance: appearance), name: "window-offer-\(suffix)", in: directory)
+                    let windowStore = NDStore(fixture: BrainBarDesignFixture.inputs(.calm))
+                    windowStore.updates = model
+                    _ = try NDRenderHarness.window(windowStore, name: "window-offer-\(suffix)", appearance: appearance, in: directory)
                 }
                 let store = NDStore(fixture: BrainBarDesignFixture.inputs(.calm))
                 store.updates = model
