@@ -12,12 +12,12 @@
       "sha256": "a10214bfcb11b57aa01041f22408ccabd56fa7ef89e1e233ffc9d4b595b872a6"
     },
     "src/brainlayer/backup_daily.py": {
-      "sha": "Track 5: run existing archive-bound raw cleanup under admission staging lock; no receipt/verdict transition change",
-      "sha256": "daf0dc5e3db9aa5a434c116900f91b505fb0913fbb759e89d389aa0fbf619ec7"
+      "sha": "Track 5 fix r1: gate-only raw reclaim (unchanged proof) under the admission staging lock, with a failed-proof identity memo the scheduled child never passes; no receipt/verdict transition change; mapped ranges stay at line_refs_at",
+      "sha256": "20407bf0240bc29fa36f95c4c9b6136b6dbc16aca2aee342f4aa2b3546f78e18"
     },
     "src/brainlayer/backup_heavy_gate.py": {
-      "sha": "Track 5: measure after verified-raw cleanup; name surviving full COW reserves; admission arithmetic tested outside model",
-      "sha256": "59152992bd284996173e948c983789a39c88c7d922cfda292d8211b1fec1cb5e"
+      "sha": "Track 5 fix r1: pressure before disk; measure, reclaim verified raws only when that could admit, re-measure; failed-proof memo per gate run; admission arithmetic tested outside model",
+      "sha256": "9f18d88e2b47c95040fef2a6722428530569ca9c76a4d68ab09d5e0876de3f4f"
     },
     "src/brainlayer/maintenance.py": {
       "sha": "5882de81",
