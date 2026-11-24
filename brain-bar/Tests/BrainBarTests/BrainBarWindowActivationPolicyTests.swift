@@ -130,8 +130,7 @@ final class BrainBarWindowActivationPolicyTests: XCTestCase {
 
     private func makeController(policy: BrainBarWindowActivationPolicy? = nil) -> BrainBarDashboardPanelController {
         BrainBarDashboardPanelController(
-            workspace: BrainBarRecordingWorkspace(), runtime: BrainBarRuntime(), activationPolicy: policy,
-            designDefaults: brainBarIsolatedDefaults()
+            workspace: BrainBarRecordingWorkspace(), runtime: BrainBarRuntime(), activationPolicy: policy
         )
     }
 }

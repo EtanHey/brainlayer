@@ -71,7 +71,7 @@ enum BrainBarDesignFixture {
             workspace: workspace, runtime: runtime, activationPolicy: activationPolicy,
             frameStore: BrainBarWindowFrameStore(defaults: capturePreferences, key: BrainBarDashboardPanelController.frameDefaultsKey))
         let status = BrainBarStatusPopoverController(workspace: workspace, runtime: runtime, dashboardPanelController: panel,
-                                                     statusBar: statusBar, menuDefaults: capturePreferences)
+                                                     statusBar: statusBar)
         return (panel, status)
     }
 

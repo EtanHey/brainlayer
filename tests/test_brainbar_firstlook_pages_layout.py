@@ -5,6 +5,17 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1] / "brain-bar/Sources/BrainBar"
 
 
+def test_initial_status_menu_is_populated_before_appkit_can_open_it():
+    source = (ROOT / "BrainBarStatusPopoverController.swift").read_text()
+    setup = source.split("private func configureContextMenu() {", 1)[1].split(
+        "@objc private func openDashboard", 1
+    )[0]
+    assert "newMenuBuilder.populate(contextMenuForTesting)" in setup
+    menu = (ROOT / "NewDesign/NDMenu.swift").read_text()
+    assert "action: .settings" in menu
+    assert "action: .quit" in menu
+
+
 def test_shared_settings_has_no_design_or_old_menu_choice():
     source = (ROOT / "BrainBarSettingsView.swift").read_text()
     assert "designRow" not in source

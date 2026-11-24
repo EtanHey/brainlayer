@@ -177,7 +177,7 @@ import SwiftUI
         if let newMenu { d.set(newMenu, forKey: "BrainBarNewMenuEnabled") }
         let host = Host()
         let controller = BrainBarStatusPopoverController(workspace: BrainBarRecordingWorkspace(),
-            runtime: BrainBarRuntime(launchMode: .menuItemDaemon), dashboardPanelController: nil, statusBar: host, menuDefaults: d)
+            runtime: BrainBarRuntime(launchMode: .menuItemDaemon), dashboardPanelController: nil, statusBar: host)
         defer { controller.stop() }
         controller.setBadgeForTesting(.init(badgeOn: false, reason: "", activeCodes: []),
             alertsURL: URL(fileURLWithPath: "/tmp/nd-absent-" + UUID().uuidString))
@@ -226,7 +226,7 @@ import SwiftUI
         d.set("new", forKey: BrainBarDesign.key)
         let host = Host()
         let controller = BrainBarStatusPopoverController(workspace: BrainBarRecordingWorkspace(),
-            runtime: BrainBarRuntime(launchMode: .menuItemDaemon), dashboardPanelController: nil, statusBar: host, menuDefaults: d)
+            runtime: BrainBarRuntime(launchMode: .menuItemDaemon), dashboardPanelController: nil, statusBar: host)
         defer { controller.stop() }
         controller.menuNeedsUpdate(controller.contextMenuForTesting)
         XCTAssertTrue(controller.contextMenuForTesting.items.contains { $0.view is NDMenuRowHost })
@@ -324,8 +324,7 @@ import SwiftUI
     func testEveryStoredDesignKeepsTheNewWindowAndPageSizing() throws {
         let d = defaults()
         d.set("classic", forKey: BrainBarDesign.key)
-        let controller = BrainBarDashboardPanelController(workspace: BrainBarRecordingWorkspace(), runtime: BrainBarRuntime(),
-                                                          designDefaults: d)
+        let controller = BrainBarDashboardPanelController(workspace: BrainBarRecordingWorkspace(), runtime: BrainBarRuntime())
         let new = try XCTUnwrap(controller.windowForTesting.contentViewController)
         XCTAssertTrue(String(describing: type(of: new)).contains("NDWindowRoot"))
         XCTAssertTrue(controller.contentViewControllerForTesting === new)

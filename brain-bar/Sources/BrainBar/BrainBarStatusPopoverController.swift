@@ -105,7 +105,6 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
         button.toolTip = r1.headline
     }
 
-
 #endif
     private let workspace: any BrainBarWorkspaceActing
     private let runtime: BrainBarRuntime
@@ -132,7 +131,9 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
         /// The button's appearance, and the app's (SwiftUI resolves the icon's colors from it).
         let appearance: NSAppearance.Name?, appAppearance: NSAppearance.Name?, increaseContrast: Bool
     }
+#if !BRAINBAR_UI
     private let statusPublisher = BrainBarUIStatusPublisher()
+#endif
     private var lastRenderedIcon: RenderedIcon?
     private var appearanceObservation: NSKeyValueObservation?
     private var appAppearanceObservation: NSKeyValueObservation?
@@ -145,8 +146,7 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
         workspace: any BrainBarWorkspaceActing,
         runtime: BrainBarRuntime,
         dashboardPanelController: BrainBarDashboardPanelController?,
-        statusBar: any BrainBarStatusItemHosting,
-        menuDefaults: UserDefaults = .standard
+        statusBar: any BrainBarStatusItemHosting
     ) {
         self.workspace = workspace
         self.runtime = runtime
@@ -253,7 +253,9 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
         newDesignCancellables.removeAll()
         if hasNewDesignStore { newDesignStore.setIconActive(false) }
 #endif
+#if !BRAINBAR_UI
         statusPublisher.flush()
+#endif
         badgeReadGeneration = UUID()
         appearanceObservation?.invalidate()
         appearanceObservation = nil
@@ -542,12 +544,10 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
         return item
     }
 
+#if !BRAINBAR_UI
     private func publishRenderedStatus() {
         guard let dbPath = runtime.databasePath else { return }
-        var health = badgePresentation.healthVerdict
-#if BRAINBAR_UI
-        if let model = runtime.jobsModel { health = model.publishedStatus.healthVerdict ?? model.healthBadge?.healthVerdict }
-#endif
+        let health = badgePresentation.healthVerdict
         let verdict = currentVerdict
         var items = verdict.currentItems
         if verdict.dot != .green && items.isEmpty {
@@ -560,6 +560,8 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
             gitCommit: Bundle.main.object(forInfoDictionaryKey: "GitCommit") as? String ?? "unknown", items: items)
         statusPublisher.publish(receipt, to: BrainBarUIStatusReceipt.url(dbPath: dbPath))
     }
+
+#endif
 
     /// The system Increase Contrast setting (High Contrast reaches the icon through it).
     nonisolated(unsafe) static var increaseContrast: () -> Bool = { NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast }
@@ -608,7 +610,6 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
     func setDiagnosticsOpenerForTesting(_ opener: @escaping () -> Void) { diagnosticsOpener = opener }
 #endif
     func setMenuTrackingForTesting(_ tracking: Bool) { isMenuTracking = tracking }
-    func flushStatusReceiptForTesting() { statusPublisher.flush() }
     var statusVerdictForTesting: BrainBarStatusVerdict { currentVerdict }
     var statusDotForTesting: Bool { currentVerdict.needsAttention }
     /// The badge input retained when the real status-item image was rendered; nil before rendering.
@@ -722,7 +723,9 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
         NotificationCenter.default.addObserver(self, selector: #selector(menuTrackingDidBegin(_:)),
             name: NSMenu.didBeginTrackingNotification, object: contextMenuForTesting)
         contextMenuForTesting.autoenablesItems = false
-#if !BRAINBAR_UI
+#if BRAINBAR_UI
+        newMenuBuilder.populate(contextMenuForTesting)
+#else
         statusLineItem.title = Self.statusLineTitle(for: badgePresentation)
         statusLineItem.toolTip = badgePresentation.reason.isEmpty ? nil : badgePresentation.reason
         statusLineItem.isEnabled = false
@@ -770,8 +773,6 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
     @objc private func openDashboard(_ sender: Any?) {
         dashboardPanelController?.showDashboard()
     }
-
-
 
     @objc private func restartBrainBar(_ sender: Any?) {
         BrainBarProcessControl.restart()

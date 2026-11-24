@@ -28,6 +28,20 @@ import XCTest
 
     private func pump() { RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.05)) }
 
+    func testInitialMenuHasSettingsAndQuitBeforeAnyOpen() throws {
+        let (controller, _, host) = try fixture()
+        defer { controller.stop() }
+        let menu = controller.contextMenuForTesting
+        XCTAssertTrue(host.item.menu === menu)
+        for action in [BrainBarMenuAction.settings, .quit] {
+            let item = try XCTUnwrap(menu.items.first { ($0.representedObject as? BrainBarMenuAction) == action },
+                                     "The initial menu must offer \(action) before AppKit begins tracking")
+            XCTAssertTrue(item.isEnabled)
+            XCTAssertNotNil(item.action)
+            XCTAssertNotNil(item.target)
+        }
+    }
+
     func testNewIconAndTooltipStayFrozenThroughTrackingThenShowLatestState() throws {
         let (controller, store, host) = try fixture()
         defer { controller.stop() }

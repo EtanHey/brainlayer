@@ -238,8 +238,7 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
         runtime: BrainBarRuntime,
         activationPolicy: BrainBarWindowActivationPolicy? = nil,
         frameStore: BrainBarWindowFrameStore = BrainBarWindowFrameStore(key: frameDefaultsKey),
-        screenFrames: @escaping () -> [NSRect] = { NSScreen.screens.map(\.visibleFrame) },
-        designDefaults: UserDefaults = .standard
+        screenFrames: @escaping () -> [NSRect] = { NSScreen.screens.map(\.visibleFrame) }
     ) {
 #if BRAINBAR_UI
         let hostingController = NSViewController()
