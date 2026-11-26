@@ -2,6 +2,7 @@ import json
 import os
 import plistlib
 import subprocess
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -627,20 +628,68 @@ def test_unwritable_migration_never_clears_or_flaps(monitor, monkeypatch):
     assert not worker.state.with_suffix(".scan-migration.json").exists()
 
 
-@pytest.mark.parametrize("owner", ["live", "dead", "garbage"])
+@pytest.mark.parametrize("owner", ["updater", "handoff", "reused", "dead", "garbage"])
 def test_in_app_update_custody_defers_activation_until_the_helper_exits(monitor, tmp_path, owner):
-    """A new build's tick must not launch while the updater restores plists and carries approval."""
+    """A new build's tick must not launch while the updater restores plists and carries approval.
+
+    Only a pid that is still the updater counts: after a SIGKILL or panic the lock stays, and a
+    reused pid (here the test process itself) must never defer activation forever.
+    """
     worker, _, calls, _ = monitor
     lock = tmp_path / "update-root/update.lock"
     lock.mkdir(parents=True)
-    dead = subprocess.Popen(["true"])
-    dead.wait()
-    (lock / "pid").write_text({"live": str(os.getpid()), "dead": str(dead.pid), "garbage": "x"}[owner] + "\n")
-    worker.tick()
-    if owner == "live":
+    copy = {"updater": "/x/BrainBar/update-op-1.sh", "handoff": "/keg/brainlayer/launchd/brainbar-update.sh"}
+    holder = None
+    if owner in copy:
+        # A compound command keeps bash (and its argv) alive instead of exec-ing sleep.
+        argv = ["/bin/bash", "-c", "sleep 30; :", "bash", copy[owner], "--custody-held", "1.0.0", "op"]
+        holder = subprocess.Popen(argv)
+        pid = str(holder.pid)
+        deadline = time.monotonic() + 5
+        while "--custody-held" not in auto.process_command(holder.pid):
+            assert time.monotonic() < deadline
+            time.sleep(0.02)
+    elif owner == "dead":
+        dead = subprocess.Popen(["true"])
+        dead.wait()
+        pid = str(dead.pid)
+    else:
+        pid = {"reused": str(os.getpid()), "garbage": "x"}[owner]
+    (lock / "pid").write_text(pid + "\n")
+    try:
+        worker.tick()
+    finally:
+        if holder:
+            holder.kill()
+            holder.wait()
+    if owner in copy:
         assert not calls and not worker.state.exists()
     else:
-        assert len(calls) == 1, "a dead or unreadable owner never blocks recovery"
+        assert len(calls) == 1, "a dead, reused or unreadable owner never blocks recovery"
+
+
+def test_update_deferral_alerts_after_fifteen_minutes_and_recovers(monitor, monkeypatch, tmp_path):
+    worker, _, calls, alerts = monitor
+    lock = tmp_path / "update-root/update.lock"
+    lock.mkdir(parents=True)
+    (lock / "pid").write_text("4242\n")
+    command = {"value": "/bin/bash /x/BrainBar/update-op.sh --custody-held 1.0.0 op"}
+    monkeypatch.setattr(auto, "process_command", lambda pid: command["value"])
+    clock = [1000.0]
+    monkeypatch.setattr(auto, "time", SimpleNamespace(time=lambda: clock[0]))
+    worker.tick()
+    clock[0] += 899
+    worker.tick()
+    assert not calls and not alerts
+    clock[0] += 2
+    worker.tick()
+    worker.tick()
+    update_alerts = [a for a in alerts if a[0] == "brainbar-activation-update"]
+    assert len(update_alerts) == 1 and ">15 minutes" in update_alerts[0][1]
+    command["value"] = ""  # The updater exited without releasing its lock.
+    worker.tick()
+    assert alerts[-2] == ("brainbar-activation-update", None)
+    assert len(calls) == 1
 
 
 def test_custody_taken_during_preflight_defers_before_launch(monitor, monkeypatch, tmp_path):

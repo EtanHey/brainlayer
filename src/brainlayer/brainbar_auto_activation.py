@@ -5,6 +5,7 @@ import fcntl
 import json
 import os
 import plistlib
+import re
 import subprocess
 import sys
 import time
@@ -65,19 +66,36 @@ def brew_active():
     return bool(brew_processes())
 
 
+# The pid in update.lock is the installer's bash child, which always runs as
+# `<copy or keg>/(brainbar-update|update-<op>).sh --custody-held ...`.
+UPDATER_COMMAND = re.compile(r"(?:brainbar-update|/update-[A-Za-z0-9-]+)\.sh --custody-held ")
+
+
+def process_command(pid: int) -> str:
+    # Popen, not run: one bounded ps of a single pid, timeout counted like the other scans.
+    with subprocess.Popen(
+        ["/bin/ps", "-o", "command=", "-p", str(pid)], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True
+    ) as proc:
+        try:
+            out, _ = proc.communicate(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            raise
+    return out.strip() if proc.returncode == 0 else ""
+
+
 def update_in_progress(root: Path) -> bool:
-    """The in-app updater owns BrainBar while update.lock names its live pid (stop to activation)."""
+    """True only while update.lock names a pid that is still the updater (a reused pid never counts)."""
     try:
         pid = int((root / "update.lock" / "pid").read_text().strip())
     except (OSError, ValueError):
         return False
-    try:
-        os.kill(pid, 0)
-    except PermissionError:
-        return True
-    except OSError:
+    if pid <= 0:
         return False
-    return pid > 0
+    try:
+        return bool(UPDATER_COMMAND.search(inspect_processes(process_command, pid)))
+    except OSError as exc:
+        raise ProcessScanUnavailable(type(exc).__name__) from None
 
 
 class AutoActivator:
@@ -164,10 +182,32 @@ class AutoActivator:
             _atomic_write_json(path, {"since": since, "alerted": alerted})
         return bool(processes)
 
-    def _tick(self):
+    def _defer_for_update(self):
         # Between the cask step and its own activation the updater restores plists and carries
         # approval without the activation lock; a launch here would race it on a new build.
-        if update_in_progress(self.update_root) or self._defer_for_brew():
+        path = self.state.with_suffix(".update.json")
+        prior = json.loads(path.read_text()) if path.exists() else {}
+        if not update_in_progress(self.update_root):
+            if prior:
+                path.unlink()
+                if prior.get("alerted"):
+                    report("brainbar-activation-update", None)
+            return False
+        now = time.time()
+        since = min(prior.get("since", now), now)
+        alerted = prior.get("alerted", False)
+        if now - since > 900 and not alerted:
+            report(
+                "brainbar-activation-update",
+                "BrainBar activation deferred by an in-app update for >15 minutes; "
+                "inspect update-state and update.log in ~/Library/Application Support/BrainBar",
+            )
+            alerted = True
+        _atomic_write_json(path, {"since": since, "alerted": alerted})
+        return True
+
+    def _tick(self):
+        if self._defer_for_update() or self._defer_for_brew():
             return
         apps = set()
         for label, _ in JOBS:

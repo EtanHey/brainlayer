@@ -57,9 +57,12 @@ always finds both. The copy is removed after a successful update.
 finds the bundle running, and an automatic caller defers. The lock covers only the
 activation itself. Between the cask step and that call the helper restores plists
 and carries approval, so the formula supervisor's 5-second auto-activation tick
-also defers while `update.lock/pid` names a live process. Otherwise a new build
-could launch before its approval is carried. A dead or unreadable owner never blocks
-the supervisor. The deferral ships in the formula. Each tick is a fresh
+also defers while `update.lock/pid` names a process whose command line is still
+the updater (`brainbar-update.sh` or an `update-<op>.sh` copy run with
+`--custody-held`). Otherwise a new build could launch before its approval is
+carried. A dead, unreadable or reused pid (the lock outlives a SIGKILL or a panic)
+never blocks the supervisor. A deferral longer than 15 minutes raises the
+`brainbar-activation-update` job alert, which clears when the deferral ends. The deferral ships in the formula. Each tick is a fresh
 `/opt/homebrew/opt/brainlayer/libexec/venv/bin/python -m brainlayer.brainbar_auto_activation`
 process, and the opt link points at the new keg once the helper has upgraded the
 formula. The deferral is therefore live before the cask step, with no supervisor restart.

@@ -4244,6 +4244,16 @@
         "target": "urllib.request.urlopen"
       }
     },
+    "9bb7c8dd294384c2ea364f8c63bbb48660c26aea96ff9cbec7e008ac62de9248": {
+      "non_cloud_purpose": "Local cask recovery and identity verification only: one bounded /bin/ps -o command= -p <pid> to confirm the update.lock owner is still the in-app updater before deferring activation; no cloud/enrichment sender. src/brainlayer/brainbar_auto_activation.py process_command subprocess.Popen",
+      "site": {
+        "call_sha256": "c35db0d474c7a7f354e4e9b1f041b3af00ed8bd4a8e65db7ba8d509d2faf5c1a",
+        "kind": "child_process",
+        "owner": "<module>.process_command",
+        "path": "src/brainlayer/brainbar_auto_activation.py",
+        "target": "subprocess.Popen"
+      }
+    },
     "9bd0c3c4b2634f14d17a31e7cee191815de37091912f59a7efc146679cd94663": {
       "non_cloud_purpose": "Parse saved Drive session URL locally to restrict credential-bearing resume requests to the Drive upload endpoint; no network I/O.",
       "site": {
@@ -6030,6 +6040,16 @@
         "owner": "<module>",
         "path": "src/brainlayer/pipeline/semantic_style.py",
         "target": "import importlib.util as _importlib_util"
+      }
+    },
+    "d86a34fd9d5c77e692dec67649bcf50b1ec986bdbaa9fc4d0f69a8bd113bd622": {
+      "non_cloud_purpose": "Local process-scan exception classification only; kills the bounded ps child on subprocess.TimeoutExpired, which the monitor counts as an inspection timeout; no network transport or cloud model. Site: src/brainlayer/brainbar_auto_activation.py <module>.process_command subprocess.TimeoutExpired.",
+      "site": {
+        "call_sha256": "1b7cb65a24712b797899490ddf718930caed0e6c3b88de8205b76493ee49027d",
+        "kind": "callable_reference",
+        "owner": "<module>.process_command",
+        "path": "src/brainlayer/brainbar_auto_activation.py",
+        "target": "subprocess.TimeoutExpired"
       }
     },
     "d86e7eb6ae85d044634d31012fb19c7630b0bceba2d94580aca2809f640dab81": {
