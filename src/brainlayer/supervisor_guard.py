@@ -307,8 +307,15 @@ class Custody:
             if not isinstance(pgid, int) or pgid <= 1 or not isinstance(birth, str):
                 raise RuntimeError("invalid group identity journal")
             if group_exists(pgid):
-                actual = start_time(pgid)
+                try:
+                    actual = start_time(pgid)
+                except ProcessLookupError:
+                    actual = None
                 if actual is None:
+                    # The leader may have exited since killpg(0). Only ESRCH for
+                    # the whole group proves there are no members left in custody.
+                    if not group_exists(pgid):
+                        continue
                     raise RuntimeError(f"cannot establish recorded group identity: {pgid}")
                 if actual == birth:
                     owned.add(pgid)

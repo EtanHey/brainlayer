@@ -1,0 +1,40 @@
+import AppKit
+import SwiftUI
+import Vision
+import XCTest
+@testable import BrainBar
+
+/// Offscreen initial-window proof: no NSWindow, status item, collector, database or socket.
+@MainActor final class BrainBarSingleDesignProofTests: XCTestCase {
+    func testStoredClassicDrawsTheCurrentInitialWindow() throws {
+        NSApplication.shared.setActivationPolicy(.prohibited)
+        let suite = "BrainBarSingleDesignProof." + UUID().uuidString
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set("classic", forKey: BrainBarDesign.key)
+        let selected = BrainBarDesign.current(in: defaults)
+        let capture = BrainBarMenuLiveCapture.capture(status: .checking, verdictAwakeAgeS: nil,
+            wakeCatchUpPending: false, driveAuth: nil, backups: .notRead, backupsNotice: nil,
+            watcher: nil, watcherAwakeAgeS: nil, observations: nil,
+            now: BrainBarDesignFixture.fixedNow, timeZone: TimeZone(secondsFromGMT: 0)!)
+        let store = NDStore(fixture: NDInputs(capture: capture))
+        for (name, appearance) in NDRenderHarness.appearances {
+            let size = NSSize(width: NDGrid.windowWidth, height: NDPageHeight.window(store, page: .overview, screen: nil))
+            let view = NDWindowRoot(store: store, drawsTrafficLights: true)
+            let rep = try NDRenderHarness.host(view, size: size, appearance: appearance)
+            if let path = ProcessInfo.processInfo.environment["BRAINBAR_SINGLE_DESIGN_PROOF"] {
+                let directory = URL(fileURLWithPath: path, isDirectory: true)
+                try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+                try NDRenderHarness.write(rep, name: "stored-classic-window-" + name, in: directory)
+            }
+            let request = VNRecognizeTextRequest()
+            request.recognitionLevel = .accurate
+            try VNImageRequestHandler(cgImage: XCTUnwrap(rep.cgImage)).perform([request])
+            let words = (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }.joined(separator: "\n")
+            XCTAssertTrue(words.contains("Overview"), words)
+            XCTAssertFalse(words.contains("Opening database"), words)
+        }
+        XCTAssertEqual(selected, .new)
+        XCTAssertEqual(defaults.string(forKey: BrainBarDesign.key), "classic")
+    }
+}

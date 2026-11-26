@@ -12,8 +12,8 @@
       "sha256": "a10214bfcb11b57aa01041f22408ccabd56fa7ef89e1e233ffc9d4b595b872a6"
     },
     "src/brainlayer/backup_daily.py": {
-      "sha": "merge #1859 head b2d15b32 into #1862 0c671984: both sides pinned; source merged without conflict",
-      "sha256": "be07e9ab22b67de9552645470c003305f47b41e572c6530e8d9a0f03e57a70a7"
+      "sha": "Track 6 clone alert isolation and private recovery corruption diagnostics (2026-11-24)",
+      "sha256": "f108ca4f25b8d594c4cd61003c28fa42fe73075b912988eec822d74741afa44d"
     },
     "src/brainlayer/backup_heavy_gate.py": {
       "sha": "merge #1859 c3db0a18 with main 89eb7417 (#1867 APFS clone R1): both sides pinned with no model change; source hunks merged without conflict",
@@ -44,8 +44,8 @@
       "sha256": "6ef80da8dbb15ff6b0bcc792c422e3493be29b6290e122ffb1edd5e25e1db154"
     },
     "src/brainlayer/backup_clone.py": {
-      "sha": "APFS R1: propagate run interrupts; sweep/account owned clone remnants; alert integrity failure",
-      "sha256": "92b11329af3112eb021806f79e50cd645a3dc42c30dae5968bc806b057193d41"
+      "sha": "Track 6 typed private recovery corruption; OperationalError remains ordinary fallback (2026-11-24)",
+      "sha256": "9e31a8cbe1d9fa8dbf1768fe5aeef038f8cee0a4c7060c5f7cb580a791d5faf0"
     }
   },
   "line_refs_at": "every path:line is at main 5882de81; backup_daily.py, maintenance*.py and job_alerts.py refs did not move; health_verdict.py refs shifted +2 (Facts fields) / +7 (after the embedding override); refs naming 67d23f14 are historical; backup_daily.py references re-read at 1334f0fd (BACKUP-408, 2026-11-09), calendar shifted weekly references re-read at a8cf28b1 after #1711; calendar Weekly refs inherited #1749 root/main source; six combined pins verified 2026-11-10; calendar Weekly from #1749; Badge full AST ranges re-read against health_verdict sha256 cad451edd75d5fe68e8e40ec7b142df1bc1819d7241a4cd369d2b036f4699f36 on 2026-11-10 Main merge provenance: exact root-fix source #1749; combined Drive/root pins verified 2026-11-10. #1827 (2026-11-18, CodeRabbit): the health_verdict.py line refs in PipeVerdict and DotTable are STILL AT 5882de81 and were not re-measured when #1827 moved the sha256 pin; at #1827 the ingest stall logic IngestRaw describes is _ingest_stall :406-450 (called from _raw_checks :453), and the Hold hysteresis branch is evaluate :700-728 (red-holds-on-amber unless a measured catch-up, :717) #1839: backup_daily mapped functions re-read at fb12d51e; snapshot, strict-reader, abandon and supersede function ranges unchanged; verified-upload append at 4162, unlink/local_removed at 4173-4179, final receipt at 4245. #1839 recovery follow-up re-read at 039f3094: verified receipt append 4176; unlink/local_removed 4187-4193; final receipt 4264; earlier mapped functions unchanged. #1839 delta b2c76011: backup_daily snapshot gate 3272-3298, supersede 3413-3451, local upload selection 3454-3504 (abandon 3491), verified append 4202, unlink/local_removed 4213-4219, final receipt 4288. Re-read current functions; scan receipts 315-370 unchanged.",

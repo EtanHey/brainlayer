@@ -339,28 +339,20 @@ final class BrainBarJobAlertTests: XCTestCase {
         runtime.jobsModel = model
         runtime.driveAuth.setForPreview(status: .init(state: .valid, reason: nil, expiresAt: now.addingTimeInterval(30 * 86_400)))
         let workspace = BrainBarRecordingWorkspace()
-        let panel = BrainBarDashboardPanelController(workspace: workspace, runtime: runtime, designDefaults: brainBarLegacyMenuDefaults())
-        let controller = BrainBarStatusPopoverController(workspace: workspace, runtime: runtime,
-            dashboardPanelController: panel, statusBar: TestStatusItemHost(), menuDefaults: brainBarLegacyMenuDefaults())
-        defer { controller.stop() }
-        controller.setBadgeForTesting(quietBadge, alertsURL: try writeAlerts(#"{"backup-upload-abandoned": "\#(reason)"}"#))
-        controller.menuNeedsUpdate(controller.contextMenuForTesting)
+        model.attachDriveAuth(runtime.driveAuth)
+        model.applyHealthBadge(quietBadge, alerts: BrainBarJobAlerts.read(url: try writeAlerts(#"{"backup-upload-abandoned": "\#(reason)"}"#)))
 
         let snapshot = model.publishedStatus
         XCTAssertFalse(snapshot.needsAttention, "\(snapshot.issues)")
-        XCTAssertFalse(controller.statusDotForTesting, "icon")
-        XCTAssertEqual(controller.contextMenuForTesting.items.first?.title, "Info: \(reason)", "menu")
-        XCTAssertEqual(controller.statusItemForTesting.button?.toolTip, "BrainBar")
+        let sampled = NDStore.sample(runtime: runtime, previous: nil, now: now)
+        XCTAssertTrue(sampled.extras.contains { $0.text == reason })
         XCTAssertEqual(model.groupStatus(.backups).health, .notice, "Jobs")
         XCTAssertEqual(model.backupsHealth(drive: nil).badge, .notice, "Backups")
         XCTAssertEqual(snapshot.notices.map(\.text), [reason], "Dashboard")
 
         // One clean publication removes the same issue everywhere.
-        controller.setBadgeForTesting(quietBadge, alertsURL: try writeAlerts("{}"))
-        controller.menuNeedsUpdate(controller.contextMenuForTesting)
+        model.applyHealthBadge(quietBadge, alerts: .init(active: [:]))
         XCTAssertFalse(model.publishedStatus.needsAttention)
-        XCTAssertFalse(controller.statusDotForTesting)
-        XCTAssertEqual(controller.contextMenuForTesting.items.first?.title, "Nothing needs attention")
         XCTAssertNotEqual(model.groupStatus(.backups).health, .unhealthy)
         XCTAssertNotEqual(model.backupsHealth(drive: nil).badge, .attention)
     }
@@ -730,21 +722,7 @@ final class BrainBarJobAlertRoundOneFollowUpTests: XCTestCase {
         XCTAssertNil(panel.jobAlertLogMessage(forReason: second))
     }
 
-    func test_the_status_item_follows_the_menus_reconciled_badge() throws {
-        let alertsURL = root.appendingPathComponent("job-alerts.json")
-        try Data("{}".utf8).write(to: alertsURL)
-        let runtime = BrainBarRuntime(launchMode: .menuItemDaemon)
-        let windowController = BrainBarDashboardPanelController(workspace: BrainBarRecordingWorkspace(), runtime: runtime, designDefaults: brainBarLegacyMenuDefaults())
-        let status = BrainBarStatusPopoverController(workspace: BrainBarRecordingWorkspace(), runtime: runtime, dashboardPanelController: windowController, statusBar: TestStatusItemHost(), menuDefaults: brainBarLegacyMenuDefaults())
-        defer { status.stop(); windowController.dismiss() }
-        status.setBadgeForTesting(
-            .init(badgeOn: true, reason: first, activeCodes: ["job_alert_maintenance-light"], activeMessages: [first]),
-            alertsURL: alertsURL
-        )
-        status.menuNeedsUpdate(status.contextMenuForTesting)
-        XCTAssertEqual(status.contextMenuForTesting.items.first?.title, "Nothing needs attention")
-        XCTAssertEqual(status.statusItemForTesting.button?.toolTip, "BrainBar", "the icon's tooltip follows the menu")
-    }
+
 }
 
 private struct BrainBarWorkspaceStub: BrainBarWorkspaceActing {

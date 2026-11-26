@@ -156,11 +156,17 @@ final class BrainBarServer: @unchecked Sendable {
     var onDeferredBackupResponseDropped: (@Sendable (_ descriptorWasReused: Bool) -> Void)?
     var onClientAccepted: (@Sendable (Int32) -> Void)?
     var onClientDescriptorClosed: (@Sendable (Int32) -> Void)?
+    /// How long shutdown waits for an in-flight pending-store drain. Read on `queue`.
+    var pendingStoreDrainJoinTimeout: TimeInterval = MCPRouter.pendingStoreDrainJoinTimeout
 #if DEBUG
     private let fixtureWork = DispatchGroup()
     private var fixtureStopping = false
     var beforeDatabaseOpenForTesting: (@Sendable () -> Void)?
     var onFixtureDrainStartedForTesting: (@Sendable () -> Void)?
+
+    func enqueueStoreDrainForTesting(_ work: @escaping @Sendable () -> Void) {
+        queue.sync { router.enqueueStoreDrainForTesting(work) }
+    }
 
     /// A timeout retains every unfinished DB owner; callers must not remove files.
     func stopAndDrainForTesting(deadline: DispatchTime = .now() + 5) -> FixtureShutdownResult {
@@ -1221,13 +1227,24 @@ final class BrainBarServer: @unchecked Sendable {
     }
 
     private func finishCleanup() {
+        let drainsJoined = router?.stopPendingStoreDrains(
+            deadline: .now() + pendingStoreDrainJoinTimeout
+        ) ?? true
         flushDeferredSubscriberDisconnects()
         let writeDatabase = database
         if providedDatabase == nil {
             if let readDatabase, let writeDatabase, readDatabase !== writeDatabase {
                 readDatabase.close()
             }
-            writeDatabase?.close()
+            if drainsJoined {
+                writeDatabase?.close()
+            } else if writeDatabase != nil {
+                // A drain can block without limit in the pending-store flock, which
+                // the Python side also takes. Closing under it is the crash the join
+                // exists to prevent, so leave the write handle open (the router still
+                // holds it) and let process exit release it.
+                NSLog("[BrainBar] Pending-store drain still running after %.1fs at shutdown; leaving the write database open", pendingStoreDrainJoinTimeout)
+            }
         }
         readDatabase = nil
         database = nil
