@@ -47,7 +47,7 @@ def admission(monkeypatch):
         monkeypatch.setattr(gate, "time", lane_time)
         monkeypatch.setattr(backup, "time", lane_time)
         monkeypatch.setattr(gate, "_pressure_reason", lambda *args: None)
-        monkeypatch.setattr(gate, "_disk_reason", lambda host: None)
+        monkeypatch.setattr(gate, "_disk_reason", lambda host, failed_proofs=None: None)
         monkeypatch.setattr(gate, "expected_phase_seconds", lambda: 60)
         monkeypatch.setattr(backup, "_configured_backup_timeout_seconds", lambda: 3600)
         yield path, clock
@@ -431,7 +431,8 @@ def test_alert_tracks_disk_then_pressure_then_lock(disk_admission, monkeypatch):
     lock = path / "lock"
     lock.mkdir()
     monkeypatch.setenv("BRAINLAYER_BACKUP_HEAVY_WINDOW_SECONDS", "100")
-    monkeypatch.setattr(gate, "_pressure_reason", lambda *args: "swap too high" if clock[0] < 20 else None)
+    # Pressure is checked before disk, so it opens at 0 for the disk shortage to name itself.
+    monkeypatch.setattr(gate, "_pressure_reason", lambda *args: "swap too high" if 10 <= clock[0] < 20 else None)
 
     def sleep(seconds):
         assert {0: "needs", 10: "swap too high", 20: "lock held"}[clock[0]] in job_alerts.active_alerts()[
@@ -573,7 +574,7 @@ def test_sigkill_mid_wait_leaves_durable_alert(admission):
 import os, signal
 from brainlayer import backup_daily as backup, backup_heavy_gate as gate
 gate._pressure_reason = lambda *args: 'swap too high'
-gate._disk_reason = lambda host: None
+gate._disk_reason = lambda host, failed_proofs=None: None
 def wait(seconds):
     os.write(int(os.environ['BACKUP_TEST_READY_FD']), b'w')
     signal.pause()
