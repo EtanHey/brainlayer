@@ -1017,12 +1017,6 @@ def _apply_heals(
                 action = _bootstrap_if_absent(label, plist_path, command_runner)
             elif daemon_answers and details.get("timeout"):
                 action = _recycle_hybrid_helper(label, command_runner)
-            elif daemon_answers:
-                # A daemon that answers ping is alive: a restart drops every in-flight request and
-                # cures no failing search. KeepAlive and BrainBar's watchdog still cover a dead one.
-                action = f"heal_skip:{label}:{issue_code}:ping_ok"
-                _record_heal_hold(result, action, {"_type": "heal_skip", **hold, "reason": "ping_ok", **details})
-                continue
             else:
                 process = _launchd_process_state(label, command_runner)
                 if process is not None and _state_is_uninterruptible(process[1]):
@@ -1035,22 +1029,18 @@ def _apply_heals(
                     )
                     continue
                 if canary_failed:
-                    # Under memory pressure a restart cures nothing and forces a cold ~2.7 GB helper
-                    # reload. An unreadable level keeps the restart and records why.
+                    # Under memory pressure a restart drops every in-flight request and forces a cold
+                    # ~2.7 GB helper reload, live daemon or not. An unreadable level keeps the restart.
                     level, unreadable = _memory_pressure_level(command_runner)
+                    heal_context = {"memory_pressure_level": level, "ping_ok": daemon_answers}
                     if level is not None and level >= HEAL_BACKOFF_MEMORY_PRESSURE_LEVEL:
                         action = f"heal_backoff:{label}:{issue_code}:pressure={level}"
-                        _record_heal_hold(
-                            result,
-                            action,
-                            {"_type": "heal_backoff", **hold, "memory_pressure_level": level, **details},
-                        )
+                        _record_heal_hold(result, action, {"_type": "heal_backoff", **hold, **heal_context, **details})
                         continue
                     if level is None:
                         unavailable = f"heal_pressure_unavailable:{label}:{issue_code}:{unreadable}"
                         if unavailable not in result.actions:
                             result.actions.append(unavailable)
-                    heal_context = {"memory_pressure_level": level}
                 action = _kickstart(label, command_runner)
             if action.startswith("bootstrap:"):
                 tripped.discard(key)

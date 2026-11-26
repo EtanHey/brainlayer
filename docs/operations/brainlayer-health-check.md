@@ -64,20 +64,21 @@ With `--heal`, the check uses `launchctl kickstart -k` for cheap recovery:
   baseline, stall counter and heal episode; a later successful sample continues
   the comparison. An unavailable current count cannot itself trigger that heal.
 - `com.brainlayer.brainbar-daemon` when the BrainBar MCP canary fails retrieval or transport,
-  only when the daemon also fails a `ping` and the Mac is not under memory pressure:
-  - The daemon answers `ping`: a canary timeout recycles only the hybrid search helper
-    (`recycle_helper:<pid>`); any other canary failure records
-    `heal_skip:<label>:brain_search_canary_failed:ping_ok` and restarts nothing.
-  - The daemon does not answer and `kern.memorystatus_vm_pressure_level` is 2 or more: the check
-    records `heal_backoff:<label>:brain_search_canary_failed:pressure=<n>`. A restart there drops
-    every in-flight request and forces a cold helper reload without curing the overload.
-  - The level cannot be read: the kickstart runs as before, after a
-    `heal_pressure_unavailable:<label>:brain_search_canary_failed:<reason>` action.
+  unless one of these holds:
+  - The canary timed out and the daemon answers `ping`: only the hybrid search helper is
+    recycled (`recycle_helper:<pid>`).
+  - `kern.memorystatus_vm_pressure_level` is 2 or more, whether or not the daemon answers `ping`:
+    the check records `heal_backoff:<label>:brain_search_canary_failed:pressure=<n>` (the heal event
+    carries `ping_ok`). A restart under pressure drops every in-flight request and forces a cold
+    helper reload without curing the overload.
+
+  When the level cannot be read, the kickstart runs as before, after a
+  `heal_pressure_unavailable:<label>:brain_search_canary_failed:<reason>` action.
 
 Before a kickstart, the check reads the launchd process state. Processes in an
 uninterruptible `U`/`D` state are not kickstarted repeatedly; the check records a
 `heal_backoff` action and the existing circuit breaker escalates after repeated
-failed ticks. The ping and pressure holds count toward that same breaker. A daemon that
+failed ticks. The pressure backoff counts toward that same breaker. A daemon that
 exits is still restarted by launchd `KeepAlive`, and one whose heartbeat goes stale for
 45 seconds by BrainBar's lifecycle watchdog.
 

@@ -186,8 +186,8 @@ def test_slow_alive_ping_uses_canary_budget_and_only_recycles_helper(tmp_path, m
     assert "kickstart:com.brainlayer.brainbar-daemon" not in result.actions
 
 
-# --- Heal gate: never restart a BrainBar that answers ping, nor one that does not while the Mac is
-# under memory pressure. Four kickstarts on 21-22 Nov restarted BrainBar inside overload episodes,
+# --- Heal gate: a failing search canary never restarts BrainBar while the Mac is under memory
+# pressure. Four kickstarts on 21-22 Nov (all before #1850) restarted it inside overload episodes,
 # dropped every in-flight request, forced a cold ~2.7 GB helper reload, and cured nothing.
 
 DAEMON = "com.brainlayer.brainbar-daemon"
@@ -210,8 +210,12 @@ def _timed_out(*_):
     raise TimeoutError("timed out")
 
 
-def _gate_runner(commands, *, pressure=None, state="S"):
-    """Fake launchctl/ps/sysctl: the daemon is pid 123 in ``state``; ``pressure`` is the sysctl answer."""
+HELPER = "456 123 /python -m brainlayer.brainbar_hybrid_helper --socket-path /tmp/brainbar-hybrid-123.sock"
+
+
+def _gate_runner(commands, *, pressure=None, state="S", child=""):
+    """Fake launchctl/ps/sysctl: the daemon is pid 123 in ``state`` with ``child`` as its process
+    rows; ``pressure`` is the sysctl answer."""
 
     def runner(args):
         commands.append(args)
@@ -226,6 +230,8 @@ def _gate_runner(commands, *, pressure=None, state="S"):
             output = "pid = 123"
         elif args[:2] == ["ps", "-o"]:
             output = state
+        elif args[0] == "ps":
+            output = child
         return subprocess.CompletedProcess(args, 0, output, "")
 
     return runner
@@ -234,8 +240,9 @@ def _gate_runner(commands, *, pressure=None, state="S"):
 def _heal_once(tmp_path, monkeypatch, *, canary, ping_ok, runner):
     db = tmp_path / "brain.db"
     _make_db(db, total=3, vector_rows=3)
-    pings = []
-    monkeypatch.setattr(health, "_brainbar_answers_ping", lambda *args: pings.append(args) or ping_ok)
+    events = []
+    monkeypatch.setattr(health, "_brainbar_answers_ping", lambda *_: ping_ok)
+    monkeypatch.setattr(health, "_emit_heal_event", events.append)
     config = health.HealthCheckConfig(
         db_path=db, state_path=tmp_path / "state", heal=True, heal_min_consecutive_failures=1
     )
@@ -247,7 +254,7 @@ def _heal_once(tmp_path, monkeypatch, *, canary, ping_ok, runner):
         now_fn=_clock_at(25),
     )
     assert "brain_search_canary_failed" in [issue.code for issue in result.issues]
-    return result, pings
+    return result, events
 
 
 def _kickstarts(commands):
@@ -262,40 +269,57 @@ def _sysctl_reads(commands):
     return [args for args in commands if args[-1] == PRESSURE_KEY]
 
 
-@pytest.mark.parametrize("canary", [_retrieval_error, _closed_without_response], ids=["retrieval", "closed"])
-def test_canary_failure_with_live_ping_skips_the_daemon_restart(tmp_path, monkeypatch, canary):
-    commands = []
-    result, pings = _heal_once(
-        tmp_path, monkeypatch, canary=canary, ping_ok=True, runner=_gate_runner(commands, pressure=1)
-    )
-    assert not _daemon_kickstarts(commands)
-    assert f"kickstart:{DAEMON}" not in result.actions
-    assert f"heal_skip:{DAEMON}:brain_search_canary_failed:ping_ok" in result.actions
-    assert len(pings) == 1
-    assert not any(args[0] == "kill" for args in commands)
+# Every canary failure the heal may restart for: everything except #1850's "timeout + ping ok".
+RESTARTABLE_FAILURES = [
+    pytest.param(_timed_out, False, id="timeout-no-ping"),
+    pytest.param(_retrieval_error, False, id="error-no-ping"),
+    pytest.param(_retrieval_error, True, id="error-ping-ok"),
+    pytest.param(_closed_without_response, True, id="closed-ping-ok"),
+]
 
 
 @pytest.mark.parametrize("level", [2, 4])
-def test_dead_ping_under_memory_pressure_backs_off_instead_of_restarting(tmp_path, monkeypatch, level):
+@pytest.mark.parametrize("canary,ping_ok", RESTARTABLE_FAILURES)
+def test_canary_failure_under_memory_pressure_backs_off_instead_of_restarting(
+    tmp_path, monkeypatch, canary, ping_ok, level
+):
     commands = []
-    result, _ = _heal_once(
-        tmp_path, monkeypatch, canary=_timed_out, ping_ok=False, runner=_gate_runner(commands, pressure=level)
+    result, events = _heal_once(
+        tmp_path, monkeypatch, canary=canary, ping_ok=ping_ok, runner=_gate_runner(commands, pressure=level)
     )
     assert not _daemon_kickstarts(commands)
     assert f"kickstart:{DAEMON}" not in result.actions
     assert f"heal_backoff:{DAEMON}:brain_search_canary_failed:pressure={level}" in result.actions
     assert len(_sysctl_reads(commands)) == 1
+    [backoff] = [event for event in events if event["_type"] == "heal_backoff"]
+    assert backoff["memory_pressure_level"] == level
+    assert backoff["ping_ok"] is ping_ok
 
 
-@pytest.mark.parametrize("canary", [_timed_out, _retrieval_error], ids=["timeout", "retrieval"])
-def test_dead_ping_without_pressure_still_restarts_the_daemon(tmp_path, monkeypatch, canary):
+@pytest.mark.parametrize("canary,ping_ok", RESTARTABLE_FAILURES)
+def test_canary_failure_on_a_calm_mac_still_restarts_the_daemon(tmp_path, monkeypatch, canary, ping_ok):
     commands = []
     result, _ = _heal_once(
-        tmp_path, monkeypatch, canary=canary, ping_ok=False, runner=_gate_runner(commands, pressure=1)
+        tmp_path, monkeypatch, canary=canary, ping_ok=ping_ok, runner=_gate_runner(commands, pressure=1)
     )
     assert f"kickstart:{DAEMON}" in result.actions
     assert len(_daemon_kickstarts(commands)) == 1
-    assert not [action for action in result.actions if action.startswith(("heal_skip:", "heal_backoff:"))]
+    assert not [action for action in result.actions if action.startswith("heal_backoff:")]
+
+
+def test_timeout_with_live_ping_only_recycles_the_helper_even_under_pressure(tmp_path, monkeypatch):
+    commands = []
+    result, _ = _heal_once(
+        tmp_path,
+        monkeypatch,
+        canary=_timed_out,
+        ping_ok=True,
+        runner=_gate_runner(commands, pressure=4, child=HELPER),
+    )
+    assert "recycle_helper:456" in result.actions
+    assert not _daemon_kickstarts(commands)
+    assert not [action for action in result.actions if action.startswith("heal_backoff:")]
+    assert not _sysctl_reads(commands)
 
 
 @pytest.mark.parametrize(
