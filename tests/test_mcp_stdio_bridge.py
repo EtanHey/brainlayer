@@ -1168,3 +1168,111 @@ def test_stdio_bridge_exits_when_backend_never_replies_after_stdin_eof(monkeypat
                 os.close(fd)
             except OSError:
                 pass
+
+
+def test_stdio_bridge_forwards_server_initiated_tools_list_changed(monkeypatch) -> None:
+    """BrainBar sends notifications/tools/list_changed (no id) after expand_palette.
+
+    The bridge must hand it to the stdio client after the tool result, or the client
+    never re-reads tools/list and the gated tools stay invisible.
+    """
+    import brainlayer.mcp_stdio_bridge as bridge
+
+    real_socketpair = socket.socketpair
+
+    def framed(body: bytes) -> bytes:
+        return b"Content-Length: " + str(len(body)).encode("ascii") + b"\r\n\r\n" + body
+
+    tool_result = framed(b'{"jsonrpc":"2.0","id":7,"result":{"expanded":true}}')
+    list_changed = framed(b'{"jsonrpc":"2.0","method":"notifications/tools/list_changed"}')
+    body = b'{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"expand_palette"}}'
+    request = framed(body)
+    sent_payload = bytearray()
+
+    class ExpandingSocket:
+        def __init__(self) -> None:
+            self.client, self.peer = real_socketpair()
+            self.responded = False
+
+        def setblocking(self, flag: bool) -> None:
+            self.client.setblocking(flag)
+
+        def connect(self, _path: str) -> None:
+            return None
+
+        def fileno(self) -> int:
+            return self.client.fileno()
+
+        def getsockopt(self, _level: int, _option: int) -> int:
+            return 0
+
+        def send(self, data: bytes | memoryview) -> int:
+            payload = bytes(data)
+            sent_payload.extend(payload)
+            if len(sent_payload) >= len(request) and not self.responded:
+                self.peer.sendall(tool_result)
+                time.sleep(0.03)  # a separate read, as when the server writes two frames
+                self.peer.sendall(list_changed)
+                self.responded = True
+            return len(payload)
+
+        def recv(self, size: int) -> bytes:
+            return self.client.recv(size)
+
+        def close(self) -> None:
+            self.client.close()
+            self.peer.close()
+
+    expanding_socket = ExpandingSocket()
+    monkeypatch.setattr(bridge.socket, "socket", lambda *_args, **_kwargs: expanding_socket)
+
+    stdin_r, stdin_w = os.pipe()
+    stdout_r, stdout_w = os.pipe()
+    stderr_r, stderr_w = os.pipe()
+    stdin_reader = os.fdopen(stdin_r, "rb", buffering=0)
+    stdout_writer = os.fdopen(stdout_w, "wb", buffering=0)
+    stderr_writer = os.fdopen(stderr_w, "wb", buffering=0)
+    exit_codes: list[int] = []
+
+    def run() -> None:
+        exit_codes.append(
+            bridge.run_bridge(
+                BridgeConfig(
+                    socket_path="/nonexistent/brainlayer-bridge-list-changed.sock",
+                    reconnect_ms=1,
+                    max_reconnect_ms=1,
+                    connect_timeout_ms=50,
+                    stdin_eof_drain_ms=10,
+                ),
+                stdin=stdin_reader,
+                stdout=stdout_writer,
+                stderr=stderr_writer,
+            )
+        )
+
+    thread = threading.Thread(target=run, daemon=True)
+    thread.start()
+    try:
+        # stdin stays open, as a live client's does, until the notification arrives.
+        os.write(stdin_w, request)
+        output = _read_fd_until(stdout_r, lambda data: list_changed in data, timeout=2)
+        os.close(stdin_w)
+        stdin_w = -1
+        thread.join(timeout=2)
+
+        assert output.index(tool_result) < output.index(list_changed)
+        assert not thread.is_alive()
+        assert exit_codes == [0]
+    finally:
+        if stdin_w != -1:
+            os.close(stdin_w)
+        for stream in (stdin_reader, stdout_writer, stderr_writer):
+            try:
+                stream.close()
+            except OSError:
+                pass
+        for fd in (stdout_r, stderr_r):
+            try:
+                os.close(fd)
+            except OSError:
+                pass
