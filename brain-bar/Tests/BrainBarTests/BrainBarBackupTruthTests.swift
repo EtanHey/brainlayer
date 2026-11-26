@@ -116,9 +116,11 @@ import XCTest
 
     func testStalledProgressNamesTheStallAndMovingProgressDoesNot() throws {
         var progress = try XCTUnwrap(BrainBarBackupProgress.read(BrainBarDesignFixture.backupFacts(.uploadProgress), now: BrainBarDesignFixture.now))
-        XCTAssertFalse(progress.title.contains(BrainBarMenuPresenter.SurfaceSay.notUploadingSince))
+        let at = try XCTUnwrap(progress.checkpointAt)
+        let stalledTitle = BrainBarMenuPresenter.SurfaceSay.driveStalledAt(BrainBarBackupProgress.clock(at))
+        XCTAssertNotEqual(progress.title, stalledTitle)
         progress.isStalled = true
-        XCTAssertTrue(progress.title.contains(BrainBarMenuPresenter.SurfaceSay.notUploadingSince))
+        XCTAssertEqual(progress.title, stalledTitle, "the Backups page and Drive's line name a stall in the same words")
         XCTAssertEqual(progress.accessibilityValue, try XCTUnwrap(progress.checkpointAt).formatted(date: .abbreviated, time: .shortened))
     }
 
@@ -129,14 +131,15 @@ import XCTest
         let inputs = BrainBarDesignFixture.inputs(.uploadStalled)
         let progress = try XCTUnwrap(inputs.backupProgress)
         XCTAssertTrue(progress.isStalled)
-        XCTAssertTrue(progress.title.contains(Say.notUploadingSince))
+        XCTAssertEqual(progress.title, progress.stationLine(), "one name for the stall on both surfaces")
+        XCTAssertNil(BrainBarBackupProgressView(progress: progress).checkpointText, "no time pushed to the right")
         XCTAssertNil(BrainBarBackupProgressView(progress: progress, compact: true).lastGoodText)
         let caption = try XCTUnwrap(BrainBarBackupProgressView(progress: progress).lastGoodText)
         XCTAssertTrue(caption.hasPrefix(Say.backupLastGood + " "), caption)
         XCTAssertTrue(caption.contains(try XCTUnwrap(progress.lastGoodAt).formatted(date: .abbreviated, time: .shortened)))
         let zone = try XCTUnwrap(TimeZone(identifier: "Asia/Jerusalem"))
         let line = progress.stationLine(in: zone)
-        XCTAssertEqual(line, Say.driveStalledSince(BrainBarBackupProgress.clock(try XCTUnwrap(progress.checkpointAt), in: zone)))
+        XCTAssertEqual(line, Say.driveStalledAt(BrainBarBackupProgress.clock(try XCTUnwrap(progress.checkpointAt), in: zone)))
         let state = NDR1.make(inputs, NDModel.make(inputs)).pipeline
         XCTAssertEqual(NDPipelineChart.drawingState(state, progress: progress).status[.drive]?.text, progress.stationLine())
         // Drive's widest line keeps the Kept-safe rule: 12 pt to the frame on its right.

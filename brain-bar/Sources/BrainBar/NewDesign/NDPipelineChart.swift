@@ -136,7 +136,7 @@ struct NDPipelineChart: View {
             // The upload's words are Drive's own status line (drawn above); its bar sits in the station's own space.
             if let backupProgress, Self.showsProgress(state, progress: backupProgress) {
                 let frame = Self.progressFrame(state)
-                BrainBarBackupProgressView(progress: backupProgress, compact: true)
+                BrainBarBackupProgressView(progress: backupProgress, compact: true, muted: state.status[.drive]?.severity != nil)
                     .frame(width: frame.width, height: frame.height)
                     .offset(x: frame.minX, y: frame.minY)
                     .allowsHitTesting(false)
@@ -165,16 +165,17 @@ struct NDPipelineChart: View {
         progress != nil
     }
 
-    /// The bar: 96 × 3, 5 pt under Google Drive's status line, inside the Kept-safe frame and 3.5 pt clear of its
-    /// border. One place in every state: calm (the line says what the upload is doing) and faulted (the line keeps the
-    /// fault's words). Nothing hangs below it, so it never reaches the Memory-to-Search lane.
+    /// The bar: 96 × 3, 3 pt under Google Drive's status line box (y 93…96, whole points) and 5.5 pt clear of the
+    /// Kept-safe border, so it belongs to its words rather than resting on the border. One place in every state: calm
+    /// (the line says what the upload is doing) and faulted (the line keeps the fault's words, the bar turns grey).
+    /// Nothing hangs below it, so it never reaches the Memory-to-Search lane.
     static func progressFrame(_ state: NDPipelineState) -> CGRect {
         let p = NDPipelineLayout.point(.drive)
         let lineBottom = NDPipelineLayout.statusTop(.drive) + NDPipelineLayout.statusHeight
-        return CGRect(x: p.x - 48, y: lineBottom + 5, width: 96, height: 3)
+        return CGRect(x: p.x - 48, y: lineBottom + 3, width: 96, height: 3)
     }
 
-    /// A calm Drive's status line becomes the upload's line ("Uploading 45%", "Checking copy", "Stalled since 06:26");
+    /// A calm Drive's status line becomes the upload's line ("Uploading 45%", "Checking copy", "Stalled at 06:26");
     /// a fault keeps its own words.
     static func drawingState(_ state: NDPipelineState, progress: BrainBarBackupProgress?) -> NDPipelineState {
         var drawn = state
@@ -973,7 +974,7 @@ struct NDStationPopover: View {
                 checks.first { $0.name == name }?.ageS.flatMap { $0.isFinite && $0 >= 0 ? Say.ago(NDFormat.ageText($0)) : nil }
             }
             // The panel is a short strip above the station with no room for another row: a running upload's start and its
-            // last checkpoint are on the Backups page; Drive's line says when it stopped moving ("Stalled since 06:26").
+            // last checkpoint are on the Backups page; Drive's line says when it stopped moving ("Stalled at 06:26").
             return [age("backup_offsite").map { Line(label: Say.databaseCopy, value: $0) },
                     age("transcripts").map { Line(label: Say.conversationsCopy, value: $0) }].compactMap { $0 }
         case .mac:

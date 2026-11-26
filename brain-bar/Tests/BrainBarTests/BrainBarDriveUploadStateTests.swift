@@ -114,7 +114,10 @@ import XCTest
 
     /// The progress row as the chart draws it: the frame it places the progress view in, and Drive's own line.
     static func progressElements(_ state: NDPipelineState, _ progress: BrainBarBackupProgress) -> [(String, CGRect)] {
-        let drawn = NDPipelineChart.drawingState(state, progress: progress)
+        progressElements(state, drawn: NDPipelineChart.drawingState(state, progress: progress))
+    }
+
+    static func progressElements(_ state: NDPipelineState, drawn: NDPipelineState) -> [(String, CGRect)] {
         var out = [("progress view", NDPipelineChart.progressFrame(state))]
         let drive = L.labelRects(.drive, drawn)
         if drive.count > 1 { out.append(("drive line \"\(drawn.status[.drive]?.text ?? "")\"", drive[drive.count - 1])) }
@@ -122,6 +125,7 @@ import XCTest
     }
 
     func testEveryUploadStateClearsTheChart() throws {
+        var checks: [(String, NDPipelineState, NDPipelineState)] = []
         for c in try Self.cases() {
             let state = Self.state(c)
             guard let progress = c.progress else {
@@ -129,14 +133,26 @@ import XCTest
                 continue
             }
             XCTAssertTrue(NDPipelineChart.showsProgress(state, progress: progress), c.name)
-            let drawn = NDPipelineChart.drawingState(state, progress: progress)
-            for (what, rect) in Self.progressElements(state, progress) {
+            checks.append((c.name, state, NDPipelineChart.drawingState(state, progress: progress)))
+        }
+        // The stall's line at its widest clock, in the person's own 12- or 24-hour setting ("12:58 PM", "오후 12:58").
+        let stalled = try XCTUnwrap(Self.cases().first { $0.name == "stalled" })
+        let utc = try XCTUnwrap(TimeZone(identifier: "UTC"))
+        let widest = try XCTUnwrap(Calendar(identifier: .gregorian).date(from: DateComponents(timeZone: utc, year: 2026, month: 11,
+                                                                                              day: 26, hour: 12, minute: 58)))
+        for id in ["en_US", "ko_KR", "en_GB"] {
+            var drawn = Self.state(stalled)
+            drawn.status[.drive] = .init(text: Say.driveStalledAt(BrainBarBackupProgress.clock(widest, in: utc, locale: Locale(identifier: id))))
+            checks.append(("stalled-\(id)", Self.state(stalled), drawn))
+        }
+        for (name, state, drawn) in checks {
+            for (what, rect) in Self.progressElements(state, drawn: drawn) {
                 // Drive's line sits directly under Drive's name, as every station's status does.
                 let own = what.hasPrefix("drive line") ? "drive name" : ""
                 for (obstacle, box) in Self.obstacles(drawn) where obstacle != own && rect.intersects(box) {
-                    XCTFail("\(c.name): \(what) \(rect) overlaps \(obstacle) \(box)")
+                    XCTFail("\(name): \(what) \(rect) overlaps \(obstacle) \(box)")
                 }
-                XCTAssertTrue(L.keptSafe.contains(rect), "\(c.name): \(what) \(rect) stays inside Kept safe \(L.keptSafe)")
+                XCTAssertTrue(L.keptSafe.contains(rect), "\(name): \(what) \(rect) stays inside Kept safe \(L.keptSafe)")
             }
         }
     }
@@ -168,7 +184,7 @@ import XCTest
                 XCTAssertEqual(drawn.status[.drive], fault, c.name)
             } else if c.name == "stalled" {
                 let at = try XCTUnwrap(progress.checkpointAt)
-                XCTAssertEqual(progress.stationLine(in: zone), Say.driveStalledSince(BrainBarBackupProgress.clock(at, in: zone)))
+                XCTAssertEqual(progress.stationLine(in: zone), Say.driveStalledAt(BrainBarBackupProgress.clock(at, in: zone)))
             } else {
                 XCTAssertEqual(progress.stationLine(in: zone), expected[c.name], c.name)
                 XCTAssertEqual(drawn.status[.drive]?.text, expected[c.name], c.name)
@@ -182,8 +198,32 @@ import XCTest
                        Say.backupUploadStarted + " " + started.formatted(date: .abbreviated, time: .shortened))
         XCTAssertNil(BrainBarBackupProgressView(progress: long, compact: true).startedText)
         XCTAssertEqual(BrainBarBackupProgressView(progress: long).checkpointText,
-                       "61% · " + Say.backupUpdatedAt(try XCTUnwrap(long.checkpointAt).formatted(date: .omitted, time: .shortened)))
+                       "61% · " + Say.backupUpdatedAt(BrainBarBackupProgress.clock(try XCTUnwrap(long.checkpointAt))))
         XCTAssertNil(BrainBarBackupProgressView(progress: long, compact: true).checkpointText)
+    }
+
+    /// Review 1886 B2: no dashed bar. Stalled keeps its last amount in grey, a check fills the track in a lighter grey, an
+    /// unknown amount is the track alone, a Drive in error greys the amount; none of them moves.
+    func testBarStatesAreStillAndDistinct() throws {
+        func fill(_ name: String, muted: Bool = false) throws -> BrainBarBackupProgress.BarFill {
+            try XCTUnwrap(Self.cases().first { $0.name == name }?.progress).barFill(muted: muted)
+        }
+        XCTAssertEqual(try fill("uploading-45"), .accent(0.45))
+        XCTAssertEqual(try fill("stalled"), .grey(0.45), "the stall keeps the amount it reached")
+        XCTAssertEqual(try fill("verifying"), .checking)
+        XCTAssertEqual(try fill("uploading-no-total"), .unknown)
+        XCTAssertEqual(try fill("uploading-45", muted: true), .grey(0.45), "Drive in error: grey, never the accent")
+        let still = [try fill("stalled"), try fill("verifying"), try fill("uploading-no-total")]
+        XCTAssertEqual(Set(still.map { "\($0)" }).count, 3, "three different bars")
+        for name in ["stalled", "verifying", "uploading-no-total"] {
+            let p = try XCTUnwrap(Self.cases().first { $0.name == name }?.progress)
+            var next = p
+            next.confirmed = (p.confirmed ?? 0) + 10
+            XCTAssertFalse(next.animates(after: p, reduceMotion: false), "\(name) is a still bar")
+        }
+        let source = try String(contentsOf: URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().appendingPathComponent("Sources/BrainBar/BrainBarBackupProgress.swift"), encoding: .utf8)
+        XCTAssertFalse(source.contains("dash:"), "no dashed bar in any state")
     }
 
     /// The window has one width: its minimum is its default, so one render per state covers both.
