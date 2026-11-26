@@ -3252,6 +3252,14 @@
         "target": "sqlite3.connect"
       }
     },
+    "758a4e46f2438c45a638722da9accefd8ddeb24f1c512d497ce9caa50dfd2412": {
+      "non_cloud_purpose": "Homebrew release updater: inherited local file-lock custody through supervisor/installer lifetime and the exec handoff to the new keg helper; stops BrainBar locally (launchctl bootout, SIGTERM/SIGKILL by bundle path) before pinned install, local codesign/Gatekeeper checks and recovery; no model transport.",
+      "site": {
+        "body_sha256": "0ccbdfa4d065cbf9246dafa16d95b8b658ea5f0419d683723e7c5893b9402149",
+        "kind": "non_python_source",
+        "path": "scripts/brainbar-update.sh"
+      }
+    },
     "7682ed1b976e3e3a13acb5b7d1ff74a6a4da858dc7d3e9da1c5a6210a8fafb84": {
       "non_cloud_purpose": "Retained local data/OS/MCP operation: hooks/brainbar-postcompact.py <module>.main",
       "site": {
@@ -5202,14 +5210,6 @@
         "owner": "<module>._git_cmd",
         "path": "src/brainlayer/pipeline/git_overlay.py",
         "target": "subprocess.TimeoutExpired"
-      }
-    },
-    "bade659e7442cc873c71566e522c8b3b40d601680e546c93f19aada2a21bc768": {
-      "non_cloud_purpose": "Homebrew release updater: inherited local file-lock custody through supervisor/installer lifetime, pinned install and recovery; no model transport.",
-      "site": {
-        "body_sha256": "cbacfbecb1a718883863e931e6491417202a77488e9232b28fa744cf059d2e4f",
-        "kind": "non_python_source",
-        "path": "scripts/brainbar-update.sh"
       }
     },
     "baed4cb59b552413cee1eba5a2b06f6fe58bf90ec44469923ab041ef695a9b6f": {
