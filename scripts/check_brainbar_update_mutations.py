@@ -1,4 +1,4 @@
-"""Replay the seven reviewed updater faults against isolated copies of the installer."""
+"""Replay the reviewed updater faults against isolated copies of the installer."""
 
 import argparse
 import json
@@ -24,7 +24,7 @@ def main():
     mutations = [
         (
             "second-preflight",
-            source.replace("pin\npreflight\nSTEP=formula", "pin\nSTEP=formula"),
+            source.replace("  pin\n  preflight\n  STEP=formula", "  pin\n  STEP=formula"),
             "test_second_preflight_catches_work_started_during_update",
         ),
         (
@@ -47,6 +47,26 @@ def main():
             "noop-cask",
             source.replace("brew reinstall --cask", "brew upgrade --cask"),
             "test_retry_after_restoration_reinstalls_recorded_cask",
+        ),
+        (
+            "no-stop",
+            source.replace('state "$STEP"\nstop_brainbar\n', 'state "$STEP"\n'),
+            "test_running_app_that_ignores_quit_is_stopped_before_bundle_moves",
+        ),
+        (
+            "rollback-no-stop",
+            source.replace("      stop_brainbar || {", "      true || {", 1),
+            "test_rollback_stops_the_new_app_before_moving_it",
+        ),
+        (
+            "no-plist-restore",
+            source.replace('[ -d "$APP" ]\nrestore_agents\n', '[ -d "$APP" ]\n'),
+            "test_trashed_plists_are_restored_before_activation",
+        ),
+        (
+            "no-handoff",
+            source.replace('  exec /bin/bash "$NEXT" --custody-held --handoff "$V" "$OP"\n', "  :\n"),
+            "test_hands_over_to_the_new_kegs_script_with_custody",
         ),
         ("nonexecutable", source, "test_update_script_is_executable"),
     ]

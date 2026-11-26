@@ -1,13 +1,59 @@
 """Exercise the shipped shell with an invented keg and command recorder, never brew."""
 
 import os
+import signal
 import subprocess
+import time
 import zipfile
 from pathlib import Path
 
 import pytest
 
 SCRIPT = Path(os.environ.get("BRAINBAR_UPDATE_SCRIPT", Path(__file__).parents[1] / "scripts/brainbar-update.sh"))
+
+
+# Shared by the fakes: a BrainBar process is any process running an executable inside the bundle.
+# The fake app ignores SIGTERM, like an app that Homebrew's AppleScript quit cannot stop.
+APP_ALIVE = """
+app_alive() { /bin/ps -axo command= | /usr/bin/grep -F -- "$BRAINBAR_UPDATE_APP/Contents/MacOS/" | /usr/bin/grep -vq grep; }
+start_app() {
+  /bin/mkdir -p "$1/Contents/MacOS"
+  printf '#!/bin/bash\\ntrap "" TERM\\nwhile :; do /bin/sleep 0.05; done\\n' > "$1/Contents/MacOS/BrainBar"
+  /bin/chmod 700 "$1/Contents/MacOS/BrainBar"
+  nohup "$1/Contents/MacOS/BrainBar" >/dev/null 2>&1 &
+  echo $!
+}
+"""
+
+
+def _alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    # A killed child of this test stays a zombie until reaped; ps reports it as Z.
+    state = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True).stdout.strip()
+    return bool(state) and not state.startswith("Z")
+
+
+def _start_stubborn_app(app: Path) -> int:
+    out = subprocess.run(["bash", "-c", APP_ALIVE + 'start_app "$1"', "-", str(app)], capture_output=True, text=True)
+    pid = int(out.stdout.strip())
+    deadline = time.monotonic() + 5
+    while (
+        "Contents/MacOS/BrainBar"
+        not in subprocess.run(["ps", "-o", "command=", "-p", str(pid)], capture_output=True, text=True).stdout
+    ):
+        assert time.monotonic() < deadline
+        time.sleep(0.02)
+    return pid
+
+
+def _kill(pid: int) -> None:
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
 
 
 def _clean_git_env() -> dict[str, str]:
@@ -26,14 +72,21 @@ def install(tmp_path):
     keg.mkdir(parents=True)
     log = tmp_path / "commands"
 
+    agents = tmp_path / "LaunchAgents"
+    agents.mkdir()
+    for label in ("brainbar", "brainbar-daemon"):
+        (agents / f"com.brainlayer.{label}.plist").write_text("old")
+        (tmp_path / f"loaded-com.brainlayer.{label}").touch()
+
     def command(path, body):
-        path.write_text("#!/bin/bash\nset -e\n" + body)
+        path.write_text("#!/bin/bash\nset -e\n" + APP_ALIVE + body)
         path.chmod(0o700)
 
     command(
         commands / "brew",
         """
 echo "brew $*" >> "$TEST_LOG"
+[ "$*" != "upgrade --formula etanhey/layers/brainlayer" ] || echo "formula-ppid $PPID" >> "$TEST_LOG"
 if [ "$1" = info ]; then
   if [ "$3" = --formula ]; then echo '{"formulae":[{"versions":{"stable":"2.0.0"}}]}'
   elif [ "$FAIL_STEP" = mismatch ]; then echo '{"casks":[{"version":"1.9.9"}]}'
@@ -45,9 +98,16 @@ elif [ "$1" = --prefix ]; then echo "$TEST_PREFIX"
 elif [ "$2" = --cask ]; then
   if [ "$1" = upgrade ] && [ -f "$TEST_PREFIX/cask-recorded" ]; then exit 0; fi
   touch "$TEST_PREFIX/cask-recorded"
+  # Homebrew's uninstall: unload both labels, try an AppleScript quit (which a launchd job is
+  # never allowed to send), trash both plists, then install and let postflight rewrite them.
+  if app_alive; then echo ALIVE_AT_CASK >> "$TEST_LOG"; echo "Application did not quit" >&2; fi
+  rm -f "${BRAINBAR_UPDATE_AGENTS:?}"/com.brainlayer.brainbar*.plist
   mkdir -p "$BRAINBAR_UPDATE_APP"
   echo new > "$BRAINBAR_UPDATE_APP/identity"
   [ "$FAIL_STEP" != cask ]
+  if [ "$FAIL_STEP" != no-plists ]; then
+    for label in brainbar brainbar-daemon; do echo cask > "$BRAINBAR_UPDATE_AGENTS/com.brainlayer.$label.plist"; done
+  fi
 else [ "$FAIL_STEP" != formula ]; fi
 """,
     )
@@ -59,14 +119,64 @@ else [ "$FAIL_STEP" != formula ]; fi
         commands / "plist",
         'if [ -d "$BRAINBAR_UPDATE_APP" ] && [ "$(cat "$BRAINBAR_UPDATE_APP/identity")" = old ]; then echo 1.0.0; elif [ "$FAIL_STEP" = health ]; then echo 1.9.9; else echo 2.0.0; fi\n',
     )
-    command(keg / "release-verify-signatures.sh", 'echo signatures >> "$TEST_LOG"; [ "$FAIL_STEP" != signatures ]\n')
+    # Every system tool the installer may reach is faked: no test may touch real launchd or /Applications.
+    command(
+        commands / "launchctl",
+        """
+echo "launchctl $*" >> "$TEST_LOG"
+label=${2##*/}
+case "$1" in
+  print) [ -f "$TEST_PREFIX/loaded-$label" ] || exit 113 ;;
+  bootout) [ "$FAIL_STEP" != bootout ] || exit 5; rm -f "$TEST_PREFIX/loaded-$label" ;;
+esac
+""",
+    )
+    command(
+        commands / "mv",
+        'if [ "$1" = "$BRAINBAR_UPDATE_APP" ] && app_alive; then echo MOVED_RUNNING >> "$TEST_LOG"; fi\nexec /bin/mv "$@"\n',
+    )
+    command(
+        commands / "codesign",
+        'echo "codesign $*" >> "$TEST_LOG"\n[ "$1" != -dv ] || printf "Identifier=com.brainlayer.brainbar\\nTeamIdentifier=TEAM1\\n" >&2\n',
+    )
+    command(
+        commands / "spctl",
+        '[ "$FAIL_STEP" != gatekeeper ] || exit 3\nprintf "%s: accepted\\nsource=Notarized Developer ID\\n" "${@: -1}"\n',
+    )
+    command(
+        commands / "xattr",
+        """
+echo "xattr $*" >> "$TEST_LOG"
+if [ "$1" = -p ]; then
+  if [ "$(cat "$3/identity")" = old ]; then echo '03c1;6b05b29c;;old'; else echo '0381;6b05b29d;;new'; fi
+elif [ "$1" = -w ]; then exit 0
+else echo com.apple.quarantine; fi
+""",
+    )
+    command(
+        keg / "release-verify-signatures.sh",
+        """
+echo signatures >> "$TEST_LOG"
+echo "signatures-ppid $PPID" >> "$TEST_LOG"
+if ! /usr/bin/ruby -e 'exit(File.open(ARGV[0]).flock(File::LOCK_EX | File::LOCK_NB) ? 1 : 0)' "$BRAINBAR_UPDATE_ROOT/update-custody.lock"; then
+  echo custody-free >> "$TEST_LOG"
+fi
+[ "$FAIL_STEP" != signatures ]
+""",
+    )
     command(keg / "install.sh", 'echo consolidate >> "$TEST_LOG"; [ "$FAIL_STEP" != consolidate ]\n')
     command(
         commands / "brainlayer",
         """
 echo activate >> "$TEST_LOG"
 [ -d "$BRAINBAR_UPDATE_APP" ] || exit 1
-if [ "$FAIL_STEP" = activate ] && [ "$(cat "$BRAINBAR_UPDATE_APP/identity")" != old ]; then exit 1; fi
+for label in brainbar brainbar-daemon; do [ -f "$BRAINBAR_UPDATE_AGENTS/com.brainlayer.$label.plist" ] || exit 1; done
+touch "$TEST_PREFIX/loaded-com.brainlayer.brainbar" "$TEST_PREFIX/loaded-com.brainlayer.brainbar-daemon"
+if [ "$FAIL_STEP" = activate ] && [ "$(cat "$BRAINBAR_UPDATE_APP/identity")" != old ]; then
+  # The new build started and then failed verification; rollback has to stop it again.
+  if [ -n "$TEST_STUBBORN_NEW_APP" ]; then start_app "$BRAINBAR_UPDATE_APP" > "$TEST_PREFIX/new-app.pid"; fi
+  exit 1
+fi
 """,
     )
     env = dict(
@@ -75,14 +185,17 @@ if [ "$FAIL_STEP" = activate ] && [ "$(cat "$BRAINBAR_UPDATE_APP/identity")" != 
         BRAINBAR_UPDATE_APP=str(app),
         BRAINBAR_UPDATE_ROOT=str(root),
         BRAINBAR_UPDATE_PLIST=str(commands / "plist"),
+        BRAINBAR_UPDATE_AGENTS=str(agents),
+        BRAINBAR_UPDATE_STOP_TIMEOUT="2",
         TEST_LOG=str(log),
         TEST_PREFIX=str(tmp_path),
         FAIL_STEP="",
     )
 
     # The installer calls the canonical prefix/bin/brainlayer.
-    def run(step="", *, jobs=None, operation="test-operation"):
+    def run(step="", *, jobs=None, operation="test-operation", **extra):
         env["FAIL_STEP"] = step
+        env.update(extra)
         if jobs is not None:
             env["BRAINBAR_UPDATE_JOBS"] = str(jobs)
         result = subprocess.run(["bash", str(SCRIPT), "2.0.0", operation], env=env, capture_output=True, text=True)
@@ -274,7 +387,7 @@ def test_prune_failure_does_not_prevent_restore(install):
     result, log, _, app = install("activate")
     assert result.returncode != 0
     assert (app / "identity").read_text() == "old"
-    assert log.index("activate", log.index("activate") + 1) < log.index("prune")
+    assert log.index("\nactivate\n", log.index("\nactivate\n") + 1) < log.index("\nprune\n")
     assert "failed" in (root / "update-state").read_text()
 
 
@@ -334,6 +447,8 @@ def test_custody_survives_supervisor_death_until_installer_exits(install):
         BRAINBAR_UPDATE_APP=str(app),
         BRAINBAR_UPDATE_ROOT=str(root),
         BRAINBAR_UPDATE_PLIST=str(commands / "plist"),
+        BRAINBAR_UPDATE_AGENTS=str(app.parents[1] / "LaunchAgents"),
+        BRAINBAR_UPDATE_STOP_TIMEOUT="2",
         TEST_LOG=str(app.parents[1] / "commands"),
         TEST_PREFIX=str(app.parents[1]),
         FAIL_STEP="",
@@ -388,3 +503,109 @@ def test_custody_survives_supervisor_death_until_installer_exits(install):
                     time.sleep(0.02)
     third, _, _, _ = install(operation="after-child")
     assert third.returncode == 0, third.stderr
+
+
+# --- 24 Nov 2026 regression: the helper must stop BrainBar itself, before touching the bundle ---
+
+
+def test_running_app_that_ignores_quit_is_stopped_before_bundle_moves(install, tmp_path):
+    """The M1 failure: Homebrew's quit cannot stop the app from a launchd job, so the helper must."""
+    pid = _start_stubborn_app(tmp_path / "Applications/BrainBar.app")
+    try:
+        result, log, root, app = install()
+        assert "MOVED_RUNNING" not in log, "the running bundle was moved"
+        assert "ALIVE_AT_CASK" not in log, "BrainBar was still running when Homebrew reinstalled the cask"
+        assert not _alive(pid), "the old BrainBar process survived the update"
+        assert result.returncode == 0, result.stderr
+        assert "success" in (root / "update-state").read_text()
+    finally:
+        _kill(pid)
+
+
+def test_services_boot_out_before_cask_and_activation_runs_once(install, tmp_path):
+    result, log, root, app = install()
+    assert result.returncode == 0, result.stderr
+    uid = os.getuid()
+    assert (
+        log.index(f"launchctl bootout gui/{uid}/com.brainlayer.brainbar\n")
+        < log.index("reinstall --cask")
+        < log.index("activate")
+    )
+    assert log.index(f"launchctl bootout gui/{uid}/com.brainlayer.brainbar-daemon\n") < log.index("reinstall --cask")
+    assert log.count("activate\n") == 1
+
+
+def test_failed_bootout_leaves_bundle_and_restarts_old_app(install):
+    result, log, root, app = install("bootout")
+    assert result.returncode != 0
+    assert "reinstall --cask" not in log
+    assert (app / "identity").read_text() == "old"
+    assert log.count("activate\n") == 1, "the untouched old app must be brought back"
+    assert "failed" in (root / "update-state").read_text()
+
+
+def test_trashed_plists_are_restored_before_activation(install):
+    result, log, root, app = install("no-plists")
+    assert result.returncode == 0, result.stderr
+    agents = app.parents[1] / "LaunchAgents"
+    assert (agents / "com.brainlayer.brainbar.plist").read_text() == "old"
+    assert (agents / "com.brainlayer.brainbar-daemon.plist").read_text() == "old"
+    assert "success" in (root / "update-state").read_text()
+
+
+def test_approval_is_carried_after_security_checks(install):
+    result, log, root, app = install()
+    assert result.returncode == 0, result.stderr
+    # Old app 0x03c1 is user-approved (0x40); the new quarantine 0x0381 gains the flag, provenance kept.
+    assert "xattr -w com.apple.quarantine 03c1;6b05b29d;;new" in log
+    assert log.index("codesign --verify --deep --strict") < log.index("xattr -w") < log.index("activate")
+
+
+def test_gatekeeper_rejection_rolls_back(install):
+    result, log, root, app = install("gatekeeper")
+    assert result.returncode != 0
+    assert (app / "identity").read_text() == "old"
+    assert "failed" in (root / "update-state").read_text()
+
+
+def test_rollback_stops_the_new_app_before_moving_it(install, tmp_path):
+    result, log, root, app = install("activate", TEST_STUBBORN_NEW_APP="1")
+    new_pid = int((tmp_path / "new-app.pid").read_text())
+    try:
+        assert result.returncode != 0
+        assert "MOVED_RUNNING" not in log, "rollback moved the running new bundle"
+        assert not _alive(new_pid)
+        assert (app / "identity").read_text() == "old"
+        rollback = log[log.index("activate") :]
+        assert "launchctl bootout" in rollback and rollback.index("launchctl bootout") < rollback.index("activate", 1)
+        assert "failed" in (root / "update-state").read_text()
+    finally:
+        _kill(new_pid)
+
+
+def test_hands_over_to_the_new_kegs_script_with_custody(install, tmp_path):
+    keg = tmp_path / "Cellar/brainlayer/2.0.0/lib/brainlayer/launchd"
+    newer = keg / "brainbar-update.sh"
+    newer.write_text(SCRIPT.read_text().replace("\nshift\n", '\nshift\necho "new-script $*" >> "$TEST_LOG"\n', 1))
+    newer.chmod(0o755)
+    result, log, root, app = install()
+    assert result.returncode == 0, result.stderr
+    assert "new-script --handoff 2.0.0 test-operation" in log
+    formula_pid = log.split("formula-ppid ")[1].split()[0]
+    assert log.split("signatures-ppid ")[1].split()[0] == formula_pid, "the handoff must exec in place"
+    assert "custody-free" not in log, "custody must stay held across the handoff"
+    assert log.count("upgrade --formula") == 1
+    assert (root / "update-state").read_text().startswith("test-operation\nsuccess\n")
+    assert not (root / "update.lock").exists()
+
+
+def test_handoff_refuses_without_live_custody(install, tmp_path):
+    _, _, root, _ = install("busy")
+    result = subprocess.run(
+        ["bash", str(SCRIPT), "--custody-held", "--handoff", "2.0.0", "test-operation"],
+        env=dict(os.environ, BRAINBAR_UPDATE_ROOT=str(root), BRAINBAR_UPDATE_PATH="/usr/bin:/bin"),
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 75
+    assert "waiting" in (root / "update-state").read_text()

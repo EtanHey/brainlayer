@@ -1,5 +1,6 @@
 #!/bin/bash
 # Shipped installer shared by the app helper and release workers. Never invoke sudo.
+# brainbar-update-handoff: 1
 set -euo pipefail
 umask 077
 export PATH="${BRAINBAR_UPDATE_PATH:-/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin}"
@@ -22,16 +23,28 @@ if [ "${1:-}" != --custody-held ]; then
   ' "$custody_root/update-custody.lock" "$0" "$@"
 fi
 shift
+# After the formula upgrade, an older helper execs the new keg's copy with --handoff: same pid,
+# same inherited custody flock, same lock directory and state file. It resumes at signatures.
+HANDOFF=0
+if [ "${1:-}" = --handoff ]; then HANDOFF=1; shift; fi
 V=${1:?Usage: brainbar-update.sh VERSION OPERATION_ID}
 OP=${2:?operation id required}
 [[ "$V" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ && "$OP" =~ ^[A-Za-z0-9-]+$ ]] || exit 64
 ROOT=${BRAINBAR_UPDATE_ROOT:-"$HOME/Library/Application Support/BrainBar"}
 APP=${BRAINBAR_UPDATE_APP:-/Applications/BrainBar.app}
 PLIST=${BRAINBAR_UPDATE_PLIST:-/usr/libexec/PlistBuddy}
+AGENTS=${BRAINBAR_UPDATE_AGENTS:-"$HOME/Library/LaunchAgents"}
+LABELS="com.brainlayer.brainbar com.brainlayer.brainbar-daemon"
 mkdir -p "$ROOT/Backups.noindex"
 LOCK="$ROOT/update.lock"
+if [ "$HANDOFF" = 1 ]; then
+  # Custody is proven only by our own pid in the lock, written by the helper this exec replaced.
+  if [ "$(cat "$LOCK/pid" 2>/dev/null)" != "$$" ] || [ "$(cat "$LOCK/operation" 2>/dev/null)" != "$OP" ]; then
+    echo 'Handoff without live custody; refusing.' >&2
+    exit 75
+  fi
 # A dead controller's unsettled attempt is retained for recovery, never silently retried.
-if ! mkdir "$LOCK" 2>/dev/null; then
+elif ! mkdir "$LOCK" 2>/dev/null; then
   REAPED=0
   if mkdir "$ROOT/update-reaper.lock" 2>/dev/null; then
    if [ -f "$LOCK/pid" ]; then
@@ -59,20 +72,87 @@ printf '%s\n' "$OP" > "$LOCK/operation"
 STEP=preflight
 MUTATED=0
 BACKUP=""
+SAVED=""
+STOPPED=0
 FAILURE=""
 state() { printf '%s\n%s\n%s\n' "$OP" "$1" "${2:-}" > "$ROOT/update-state.new"; mv "$ROOT/update-state.new" "$ROOT/update-state"; }
 cleanup() { rm -f "$LOCK/pid" "$LOCK/operation" "$LOCK/formula.json" "$LOCK/cask.json"; rmdir "$LOCK"; }
+# A BrainBar process is one running an executable inside the bundle, found before the bundle moves.
+app_pids() {
+  # The prefix travels in the environment: macOS awk rewrites its argv, so an argument would match awk itself.
+  ps -axo pid=,command= | BRAINBAR_EXE_PREFIX="$APP/Contents/MacOS/" awk '
+    {p = ENVIRON["BRAINBAR_EXE_PREFIX"]; c = $0; sub(/^ *[0-9]+ +/, "", c)} index(c, p) == 1 || index(c, " " p) {print $1}'
+}
+# Stop BrainBar ourselves: Homebrew's AppleScript quit needs Automation access a launchd job never has.
+stop_brainbar() {
+  local label pids deadline
+  STOPPED=1
+  for label in $LABELS; do
+    if launchctl print "gui/$(id -u)/$label" >/dev/null 2>&1; then
+      launchctl bootout "gui/$(id -u)/$label" || { echo "Could not unload $label" >&2; return 1; }
+    fi
+  done
+  pids=$(app_pids)
+  [ -n "$pids" ] || return 0
+  kill -TERM $pids 2>/dev/null || true
+  deadline=$((SECONDS + ${BRAINBAR_UPDATE_STOP_TIMEOUT:-30}))
+  while [ -n "$(app_pids)" ]; do
+    if [ "$SECONDS" -ge "$deadline" ]; then
+      kill -KILL $(app_pids) 2>/dev/null || true
+      sleep 1
+      [ -n "$(app_pids)" ] || return 0
+      echo 'BrainBar did not exit' >&2
+      return 1
+    fi
+    sleep 0.2
+  done
+}
+# The cask uninstall trashes both plists; put back the saved copy of any that postflight did not write.
+restore_agents() {
+  local label
+  [ -n "$SAVED" ] || return 0
+  for label in $LABELS; do
+    [ -f "$AGENTS/$label.plist" ] || cp -p "$SAVED/$label.plist" "$AGENTS/$label.plist" || return 1
+  done
+}
+# Same gates and flag as brainlayer-update-brainbar.sh: verify signature and notarization, then
+# carry the user's approval (0x40) onto the new quarantine value. Provenance is kept, never stripped.
+identity() { codesign -dv --verbose=4 "$1" 2>&1 | sed -n 's/^TeamIdentifier=//p; s/^Identifier=//p' | tr '\n' ';'; }
+approve() {
+  local assessment attributes old new before after flags
+  codesign --verify --deep --strict "$APP" || return 1
+  assessment=$(spctl -a -t exec -vv "$APP" 2>&1) || { echo "Gatekeeper refused: $assessment" >&2; return 1; }
+  grep -Fxq "$APP: accepted" <<<"$assessment" && grep -Fxq 'source=Notarized Developer ID' <<<"$assessment" || return 1
+  attributes=$(xattr "$APP") || return 1
+  grep -Fxq com.apple.quarantine <<<"$attributes" || return 0
+  old=$(xattr -p com.apple.quarantine "$BACKUP" 2>/dev/null) || old=""
+  new=$(xattr -p com.apple.quarantine "$APP" 2>/dev/null) || new=""
+  before=$(identity "$BACKUP") || before=""
+  after=$(identity "$APP") || after=""
+  if [[ ! "$old" =~ ^[[:xdigit:]]{1,8}\; || ! "$new" =~ ^[[:xdigit:]]{1,8}\; ]] || (( (16#${old%%;*} & 0x40) == 0 )) ||
+     [[ ! "$before" =~ ^[A-Za-z0-9.-]+\;[A-Z0-9]+\;$ ]] || [ "$before" != "$after" ]; then
+    echo 'Approval not carried; the first launch will ask the user.' >&2
+    return 0
+  fi
+  flags=${new%%;*}
+  printf -v flags '%0*x' "${#flags}" "$((16#$flags | 0x40))"
+  find "$APP" ! -type l -print0 | xargs -0 xattr -w com.apple.quarantine "$flags;${new#*;}" ||
+    echo 'Could not write the approval flag; the first launch will ask the user.' >&2
+}
 finish() {
   rc=$?
   trap - EXIT
   if [ "$rc" -ne 0 ]; then
     if [ -n "$BACKUP" ] && [ -d "$BACKUP" ]; then
+      # Same order as the update: stop whatever runs from the replacement before moving it.
+      stop_brainbar || { state recovery-required "BrainBar did not stop. Restore $BACKUP to $APP"; exit 1; }
       # Preserve the failed replacement rather than delete a bundle we did not create.
       if [ -e "$APP" ]; then
         failed="$ROOT/Backups.noindex/BrainBar.failed-$OP.app"
         mv "$APP" "$failed" || { state recovery-required "Restore $BACKUP to $APP"; exit 1; }
       fi
       mv "$BACKUP" "$APP" || { state recovery-required "$BACKUP"; exit 1; }
+      restore_agents || true
       if ! "$CLI" brainbar activate --verify --timeout 90; then
         state recovery-required "Run: $CLI brainbar activate --verify --timeout 90"
         exit 1
@@ -87,6 +167,13 @@ finish() {
         fi
         printf '%s\n' "$failed" > "$ROOT/last-failed"
       fi
+    elif [ "$STOPPED" = 1 ]; then
+      # Stopped but never moved: bring the untouched app back.
+      restore_agents || true
+      if ! "$CLI" brainbar activate --verify --timeout 90; then
+        state recovery-required "Run: $CLI brainbar activate --verify --timeout 90"
+        exit 1
+      fi
     fi
     if [ "$MUTATED" = 0 ]; then
       state failed "${FAILURE:-Update preflight failed. Check Homebrew and try again. See update.log.}"
@@ -99,11 +186,13 @@ finish() {
 }
 trap finish EXIT
 trap 'if [ "$MUTATED" = 0 ]; then state cancelled; exit 0; fi' TERM INT
-if [ -f "$ROOT/update-state" ]; then
-  previous=$(sed -n '2p' "$ROOT/update-state")
-  case "$previous" in success|failed|cancelled|waiting) ;; *) echo 'Unsettled update requires recovery' >&2; cleanup; trap - EXIT; exit 75 ;; esac
+if [ "$HANDOFF" = 0 ]; then
+  if [ -f "$ROOT/update-state" ]; then
+    previous=$(sed -n '2p' "$ROOT/update-state")
+    case "$previous" in success|failed|cancelled|waiting) ;; *) echo 'Unsettled update requires recovery' >&2; cleanup; trap - EXIT; exit 75 ;; esac
+  fi
+  state preflight
 fi
-state preflight
 busy() {
   # App keeps this snapshot fresh until the first mutation. A release worker may omit it.
   if [ -n "${BRAINBAR_UPDATE_JOBS:-}" ]; then
@@ -123,23 +212,35 @@ pin() {
   ruby -rjson -e 'f=JSON.parse(File.read(ARGV[0])).fetch("formulae").fetch(0); c=JSON.parse(File.read(ARGV[1])).fetch("casks").fetch(0); abort "Tap versions changed; check again" unless f.fetch("versions").fetch("stable")==ARGV[2] && c.fetch("version")==ARGV[2]' "$LOCK/formula.json" "$LOCK/cask.json" "$V"
   rm -f "$LOCK/formula.json" "$LOCK/cask.json"
 }
-preflight
-fetch
-pin
+if [ "$HANDOFF" = 0 ]; then
+  preflight
+  fetch
+  pin
+fi
 PREFIX=$(brew --prefix)
 CLI="$PREFIX/bin/brainlayer"
 K="$PREFIX/Cellar/brainlayer/$V"
-[ -w "$(dirname "$APP")" ] || { FAILURE="Homebrew needs permission. Run: brew upgrade --formula etanhey/layers/brainlayer; brew reinstall --cask etanhey/layers/brainbar"; echo "$FAILURE" >&2; exit 1; }
-pin
-preflight
-STEP=formula
-state "$STEP"
-MUTATED=1
-brew upgrade --formula etanhey/layers/brainlayer </dev/null
-STEP=signatures
-state "$STEP"
+if [ "$HANDOFF" = 0 ]; then
+  [ -w "$(dirname "$APP")" ] || { FAILURE="Homebrew needs permission. Run: brew upgrade --formula etanhey/layers/brainlayer; brew reinstall --cask etanhey/layers/brainbar"; echo "$FAILURE" >&2; exit 1; }
+  pin
+  preflight
+  STEP=formula
+  state "$STEP"
+  MUTATED=1
+  brew upgrade --formula etanhey/layers/brainlayer </dev/null
+else
+  STEP=formula
+  MUTATED=1
+fi
 INSTALL=$(find "$K" -path '*/brainlayer/launchd/install.sh' -print -quit)
 [ -n "$INSTALL" ]
+# The app copied its helper from the OLD keg; the rest of the update runs the new release's steps.
+NEXT="$(dirname "$INSTALL")/brainbar-update.sh"
+if [ "$HANDOFF" = 0 ] && [ -f "$NEXT" ] && ! cmp -s "$NEXT" "$0" && grep -qx '# brainbar-update-handoff: 1' "$NEXT"; then
+  exec /bin/bash "$NEXT" --custody-held --handoff "$V" "$OP"
+fi
+STEP=signatures
+state "$STEP"
 bash "$(dirname "$INSTALL")/release-verify-signatures.sh" "$K"
 STEP=consolidate
 state "$STEP"
@@ -149,11 +250,23 @@ state "$STEP"
 OLD=$("$PLIST" -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist")
 [[ "$OLD" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
 BACKUP="$ROOT/Backups.noindex/BrainBar.backup-$OLD-$OP.app"
+SAVED="$ROOT/Backups.noindex/LaunchAgents-$OP"
+mkdir -p "$SAVED"
+for label in $LABELS; do cp -p "$AGENTS/$label.plist" "$SAVED/$label.plist"; done
+STEP=stop
+state "$STEP"
+stop_brainbar
+# Never move a running bundle: the move happens only after every BrainBar process has exited.
 mv "$APP" "$BACKUP"
 STEP=cask
 state "$STEP"
 brew reinstall --cask etanhey/layers/brainbar </dev/null
 [ -d "$APP" ]
+restore_agents
+STEP=approval
+state "$STEP"
+approve
+# One activation, after Homebrew has returned and both plists are in place.
 STEP=activate
 state "$STEP"
 "$CLI" brainbar activate --verify --timeout 90
@@ -172,3 +285,4 @@ if [ -f "$ROOT/last-backup" ]; then
   esac
 fi
 printf '%s\n' "$BACKUP" > "$ROOT/last-backup"
+rm -f "$SAVED"/*.plist && rmdir "$SAVED" || echo "Could not prune $SAVED" >&2

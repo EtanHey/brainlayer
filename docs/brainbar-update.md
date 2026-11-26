@@ -30,13 +30,52 @@ last sample and encounter the same supervisor restart as a release installation.
 A separate BrainLayer protected-operation admission follow-up is required to
 close that race; see the UI overhaul phase-14 lead decision 2.
 
-Order: formula upgrade, installed-keg signature verification, service consolidation,
-old-app backup, cask reinstall, activation with a real MCP handshake, installed bundle
-version check. A signature failure leaves the cask and services untouched.
-App replacement or activation failure restores the saved bundle and verifies
-activation again before pruning older failed bundles. Retention failures are
-non-fatal. A failed restore leaves custody and its recovery instruction
-in `update-state`; it never silently retries an unsettled attempt.
+Order: formula upgrade, handoff to the new keg's helper, installed-keg signature
+verification, service consolidation, LaunchAgent plist copy, stop BrainBar, old-app
+backup, cask reinstall, plist check, signature and Gatekeeper check with approval
+carried, one activation with a real MCP handshake, installed bundle version check.
+A signature failure leaves the cask and services untouched.
+
+**Stop first.** The helper stops BrainBar itself before it touches the bundle. It
+boots out `com.brainlayer.brainbar` and `com.brainlayer.brainbar-daemon`, sends
+SIGTERM to every process running an executable inside `BrainBar.app`, waits up to
+`BRAINBAR_UPDATE_STOP_TIMEOUT` seconds (default 30), and sends SIGKILL only after
+that. It never relies on Homebrew's quit: that is an AppleScript request that needs
+Automation access, which a launchd job never has (on 24 Nov 2026 it failed with
+"did not quit", the running bundle was moved, and the M1's socket stayed down).
+The backup move happens only after every BrainBar process has exited. If the stop
+fails, the untouched app is activated again and the attempt ends `failed`.
+
+**Plists.** The cask uninstall trashes both LaunchAgent plists and its postflight
+writes new ones. The helper copies both plists into
+`Backups.noindex/LaunchAgents-<operation>` before the stop and puts back any plist
+the cask did not write, so the single `brainlayer brainbar activate --verify` call
+always finds both. The copy is removed after a successful update.
+
+**Approval.** After the cask step the helper runs the same gates as the release
+installer (`brainlayer-update-brainbar.sh`): `codesign --verify --deep --strict` and
+a Gatekeeper assessment that reports `accepted` and `Notarized Developer ID`. A
+failure rolls back. When the old app carried the user's approval flag (0x40) and the
+signing identity is unchanged, the flag is written onto the new quarantine value;
+quarantine provenance is kept, never stripped. Otherwise the first launch asks.
+
+**Rollback** uses the same order: stop whatever runs from the replacement, move it
+aside, restore the saved bundle and any missing plist, then activate and verify
+again before pruning older failed bundles. Retention failures are non-fatal. A
+failed restore leaves custody and its recovery instruction in `update-state`; it
+never silently retries an unsettled attempt.
+
+**Handoff to the new release.** The app copies the helper from the INSTALLED keg,
+so the copy is always the old release's script. After `brew upgrade --formula`,
+the helper execs the new keg's `brainlayer/launchd/brainbar-update.sh` with
+`--custody-held --handoff VERSION OPERATION_ID` when that file differs and carries
+the `# brainbar-update-handoff: 1` marker. `exec` keeps the pid, so the inherited
+custody flock, `update.lock/pid` and the state file carry over; the new script
+refuses unless the lock names its own pid and operation, and resumes at the
+signature step. An install older than this change has no handoff, so it runs its own
+old steps to the end. **The first update to the release that carries this fix must
+be done by the release install, `brainlayer-update-brainbar.sh`, not the in-app
+Update button.**
 
 Cancellation is accepted before formula mutation. After mutation, the operation
 finishes or restores; Cancel does not kill it. The state file contains operation
