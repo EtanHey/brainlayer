@@ -12,8 +12,8 @@
       "sha256": "a10214bfcb11b57aa01041f22408ccabd56fa7ef89e1e233ffc9d4b595b872a6"
     },
     "src/brainlayer/backup_daily.py": {
-      "sha": "Track 5 fix r1: gate-only raw reclaim (unchanged proof) under the admission staging lock, with a failed-proof identity memo the scheduled child never passes; no receipt/verdict transition change; mapped ranges stay at line_refs_at",
-      "sha256": "20407bf0240bc29fa36f95c4c9b6136b6dbc16aca2aee342f4aa2b3546f78e18"
+      "sha": "Merge of main (Track 6 clone alert #1879, Track 3 nightly progress #1878) into Track 5 #1880 (gate-only raw reclaim + failed-proof memo), lead pin-only resolution 2026-11-26; backup_daily.py auto-merged; sha256 = merged bytes",
+      "sha256": "df7a391626d3d8a7c2075771e8fc0383b891e739754016e096281b23b29e709c"
     },
     "src/brainlayer/backup_heavy_gate.py": {
       "sha": "Track 5 fix r1: pressure before disk; measure, reclaim verified raws only when that could admit, re-measure; failed-proof memo per gate run; admission arithmetic tested outside model",
@@ -24,8 +24,8 @@
       "sha256": "4b624f51ae2047026dda8599329337a4b8022da375c46c54f428849abecc1587"
     },
     "src/brainlayer/maintenance_calendar.py": {
-      "sha": "FIX-ALERT-POLICY working tree",
-      "sha256": "9c7c86907bba533de38a4f213e2765c695a7fe125e0250beae91a27b61a5152b"
+      "sha": "28eefc5c (lead fix round on #1878) (review r1 F1): a failed progress write is logged and never fails the step; _progress_record appended at EOF so no anchor line moves; terminal summary, step order and last_weekly gate unchanged",
+      "sha256": "32ecabd2aefcec118cb3eef92161bba37fd0c40047beab7330b2ad48a91d1964"
     },
     "src/brainlayer/job_alerts.py": {
       "sha": "40f6e6da (atomic opt-in reason refresh)",
@@ -44,8 +44,8 @@
       "sha256": "6ef80da8dbb15ff6b0bcc792c422e3493be29b6290e122ffb1edd5e25e1db154"
     },
     "src/brainlayer/backup_clone.py": {
-      "sha": "APFS R1: propagate run interrupts; sweep/account owned clone remnants; alert integrity failure",
-      "sha256": "92b11329af3112eb021806f79e50cd645a3dc42c30dae5968bc806b057193d41"
+      "sha": "Track 6 typed private recovery corruption; OperationalError remains ordinary fallback (2026-11-24)",
+      "sha256": "9e31a8cbe1d9fa8dbf1768fe5aeef038f8cee0a4c7060c5f7cb580a791d5faf0"
     }
   },
   "line_refs_at": "every path:line is at main 5882de81; backup_daily.py, maintenance*.py and job_alerts.py refs did not move; health_verdict.py refs shifted +2 (Facts fields) / +7 (after the embedding override); refs naming 67d23f14 are historical; backup_daily.py references re-read at 1334f0fd (BACKUP-408, 2026-11-09), calendar shifted weekly references re-read at a8cf28b1 after #1711; calendar Weekly refs inherited #1749 root/main source; six combined pins verified 2026-11-10; calendar Weekly from #1749; Badge full AST ranges re-read against health_verdict sha256 cad451edd75d5fe68e8e40ec7b142df1bc1819d7241a4cd369d2b036f4699f36 on 2026-11-10 Main merge provenance: exact root-fix source #1749; combined Drive/root pins verified 2026-11-10. #1827 (2026-11-18, CodeRabbit): the health_verdict.py line refs in PipeVerdict and DotTable are STILL AT 5882de81 and were not re-measured when #1827 moved the sha256 pin; at #1827 the ingest stall logic IngestRaw describes is _ingest_stall :406-450 (called from _raw_checks :453), and the Hold hysteresis branch is evaluate :700-728 (red-holds-on-amber unless a measured catch-up, :717) #1839: backup_daily mapped functions re-read at fb12d51e; snapshot, strict-reader, abandon and supersede function ranges unchanged; verified-upload append at 4162, unlink/local_removed at 4173-4179, final receipt at 4245. #1839 recovery follow-up re-read at 039f3094: verified receipt append 4176; unlink/local_removed 4187-4193; final receipt 4264; earlier mapped functions unchanged. #1839 delta b2c76011: backup_daily snapshot gate 3272-3298, supersede 3413-3451, local upload selection 3454-3504 (abandon 3491), verified append 4202, unlink/local_removed 4213-4219, final receipt 4288. Re-read current functions; scan receipts 315-370 unchanged.",
@@ -92,8 +92,8 @@
         "src/brainlayer/maintenance.py:1417-1440 (freelist gate; an EXIT_DEFERRED abort is vacuum deferred, #1641)",
         "src/brainlayer/backup_daily.py:3272-3298 (_recent_local_verified_backup: strict read since #1685; latest receipt per snapshot; excludes md5 mismatch, local_removed, abandoned, superseded)",
         "src/brainlayer/maintenance_calendar.py:857 (exit75 is deferred)",
-        "src/brainlayer/maintenance_calendar.py:1299-1303 (HoldWindowClosed / #1668 HoldBusy defer with75)",
-        "src/brainlayer/maintenance_calendar.py:1331-1332 (last_weekly only on three ok results)"
+        "src/brainlayer/maintenance_calendar.py:1333-1337 (HoldWindowClosed / #1668 HoldBusy defer with75)",
+        "src/brainlayer/maintenance_calendar.py:1365-1366 (last_weekly only on three ok results)"
       ],
       "Damage": [
         "src/brainlayer/backup_daily.py:315-370 (_scan_backup_receipts / _read_backup_receipts: an uncertain line raises under strict)",

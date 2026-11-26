@@ -1,7 +1,8 @@
 import AppKit
 import SwiftUI
+import Combine
 
-/// Settings (⌘,): account, design, settings file, Diagnostics and the meaning-search explanation.
+/// Settings (⌘,): account, settings file, Diagnostics and the meaning-search explanation.
 @MainActor final class NDSettingsWindowController: NSObject, NSWindowDelegate {
     static let width: CGFloat = 480
     private static var current: NDSettingsWindowController?
@@ -11,7 +12,6 @@ import SwiftUI
 
     init(store: NDStore) {
         self.store = store
-        // The Design control writes the store's preferences: the app's own, or a capture fixture's separate suite (F06).
         let hosting = NSHostingController(rootView: NDSettingsView(store: store).defaultAppStorage(store.preferences))
         // Review blocker 2: the window opened larger than its three rows (the first capture shows them as a strip at the
         // top of an empty window). Its size is now its content's, measured and fixed before it is ever shown.
@@ -35,6 +35,15 @@ import SwiftUI
         window.isRestorable = false
         super.init()
         window.delegate = self
+        updateChanges = store.updates.objectWillChange.receive(on: DispatchQueue.main).sink { [weak self, weak hosting] _ in
+            guard let self, let hosting else { return }
+            let size = Self.contentSize(of: hosting.view)
+            self.window.contentMinSize = .zero
+            self.window.contentMaxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+            self.window.setContentSize(size)
+            self.window.contentMinSize = size
+            self.window.contentMaxSize = size
+        }
     }
 
     /// The 28 pt title bar the content runs under, with its hairline.
@@ -69,7 +78,7 @@ import SwiftUI
         controller.window.makeKeyAndOrderFront(nil)
     }
 
-    /// Switching to Classic closes the new design's Settings window and lets it go (N02).
+    /// Releases the Settings window when its owner shuts down.
     static func closeIfOpen() {
         current?.window.close()
         current = nil
@@ -77,6 +86,7 @@ import SwiftUI
 
     static var isOpenForTesting: Bool { current != nil }
 
+    private var updateChanges: AnyCancellable?
     private var activationPolicy: BrainBarWindowActivationPolicy?
 
     func windowWillClose(_ notification: Notification) {
@@ -86,14 +96,11 @@ import SwiftUI
 
 struct NDSettingsView: View {
     @ObservedObject var store: NDStore
-    @AppStorage(BrainBarDesign.key) private var design: String = BrainBarDesign.defaultValue.rawValue
+    var showsUpdateControl = true
     var configPath: String = "~/.config/brainlayer/brainlayer.env"
     private typealias Say = BrainBarMenuPresenter.SurfaceSay
 
-    static func designIndex(for stored: String) -> Int {
-        let resolved = BrainBarDesign(rawValue: stored) ?? BrainBarDesign.defaultValue
-        return BrainBarDesign.allCases.firstIndex(of: resolved)!
-    }
+
 
     var body: some View {
         let modelLines = BrainBarSettingsExplanation.model(BrainBarEmbeddingModel.configuredName)
@@ -102,15 +109,6 @@ struct NDSettingsView: View {
                 .overlay(alignment: .bottom) { ND.hair.frame(height: 0.5) }
             VStack(alignment: .leading, spacing: 0) {
                 VStack(spacing: 0) {
-                    row(Say.design) {
-                        Spacer()
-                        NDSegments(titles: BrainBarDesign.allCases.map(\.title),
-                                   selection: Binding(get: { Self.designIndex(for: design) },
-                                                      set: { design = BrainBarDesign.allCases[$0].rawValue }),
-                                   accessibilityLabel: Say.design, fontSize: 11, padding: 10, controlSize: .small)
-                            .fixedSize()
-                    }
-                    ND.hair.frame(height: 0.5)
                     row(Say.stageDrive) {
                         Spacer()
                         Text(driveState).font(NDType.body).foregroundStyle(store.model.drive.action != nil ? ND.redText : ND.t2)
@@ -137,11 +135,13 @@ struct NDSettingsView: View {
                         Spacer()
                         NDButton(label: Say.openDiagnostics, small: true) { store.showDiagnostics() }
                     }
+                    if showsUpdateControl {
+                        ND.hair.frame(height: 0.5)
+                        BrainBarUpdateRow(updates: store.updates)
+                    }
                 }
                 .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(ND.raised))
                 .ndDecoration(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(ND.hair2, lineWidth: 0.5))
-                Text(Say.classicCaption).font(NDType.caption).foregroundStyle(ND.t3)
-                    .padding(.horizontal, 12).padding(.top, 8)
                 if !modelLines.isEmpty {
                     Text(Say.meaningModel).font(NDType.bodyStrong).padding(.top, 16)
                     ForEach(modelLines, id: \.self) { line in
@@ -154,6 +154,7 @@ struct NDSettingsView: View {
         }
         .ignoresSafeArea(.container, edges: .top)
         .frame(width: NDSettingsWindowController.width)
+        .fixedSize(horizontal: false, vertical: true)
         .background(ND.bg)
         .foregroundStyle(ND.t1)
         .environment(\.ndPalette, .window)

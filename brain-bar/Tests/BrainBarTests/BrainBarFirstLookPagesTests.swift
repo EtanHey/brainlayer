@@ -12,28 +12,28 @@ import XCTest
         override func string(forKey key: String) -> String? { key == BrainBarDesign.key ? choice : nil }
     }
 
-    func testNewIsDefaultAndStoredClassicStillWins() {
+    func testNewIsTheOnlyDesignDespiteStoredClassic() {
         let defaults = DesignDefaults()
         XCTAssertEqual(BrainBarDesign.current(in: defaults), .new)
         XCTAssertNil(defaults.choice, "reading does not store a preference")
         defaults.choice = "classic"
-        XCTAssertEqual(BrainBarDesign.current(in: defaults), .classic)
+        XCTAssertEqual(BrainBarDesign.current(in: defaults), .new)
     }
 
     func testActivityScaleLabelsUseTheirOwnPeaks() {
         XCTAssertEqual(NDActivitySection.headerHeight, 22, "scale captions must not increase the Activity header")
         let wave = NDWave(saves: [1, 7, 2], reads: [31, 4, 3])
         let labels = NDActivitySection.scaleLabels(wave, minutes: 3)
-        XCTAssertEqual(labels.saves, "up to 7 per min")
-        XCTAssertEqual(labels.reads, "up to 31 per min")
+        XCTAssertEqual(labels.saves, "up to 7/min")
+        XCTAssertEqual(labels.reads, "up to 31/min")
         XCTAssertNotEqual(labels.saves, labels.reads)
         var sliding = wave
         sliding.outgoing = .init(saves: 17, reads: 43)
-        XCTAssertEqual(NDActivitySection.scaleLabels(sliding, minutes: 3).saves, "up to 17 per min")
-        XCTAssertEqual(NDActivitySection.scaleLabels(sliding, minutes: 3).reads, "up to 43 per min")
+        XCTAssertEqual(NDActivitySection.scaleLabels(sliding, minutes: 3).saves, "up to 17/min")
+        XCTAssertEqual(NDActivitySection.scaleLabels(sliding, minutes: 3).reads, "up to 43/min")
         let wide = NDWave(saves: Array(repeating: 7, count: 60), reads: Array(repeating: 31, count: 60))
-        XCTAssertEqual(NDActivitySection.scaleLabels(wide, minutes: 180).saves, "up to 7 per 3 min")
-        XCTAssertEqual(NDActivitySection.scaleLabels(wide, minutes: 1440).reads, "up to 31 per 24 min")
+        XCTAssertEqual(NDActivitySection.scaleLabels(wide, minutes: 180).saves, "up to 7/3 min")
+        XCTAssertEqual(NDActivitySection.scaleLabels(wide, minutes: 1440).reads, "up to 31/24 min")
         let zero = NDActivitySection.scaleLabels(NDWave(saves: [0], reads: [0]), minutes: 1)
         XCTAssertNil(zero.saves)
         XCTAssertNil(zero.reads)
@@ -146,11 +146,11 @@ import XCTest
         XCTAssertLessThan(label.maxX, dotX - 3.5, "older-count slot clears the left-edge failure dot")
     }
 
-    func testInvalidStoredDesignSelectsTheResolvedDefaultSegment() {
+    func testEveryStoredDesignResolvesToNewWithoutRewritingTheValue() {
         for raw in ["invalid", "", "classic", "new"] {
             let defaults = DesignDefaults(choice: raw)
-            let index = NDSettingsView.designIndex(for: raw)
-            XCTAssertEqual(BrainBarDesign.allCases[index], BrainBarDesign.current(in: defaults))
+            XCTAssertEqual(BrainBarDesign.current(in: defaults), .new)
+            XCTAssertEqual(defaults.choice, raw)
         }
     }
 

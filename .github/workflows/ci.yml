@@ -214,7 +214,8 @@ jobs:
     # so take the skip on Linux instead of waiting for a macOS runner (#1727 queued ~3 h for it).
     runs-on: ${{ needs.changes.outputs.brain_bar == 'true' && 'macos-15' || 'ubuntu-latest' }}
     # 2026-11-13: Test BrainBar took 11m29s (PR #1788, run 43438292244; job 14m30s) and was cut off at 11m39s by the 15m limit (PR #1789, run 43459850246). 25 = ~10m headroom over the last passing job; still a finite hang bound.
-    timeout-minutes: 25
+    # 2026-11-24 TEMPORARY: main run 45342111801 took 24m04s (2099 tests, 978 s of test time) and #1875 was cut at 25:20 with 0 failures. 35 = ~11m headroom; a tracked row brings the job under 10 minutes (split or parallel) and puts the cap back. Still a finite hang bound.
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
 
@@ -256,6 +257,7 @@ jobs:
         if: needs.changes.outputs.brain_bar == 'true'
         env:
           SWIFT_BACKTRACE: enable=yes,interactive=no
+          NSUnbufferedIO: 'YES'
           MENU_FUNCTION: ${{ needs.changes.outputs.menu_function }}
           EVENT_NAME: ${{ github.event_name }}
         run: |

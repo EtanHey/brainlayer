@@ -388,6 +388,105 @@ def test_clone_integrity_failure_is_not_published_and_uses_fallback(artifact_lan
     assert "backup-clone-integrity" not in job_alerts.active_alerts()
 
 
+@needs_clone_control
+@pytest.mark.parametrize("corrupt", [False, True])
+def test_clone_alert_write_error_preserves_snapshot_outcome(artifact_lane, monkeypatch, caplog, corrupt):
+    from brainlayer import job_alerts
+
+    backup, source, output, _ = artifact_lane
+    check = backup._sqlite_pragma_check
+
+    def alert_error(*args, **kwargs):
+        raise OSError("synthetic alert write failure")
+
+    def integrity(path, pragma, **kwargs):
+        if corrupt and path.name == "snapshot.db":
+            return "synthetic corrupt clone"
+        return check(path, pragma, **kwargs)
+
+    monkeypatch.setattr(job_alerts, "report", alert_error)
+    monkeypatch.setattr(backup, "_sqlite_pragma_check", integrity)
+    artifact = backup.create_sqlite_backup_artifact(source, output, socket_path=source.parent / "unused.sock")
+    assert artifact.snapshot_method == ("vacuum" if corrupt else "apfs_clone")
+    if corrupt:
+        assert "integrity_check failed: synthetic corrupt clone" in artifact.clone_fallback
+        assert "alert write failure" not in artifact.clone_fallback
+    assert "synthetic alert write failure" in caplog.text
+
+
+@needs_clone_control
+def test_clone_alert_deadline_still_stops_without_fallback(artifact_lane, monkeypatch):
+    from brainlayer import job_alerts
+
+    backup, source, output, _ = artifact_lane
+
+    def deadline(*args, **kwargs):
+        raise backup.BackupTimeoutError("alert deadline")
+
+    monkeypatch.setattr(job_alerts, "report", deadline)
+    monkeypatch.setattr(
+        backup, "request_brainbar_vacuum_into", lambda *args, **kwargs: pytest.fail("fallback after stop")
+    )
+    with pytest.raises(backup.BackupTimeoutError, match="alert deadline"):
+        backup.create_sqlite_backup_artifact(source, output, socket_path=source.parent / "unused.sock")
+    assert not list(output.glob("*.db*"))
+
+
+@needs_clone_control
+@pytest.mark.parametrize("statement", ["PRAGMA wal_checkpoint(TRUNCATE)", "PRAGMA journal_mode=DELETE"])
+@pytest.mark.parametrize("error_type", [sqlite3.DatabaseError, sqlite3.OperationalError])
+def test_clone_recovery_error_alert_lifecycle(artifact_lane, monkeypatch, statement, error_type):
+    from brainlayer import job_alerts
+
+    backup, source, output, _ = artifact_lane
+    connect = sqlite3.connect
+    reason = "synthetic recovery failure"
+    notifications = []
+    report = job_alerts.report
+
+    def record_alert(*args, **kwargs):
+        return report(*args, **kwargs, notify=notifications.append)
+
+    monkeypatch.setattr(job_alerts, "report", record_alert)
+
+    class RecoveryFailure:
+        def __init__(self, connection):
+            self.connection = connection
+
+        def __getattr__(self, name):
+            return getattr(self.connection, name)
+
+        def execute(self, sql, *args, **kwargs):
+            if sql == statement:
+                raise error_type(reason)
+            return self.connection.execute(sql, *args, **kwargs)
+
+    def fail_recovery(database, *args, **kwargs):
+        connection = connect(database, *args, **kwargs)
+        return RecoveryFailure(connection) if Path(str(database)).name == "snapshot.db" else connection
+
+    monkeypatch.setattr(clone.sqlite3, "connect", fail_recovery)
+    for date, message in [("2026-11-20", "synthetic recovery failure"), ("2026-11-21", "repeat recovery failure")]:
+        reason = message
+        artifact = backup.create_sqlite_backup_artifact(
+            source, output, date_stamp=date, socket_path=source.parent / "unused.sock"
+        )
+        assert artifact.snapshot_method == "vacuum"
+        assert message in artifact.clone_fallback
+        alerts = job_alerts.active_alerts()
+        if error_type is sqlite3.DatabaseError:
+            assert message in alerts["backup-clone-integrity"]
+        else:
+            assert "backup-clone-integrity" not in alerts
+    assert len(notifications) == (1 if error_type is sqlite3.DatabaseError else 0)
+    monkeypatch.setattr(clone.sqlite3, "connect", connect)
+    artifact = backup.create_sqlite_backup_artifact(
+        source, output, date_stamp="2026-11-22", socket_path=source.parent / "unused.sock"
+    )
+    assert artifact.snapshot_method == "apfs_clone"
+    assert "backup-clone-integrity" not in job_alerts.active_alerts()
+
+
 def test_fallback_rechecks_legacy_peak_plus_host_floor_before_vacuum(artifact_lane, monkeypatch):
     from types import SimpleNamespace
 
