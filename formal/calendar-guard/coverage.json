@@ -1,4 +1,5 @@
 {
+  "recover_exit_note": "2026-11-24: supervisor_guard re-pinned at 75604be8. Custody.recover rechecks whole-group existence after a missing leader birth or ESRCH: a vanished group is already gone; a surviving group with unknown identity still fails closed and retains its journal. No new model transition: CalendarGuard already abstracts child disappearance as gone and reaping as gone; PID-reuse protection in the checker remains unchanged. Numeric guard source pointers predate this pin; use named functions. Two fail-first real-child race cases and live-identity refusal regressions exercise the implementation. --prepare-only still rejects pre-existing maintenance_calendar.py checkout drift on base b404bbb4; this checker has no --require-sync. Other pins unchanged; no TLC-pass claim.",
   "sync_sha": "a9c3f184821006dd29b40f2758bee1ba2df4afc5",
   "base_sha": "f01469cfdac1368d54a9f9d47bf743f5fc49ca8d",
   "sources": {
@@ -7,8 +8,8 @@
       "sha256": "5a307852afec90364eb48bbfca534d0e85e07c35c09503b24d57e3b72bbe91ac"
     },
     "src/brainlayer/supervisor_guard.py": {
-      "sha": "f9af18c8",
-      "sha256": "05fab7d328651dde3e63d737250c4fd34723faffa7cb4065b36ff470883307a5"
+      "sha": "75604be8",
+      "sha256": "fd3c5e9d316c7887408911e116f35788cda90a172f98a187d992ae632285bedf"
     },
     "src/brainlayer/supervisor_child.py": {
       "sha": "5a24d4b9",
