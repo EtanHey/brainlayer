@@ -1292,6 +1292,22 @@ async def run_calendar(
                                             else 0
                                         )
                                     )
+                                    # An interim summary must not use event="summary": readers
+                                    # consume that as terminal evidence for this attempt. Persist
+                                    # progress before entering a possibly hours-long backup upload.
+                                    await _blocking(
+                                        _progress_record,
+                                        directory,
+                                        event="progress",
+                                        kind=kind,
+                                        complete=False,
+                                        status="running",
+                                        scheduled_date=date.isoformat(),
+                                        runner_started_at=runner_started_at,
+                                        running_step=step.name,
+                                        step_started_at=time.time(),
+                                        results=dict(results),
+                                    )
                                     code = await _execute_step(
                                         step,
                                         held_env,
@@ -1458,3 +1474,14 @@ async def run_calendar(
                         leases.close()
                     finally:
                         _calendar_operations.reset(token)
+
+
+def _progress_record(directory, **event):
+    """Write an interim progress row. A failure is logged and never changes the night (#1878 review r1 F1).
+
+    Defined last so the formal models' line anchors in this file do not move.
+    """
+    try:
+        record(directory, **event)
+    except OSError as exc:
+        LOG.warning("calendar progress write failed: %s", type(exc).__name__)
