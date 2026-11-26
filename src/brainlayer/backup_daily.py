@@ -2194,6 +2194,18 @@ def create_sqlite_backup_artifact(
                     minimum_free=MIN_RAW_FREE_BYTES + backup_clone.host_reserve_bytes(),
                 )
 
+                def report_clone_integrity(reason):
+                    from .job_alerts import report
+
+                    try:
+                        report("backup-clone-integrity", reason, replace_reason=True)
+                    except TimeoutError:
+                        raise
+                    except OSError as exc:
+                        import logging
+
+                        logging.getLogger(__name__).warning("Could not update backup-clone-integrity alert: %s", exc)
+
                 def validate_clone(path):
                     started = time.monotonic()
                     try:
@@ -2201,16 +2213,10 @@ def create_sqlite_backup_artifact(
                     except sqlite3.Error as exc:
                         check = f"{type(exc).__name__}: {exc}"
                     if check != "ok":
-                        from .job_alerts import report
-
-                        report(
-                            "backup-clone-integrity", f"APFS clone integrity_check failed: {check}", replace_reason=True
-                        )
+                        report_clone_integrity(f"APFS clone integrity_check failed: {check}")
                         raise backup_clone.CloneUnavailable(f"clone integrity_check failed: {check}")
                     clone_validation.update(integrity=check, seconds=time.monotonic() - started)
-                    from .job_alerts import report
-
-                    report("backup-clone-integrity", None)
+                    report_clone_integrity(None)
 
                 try:
                     promoted = backup_clone.snapshot(
@@ -2222,6 +2228,8 @@ def create_sqlite_backup_artifact(
                     clone_guard(force=True)
                 except backup_clone.CloneUnavailable as exc:
                     _check_backup_interrupt()
+                    if isinstance(exc, backup_clone.CloneIntegrityError):
+                        report_clone_integrity(str(exc))
                     clone_fallback = str(exc)
                     print(f"Backup snapshot fallback: {clone_fallback}; using VACUUM INTO", flush=True)
                     if raw_snapshot.exists():
