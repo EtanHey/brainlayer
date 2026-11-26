@@ -12,12 +12,12 @@
       "sha256": "a10214bfcb11b57aa01041f22408ccabd56fa7ef89e1e233ffc9d4b595b872a6"
     },
     "src/brainlayer/backup_daily.py": {
-      "sha": "Track 6 clone alert isolation and private recovery corruption diagnostics (2026-11-24)",
-      "sha256": "f108ca4f25b8d594c4cd61003c28fa42fe73075b912988eec822d74741afa44d"
+      "sha": "Merge of main (Track 6 clone alert #1879, Track 3 nightly progress #1878) into Track 5 #1880 (gate-only raw reclaim + failed-proof memo), lead pin-only resolution 2026-11-26; backup_daily.py auto-merged; sha256 = merged bytes",
+      "sha256": "df7a391626d3d8a7c2075771e8fc0383b891e739754016e096281b23b29e709c"
     },
     "src/brainlayer/backup_heavy_gate.py": {
-      "sha": "merge #1859 c3db0a18 with main 89eb7417 (#1867 APFS clone R1): both sides pinned with no model change; source hunks merged without conflict",
-      "sha256": "a9b5a9bb373d01ad2bc65519a0f09eeb5891c11aff3abe8d96896e9ae24c88ba"
+      "sha": "Track 5 fix r1: pressure before disk; measure, reclaim verified raws only when that could admit, re-measure; failed-proof memo per gate run; admission arithmetic tested outside model",
+      "sha256": "9f18d88e2b47c95040fef2a6722428530569ca9c76a4d68ab09d5e0876de3f4f"
     },
     "src/brainlayer/maintenance.py": {
       "sha": "5882de81",

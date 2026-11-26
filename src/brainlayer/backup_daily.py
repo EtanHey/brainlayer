@@ -976,6 +976,7 @@ def _sweep_stale_clones(output_dir: Path) -> list[str]:
 
 
 def _sweep_clones_before_admission(output_dir: Path) -> None:
+    """Reclaim stale clones under the staging lock before measuring (cheap: stat and unlink only)."""
     if not output_dir.exists() or output_dir.is_symlink():
         return
     fd = os.open(output_dir / ".backup.lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
@@ -989,11 +990,39 @@ def _sweep_clones_before_admission(output_dir: Path) -> None:
         os.close(fd)
 
 
+def _reclaim_verified_raws_before_admission(output_dir: Path, failed_proofs: set[tuple] | None = None) -> list[str]:
+    """Unlink archive-bound raws under the staging lock so their blocks and COW reserve stop deferring admission.
+
+    Runs the run's full binding/durability proof, never receipt metadata alone. The gate calls this
+    only when reclaiming could admit, and passes `failed_proofs` across its retries so a raw whose
+    proof failed is not re-proved until the raw or its archive changes.
+    """
+    if not output_dir.exists() or output_dir.is_symlink():
+        return []
+    fd = os.open(output_dir / ".backup.lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return []
+        deleted, _ = _cleanup_raw_snapshots(output_dir, failed_proofs=failed_proofs)
+    finally:
+        os.close(fd)
+    for name in deleted:
+        print(f"Backup removed verified raw snapshot before admission: {output_dir / name}", flush=True)
+    return deleted
+
+
 def _clone_growth_reserve_bytes(output_dir: Path, db_size: int) -> int:
     """Existing blocks are in free_now; reserve the full possible COW divergence."""
+    return sum(size for _, size in _clone_growth_reserves(output_dir, db_size))
+
+
+def _clone_growth_reserves(output_dir: Path, db_size: int) -> list[tuple[Path, int]]:
+    """Keep the reservation inventory available for admission diagnostics."""
     paths = list(output_dir.glob(".brainlayer-clone-*/snapshot.db"))
     paths += [p for p in output_dir.glob("*.db") if _parse_uncompressed_snapshot_date(p.name)]
-    total = 0
+    reserves = []
     for path in paths:
         parent = path.parent.lstat()
         info = path.lstat()
@@ -1003,8 +1032,8 @@ def _clone_growth_reserve_bytes(output_dir: Path, db_size: int) -> int:
             and stat.S_ISREG(info.st_mode)
             and info.st_uid == os.getuid()
         ):
-            total += max(db_size, info.st_size)
-    return total
+            reserves.append((path, max(db_size, info.st_size)))
+    return reserves
 
 
 def _owned_temp_inventory(output_dir: Path) -> list[tuple[str, int]]:
@@ -1477,11 +1506,31 @@ def _retained_raw_snapshot_names(output_dir: Path) -> list[str]:
     return sorted(path.name for path in output_dir.glob("*.db") if _parse_uncompressed_snapshot_date(path.name))
 
 
-def _cleanup_raw_snapshots(output_dir: Path) -> tuple[list[str], list[str]]:
+def _raw_proof_key(output_dir: Path, raw: Path) -> tuple:
+    """The raw's and its archive's file identity; any change to either re-arms a failed proof."""
+
+    def identity(path: Path) -> tuple[int, ...]:
+        info = os.lstat(path)
+        return info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns
+
+    archive_name = _raw_archive_name(output_dir, raw)
+    return raw.name, identity(raw), archive_name, identity(output_dir / archive_name)
+
+
+def _cleanup_raw_snapshots(output_dir: Path, *, failed_proofs: set[tuple] | None = None) -> tuple[list[str], list[str]]:
     deleted, retained_raw = [], []
     for raw in sorted(output_dir.glob("*.db")):
         if _parse_uncompressed_snapshot_date(raw.name) is None:
             continue
+        key = None
+        if failed_proofs is not None:
+            try:
+                key = _raw_proof_key(output_dir, raw)
+            except OSError:
+                key = None  # No archive or a vanished file: the proof itself fails at once.
+            if key is not None and key in failed_proofs:
+                retained_raw.append(raw.name)
+                continue
         try:
             _remove_raw_with_verified_archive(output_dir, raw)
             deleted.append(raw.name)
@@ -1489,6 +1538,8 @@ def _cleanup_raw_snapshots(output_dir: Path) -> tuple[list[str], list[str]]:
             raise
         except (OSError, EOFError, ValueError, RuntimeError, subprocess.CalledProcessError):
             retained_raw.append(raw.name)
+            if key is not None and failed_proofs is not None:
+                failed_proofs.add(key)
     return deleted, retained_raw
 
 
