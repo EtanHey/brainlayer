@@ -39,10 +39,6 @@ struct NDInputs: Sendable {
     var canRevealLocalCopy = false
     var backupProgress: BrainBarBackupProgress? = nil
     var driveRetention: BrainBarDriveRetention? = nil
-#if DEBUG
-    /// The real Classic card, fed invented facts for the capture of its red upload row.
-    var captureBackupChecks: BrainBarBackupChecks? = nil
-#endif
     /// A copy of the report failed: the copy row says so until it goes (R12).
     var copyReportFailed = false
     /// Invented settings-file evidence for no-IO captures; live Settings reads its config model instead.
@@ -113,6 +109,9 @@ enum NDRange: String, CaseIterable, Sendable, Identifiable {
 struct NDWave: Equatable, Sendable {
     var saves: [Int]
     var reads: [Int]
+    /// Search + recall calls from the daemon's sidecar; nil is unavailable, never a measured zero.
+    var agentReads: [Int]? = nil
+    var agentReadsPeakPerMinute: Int? = nil
     /// False when the database could not be read: the waveform is unknown (dashed), never empty.
     var readable = true
     /// When the newest bucket ends; a later end by one bucket width is a shift (motion 5).

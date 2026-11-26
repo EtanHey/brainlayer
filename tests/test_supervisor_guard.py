@@ -158,18 +158,67 @@ def test_gate_eof_prevents_execution_and_release_preserves_env_and_append_log(tm
     assert output.read_text() == "existing\nreleased\n"
 
 
-def test_unreadable_live_birth_fails_without_signal(tmp_path, monkeypatch):
+@pytest.mark.parametrize("probe_error", [None, ProcessLookupError])
+def test_unreadable_live_birth_fails_without_signal(tmp_path, monkeypatch, probe_error):
     child = subprocess.Popen((sys.executable, "-c", "import time; time.sleep(60)"), start_new_session=True)
     try:
         with Custody(tmp_path) as custody:
             custody.record(child.pid, start_time(child.pid))
-            monkeypatch.setattr(guard, "start_time", lambda pid: None)
+            saved = custody.journal.read_bytes()
+
+            def unreadable(pid):
+                if probe_error:
+                    raise probe_error()
+                return None
+
+            monkeypatch.setattr(guard, "start_time", unreadable)
             with pytest.raises(RuntimeError, match="identity"):
                 custody.recover(0.1)
             assert str(child.pid) in custody.groups and child.poll() is None
+            assert custody.journal.read_bytes() == saved
     finally:
         os.killpg(child.pid, signal.SIGKILL)
         child.wait()
+
+
+@pytest.mark.parametrize("probe_error", [None, ProcessLookupError])
+def test_recovery_when_leader_exits_between_group_and_birth_checks(tmp_path, monkeypatch, probe_error):
+    child = subprocess.Popen((sys.executable, "-c", "import time; time.sleep(60)"), start_new_session=True)
+    try:
+        with Custody(tmp_path) as custody:
+            custody.record(child.pid, start_time(child.pid))
+
+            def exit_before_birth(pid):
+                assert pid == child.pid
+                child.kill()
+                child.wait(timeout=2)
+                if probe_error:
+                    raise probe_error()
+                return None
+
+            monkeypatch.setattr(guard, "start_time", exit_before_birth)
+            custody.recover(0.1)
+            assert custody.groups == {}
+            assert json.loads(custody.journal.read_text())["groups"] == {}
+    finally:
+        if child.poll() is None:
+            child.kill()
+            child.wait(timeout=2)
+
+
+def test_recovery_keeps_journal_when_birth_probe_is_denied(tmp_path, monkeypatch):
+    with Custody(tmp_path) as custody:
+        custody.record(12345, "recorded-birth")
+        saved = custody.journal.read_bytes()
+        monkeypatch.setattr(guard, "group_exists", lambda _: True)
+
+        def denied(_):
+            raise PermissionError("birth probe denied")
+
+        monkeypatch.setattr(guard, "start_time", denied)
+        with pytest.raises(PermissionError, match="birth probe denied"):
+            custody.recover(0.1)
+        assert custody.journal.read_bytes() == saved
 
 
 def test_unkillable_group_reap_has_deadline_and_reports_it(tmp_path):

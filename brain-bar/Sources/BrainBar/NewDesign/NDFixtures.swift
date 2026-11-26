@@ -2,7 +2,7 @@
 import Foundation
 
 /// Stage 2's capture mode and the headless renders' states. `BRAINBAR_DESIGN_FIXTURE=<name>` (DEBUG builds only) drives
-/// the real status item, dropdown and window from one named, invented state, with the design forced to `new`. It never
+/// the real status item, dropdown and window from one named, invented state, using the app's only design. It never
 /// writes real state: in this mode the app starts no server, sampler, watcher or job, and reads no file.
 enum BrainBarDesignFixture {
     static let environmentKey = "BRAINBAR_DESIGN_FIXTURE"
@@ -53,7 +53,7 @@ enum BrainBarDesignFixture {
         ProcessInfo.processInfo.environment[environmentKey].flatMap(Name.init(rawValue:))
     }
 
-    /// F06: a capture keeps its own preferences (window frame, the Design control), in a suite of its own that is emptied
+    /// F06: a capture keeps its own preferences (window frame), in a suite of its own that is emptied
     /// at launch, so nothing it does reaches the installed app's preferences.
     static let captureSuiteName = "com.brainlayer.brainbar.design-capture"
     nonisolated(unsafe) static let capturePreferences: UserDefaults = {
@@ -70,12 +70,8 @@ enum BrainBarDesignFixture {
         let panel = BrainBarDashboardPanelController(
             workspace: workspace, runtime: runtime, activationPolicy: activationPolicy,
             frameStore: BrainBarWindowFrameStore(defaults: capturePreferences, key: BrainBarDashboardPanelController.frameDefaultsKey))
-        // Fix 4: the capture draws the new design, so its Settings says New (the shipping default stays Classic).
-        capturePreferences.set(BrainBarDesign.new.rawValue, forKey: BrainBarDesign.key)
-        panel.designDefaults = capturePreferences
-        panel.applyDesign()
         let status = BrainBarStatusPopoverController(workspace: workspace, runtime: runtime, dashboardPanelController: panel,
-                                                     statusBar: statusBar, menuDefaults: capturePreferences)
+                                                     statusBar: statusBar)
         return (panel, status)
     }
 
@@ -189,7 +185,6 @@ enum BrainBarDesignFixture {
             if name == .uploadSnapshotRed {
                 i.capture = capture(replacing(calmChecks(), check("backup_offsite", .red, age: 72 * 3600, limit: 54 * 3600)), dot: .red)
                 i.backupHistory = history(driveNewestHoursAgo: 72)
-                i.captureBackupChecks = BrainBarBackupChecks.derive(backups, now: now)
             } else if name == .uploadDriveStalled {
                 i.capture = capture(replacing(calmChecks(), check("backup_offsite", .red, age: 72 * 3600, limit: 54 * 3600)), dot: .red)
                 i.capture.driveAuthModel = .valid
@@ -206,7 +201,7 @@ enum BrainBarDesignFixture {
         return i
     }
 
-    /// Synthetic receipts enter the same progress and Classic-check presenters as real observations.
+    /// Synthetic receipts enter the same progress presenters as real observations.
     static func backupFacts(_ name: Name) -> ObservabilityDocument.Backups {
         let verifying = name == .verifying
         let stale = name == .uploadSnapshotRed
@@ -364,7 +359,13 @@ enum NDFixtureTraffic {
             saves.append(s)
             reads.append(r)
         }
-        var wave = NDWave(saves: saves, reads: reads, readable: true,
+        // Independent call traffic: quiet stretches, a burst, and low traffic between bursts.
+        let calls = (0..<n).map { index -> Int in
+            let phase = index % 20
+            let perMinute = phase >= 7 && phase <= 10 ? [2, 12, 9, 4][phase - 7] : (phase >= 11 && phase <= 14 ? 1 : 0)
+            return perMinute * max(1, minutes / n)
+        }
+        var wave = NDWave(saves: saves, reads: reads, agentReads: calls, agentReadsPeakPerMinute: 12, readable: true,
                           endsAt: Date(timeIntervalSinceReferenceDate: Double(end * width)))
         wave.sequence = end
         return wave

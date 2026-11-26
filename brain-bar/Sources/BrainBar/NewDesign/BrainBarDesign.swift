@@ -1,27 +1,16 @@
 import AppKit
 import SwiftUI
 
-/// L6: one preference decides the whole UI, read live by the status item, the dropdown, the window and Settings.
-/// An absent preference selects New; an explicit stored choice keeps precedence.
-enum BrainBarDesign: String, CaseIterable, Sendable {
-    case classic, new
+/// Compatibility names for old preferences. The app has one design; reading never migrates or writes defaults.
+enum BrainBarDesign: String, Sendable {
+    case new
 
     static let key = "BrainBarDesign"
     static let defaultValue: BrainBarDesign = .new
 
-    /// The design to draw now. A DEBUG capture fixture forces `new`; nothing else does. Reading never writes a value.
+    /// Old Classic and unknown stored values all resolve to the current design.
     static func current(in defaults: UserDefaults = .standard) -> BrainBarDesign {
-#if DEBUG
-        if BrainBarDesignFixture.requested != nil { return .new }
-#endif
-        return defaults.string(forKey: key).flatMap(Self.init(rawValue:)) ?? defaultValue
-    }
-
-    var title: String {
-        switch self {
-        case .classic: "Classic"
-        case .new: "New"
-        }
+        .new
     }
 }
 
@@ -86,6 +75,7 @@ enum NDColor {
     /// R1.2 change 21: dark read bars #8189A0 (4.69:1 on the card); light unchanged.
     static let read = dynamic("read", dark: rgb(0x8189A0), light: rgb(0x7E8598))
     static let readText = dynamic("read.t", dark: rgb(0x9AA1B3), light: rgb(0x5A6275))
+    static let agentRead = dynamic("agent.read", dark: rgb(0x4CB8AC), light: rgb(0x16776F))
     static let red = dynamic("red", dark: rgb(0xFF453A), light: rgb(0xD92D20))
     static let redText = dynamic("red.t", dark: rgb(0xFF6961), light: rgb(0xB8180D))
     static let redTint = dynamic("red.tint", dark: rgb(0xFF453A, alpha: 0.16), light: rgb(0xFF3B30, alpha: 0.12))
@@ -147,6 +137,7 @@ enum ND {
     static let savedText = Color(nsColor: NDColor.savedText)
     static let read = Color(nsColor: NDColor.read)
     static let readText = Color(nsColor: NDColor.readText)
+    static let agentRead = Color(nsColor: NDColor.agentRead)
     static let red = Color(nsColor: NDColor.red)
     static let redText = Color(nsColor: NDColor.redText)
     static let redTint = Color(nsColor: NDColor.redTint)

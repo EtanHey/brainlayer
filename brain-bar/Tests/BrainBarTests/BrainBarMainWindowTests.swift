@@ -16,14 +16,27 @@ final class BrainBarMainWindowTests: XCTestCase {
     /// A large display, so nothing here depends on the machine running the tests.
     private static let bigScreen = [NSRect(x: 0, y: 0, width: 2_560, height: 1_400)]
 
+    func testShortNewPageRestoresItsSavedTopEdge() {
+        let defaults = MemoryDefaults()
+        let saved = NSRect(x: 62, y: 233, width: 900, height: 510)
+        BrainBarWindowFrameStore(defaults: defaults, key: BrainBarDashboardPanelController.frameDefaultsKey).persist(frame: saved)
+        let controller = controller(defaults: defaults)
+        controller.newDesignStore.page = .jobs
+        controller.placeWindowForTesting()
+        XCTAssertEqual(controller.windowForTesting.frame.minX, saved.minX)
+        XCTAssertEqual(controller.windowForTesting.frame.maxY, saved.maxY)
+    }
+
     private func controller(
         defaults: MemoryDefaults = MemoryDefaults(),
         screens: [NSRect] = BrainBarMainWindowTests.bigScreen
     ) -> BrainBarDashboardPanelController {
-        BrainBarDashboardPanelController(workspace: BrainBarRecordingWorkspace(), runtime: BrainBarRuntime(),
+        let controller = BrainBarDashboardPanelController(workspace: BrainBarRecordingWorkspace(), runtime: BrainBarRuntime(),
             frameStore: BrainBarWindowFrameStore(defaults: defaults, key: BrainBarDashboardPanelController.frameDefaultsKey),
-            screenFrames: { screens }, designDefaults: brainBarLegacyMenuDefaults()
+            screenFrames: { screens }
         )
+        controller.visibleFrameOverride = screens.last
+        return controller
     }
 
     private func keyDown(_ characters: String, modifiers: NSEvent.ModifierFlags = .command, in window: NSWindow) -> NSEvent {
@@ -47,7 +60,7 @@ final class BrainBarMainWindowTests: XCTestCase {
         for style: NSWindow.StyleMask in [.titled, .closable, .miniaturizable, .resizable] {
             XCTAssertTrue(window.styleMask.contains(style), "missing \(style)")
         }
-        XCTAssertEqual(window.minSize, NSSize(width: 760, height: 560))
+        XCTAssertEqual(controller.windowWillResize(window, to: .zero), controller.fittedFrameSize)
         XCTAssertEqual(window.title, "BrainBar")
     }
 
@@ -79,12 +92,12 @@ final class BrainBarMainWindowTests: XCTestCase {
 
     func test_command_w_closes_and_command_comma_opens_settings() {
         let controller = controller()
-        defer { controller.dismiss() }
+        defer { controller.dismiss(); NDSettingsWindowController.closeIfOpen() }
         controller.showDashboard()
         let window = controller.windowForTesting
 
         XCTAssertTrue(window.performKeyEquivalent(with: keyDown(",", in: window)))
-        XCTAssertEqual(controller.selectedTabForTesting, .settings)
+        XCTAssertTrue(NDSettingsWindowController.isOpenForTesting)
         XCTAssertTrue(controller.isShownForTesting)
 
         XCTAssertTrue(window.performKeyEquivalent(with: keyDown("w", in: window)))
@@ -92,67 +105,9 @@ final class BrainBarMainWindowTests: XCTestCase {
         XCTAssertFalse(window.performKeyEquivalent(with: keyDown("w", modifiers: [], in: window)), "a bare w is typing")
     }
 
-    func test_the_window_resizes_on_both_axes_down_to_its_minimum() {
-        let controller = controller()
-        let window = controller.windowForTesting
-
-        let taller = controller.windowWillResize(window, to: NSSize(width: 1_100, height: 900))
-        XCTAssertEqual(taller, NSSize(width: 1_100, height: 900))
-        let tiny = controller.windowWillResize(window, to: NSSize(width: 300, height: 200))
-        XCTAssertEqual(tiny, NSSize(width: 760, height: 560))
-    }
-
     /// Position and size are saved and restored against injected screens. The window is placed
     /// without being ordered front, so the real display (a small one on the CI runner) plays no
     /// part (#1020 CI).
-    func test_position_and_size_are_restored_on_the_next_launch() {
-        let defaults = MemoryDefaults()
-        let first = controller(defaults: defaults)
-        first.placeWindowForTesting()
-        let placed = NSRect(x: 40, y: 102, width: 1_000, height: 700)
-        first.windowForTesting.setFrame(placed, display: false)
-        first.windowDidEndLiveResize(Notification(name: NSWindow.didEndLiveResizeNotification, object: first.windowForTesting))
-        XCTAssertNotNil(defaults.values[BrainBarDashboardPanelController.frameDefaultsKey])
-
-        let relaunched = controller(defaults: defaults)
-        relaunched.placeWindowForTesting()
-        XCTAssertEqual(relaunched.windowForTesting.frame, placed)
-
-        // The CI runner's display: the saved window is clamped into it, not left partly off-screen.
-        let small = NSRect(x: 0, y: 0, width: 1_024, height: 680)
-        let onSmallScreen = controller(defaults: defaults, screens: [small])
-        onSmallScreen.placeWindowForTesting()
-        XCTAssertEqual(onSmallScreen.windowForTesting.frame, NSRect(x: 24, y: 0, width: 1_000, height: 680))
-    }
-
-    func test_settings_position_and_size_survive_quit_and_relaunch() {
-        let defaults = MemoryDefaults()
-        let first = controller(defaults: defaults)
-        first.showSettings(section: .backups)
-        let visible = NSScreen.screens[0].visibleFrame
-        let size = NSSize(width: min(900, max(760, visible.width - 160)),
-            height: min(700, max(560, visible.height - 120)))
-        let saved = NSRect(x: visible.minX + min(120, max(0, visible.width - size.width)),
-            y: visible.minY + min(80, max(0, visible.height - size.height)),
-            width: size.width, height: size.height)
-        first.windowForTesting.setFrame(saved, display: true)
-        first.windowDidEndLiveResize(Notification(name: NSWindow.didEndLiveResizeNotification,
-            object: first.windowForTesting))
-        let delegate = AppDelegate(dashboardPanel: first)
-        XCTAssertEqual(delegate.applicationShouldTerminate(NSApplication.shared), .terminateNow)
-        first.windowForTesting.setFrameOrigin(NSPoint(x: visible.minX, y: visible.minY))
-        first.windowDidMove(Notification(name: NSWindow.didMoveNotification, object: first.windowForTesting))
-        delegate.applicationWillTerminate(Notification(name: NSApplication.willTerminateNotification))
-
-        let relaunched = controller(defaults: defaults)
-        defer {
-            relaunched.dismiss()
-            BrainBarSettingsActions.installOpenHandler {}
-        }
-        relaunched.showSettings(section: .backups)
-        RunLoop.main.run(until: Date().addingTimeInterval(0.1))
-        XCTAssertEqual(relaunched.windowForTesting.frame, saved)
-    }
 
     func test_late_geometry_events_after_close_do_not_replace_the_saved_external_display_position() {
         let defaults = MemoryDefaults()
@@ -163,7 +118,9 @@ final class BrainBarMainWindowTests: XCTestCase {
         store.persist(frame: saved)
         let first = controller(defaults: defaults, screens: screens)
         first.placeWindowForTesting()
-        XCTAssertEqual(first.windowForTesting.frame, saved)
+        let placed = first.windowForTesting.frame
+        XCTAssertEqual(placed.minX, saved.minX)
+        XCTAssertEqual(placed.maxY, saved.maxY)
         first.dismiss()
 
         // AppKit can deliver geometry changes during teardown/policy changes. Once closed,
@@ -173,47 +130,14 @@ final class BrainBarMainWindowTests: XCTestCase {
         first.windowDidEndLiveResize(Notification(name: NSWindow.didEndLiveResizeNotification,
             object: first.windowForTesting))
         first.dismiss() // Termination can close through both status.stop() and the delegate.
-        XCTAssertEqual(store.persistedFrame(), saved)
+        XCTAssertEqual(store.persistedFrame(), placed)
 
         let relaunched = controller(defaults: defaults, screens: screens)
         relaunched.placeWindowForTesting()
-        XCTAssertEqual(relaunched.windowForTesting.frame, saved)
+        XCTAssertEqual(relaunched.windowForTesting.frame, placed)
         let detached = controller(defaults: defaults, screens: [screens[0]])
         detached.placeWindowForTesting()
         XCTAssertNotEqual(detached.windowForTesting.frame.origin, saved.origin)
-    }
-
-    func test_settings_restores_a_saved_bottom_edge_frame_when_promoted_to_regular() {
-        // Etan's real saved frame touched the bottom edge with y = -0.0. Build the same shape
-        // inside the screen this test runs on, so AppKit has no reason to move it, and expect
-        // that exact rect back: the expectation is independent of restoredFrame.
-        guard let visible = NSScreen.main?.visibleFrame ?? NSScreen.screens.first?.visibleFrame else {
-            XCTFail("no screen")
-            return
-        }
-        let minimum = BrainBarDashboardPanelController.minSize
-        let size = NSSize(width: max(minimum.width, min(760, visible.width)),
-            height: max(minimum.height, min(1084, visible.height)))
-        let expected = NSRect(x: visible.maxX - size.width, y: visible.minY, width: size.width, height: size.height)
-        let bottom = expected.minY == 0 ? "-0.0" : "\(expected.minY)"
-        let defaults = MemoryDefaults()
-        defaults.values[BrainBarDashboardPanelController.frameDefaultsKey] =
-            "\(expected.minX),\(bottom),\(expected.width),\(expected.height)"
-        let app = NSApplication.shared
-        let previousPolicy = app.activationPolicy()
-        app.setActivationPolicy(.accessory)
-        let restored = BrainBarDashboardPanelController(
-            workspace: BrainBarRecordingWorkspace(), runtime: BrainBarRuntime(),
-            activationPolicy: BrainBarWindowActivationPolicy(),
-            frameStore: BrainBarWindowFrameStore(defaults: defaults, key: BrainBarDashboardPanelController.frameDefaultsKey), designDefaults: brainBarLegacyMenuDefaults())
-        defer {
-            restored.dismiss()
-            app.setActivationPolicy(previousPolicy)
-            BrainBarSettingsActions.installOpenHandler {}
-        }
-        restored.showSettings(section: .backups)
-        RunLoop.main.run(until: Date().addingTimeInterval(0.1))
-        XCTAssertEqual(restored.windowForTesting.frame, expected)
     }
 
     func test_a_saved_frame_is_kept_clamped_or_dropped_for_the_current_screens() {
@@ -239,30 +163,6 @@ final class BrainBarMainWindowTests: XCTestCase {
     }
 
     // MARK: status item
-
-    func test_the_status_item_opens_a_small_menu_like_voicebar() throws {
-        let runtime = BrainBarRuntime(launchMode: .menuItemDaemon)
-        let windowController = BrainBarDashboardPanelController(workspace: BrainBarRecordingWorkspace(), runtime: runtime, designDefaults: brainBarLegacyMenuDefaults())
-        let status = BrainBarStatusPopoverController(workspace: BrainBarRecordingWorkspace(), runtime: runtime, dashboardPanelController: windowController, statusBar: TestStatusItemHost(), menuDefaults: brainBarLegacyMenuDefaults())
-        defer { status.stop(); windowController.dismiss() }
-
-        XCTAssertTrue(status.statusItemForTesting.menu === status.contextMenuForTesting, "every click opens the menu")
-        // Show log stays hidden while no job alert is active (lead ruling 2026-10-04).
-        // Gap 26, lead ruling 21 Nov 2026: main's inventory plus one enabled, unmarked Diagnostics after Settings.
-        let mainItems = try brainBarItemsWithoutApprovedDiagnostics(status.contextMenuForTesting)
-        let titles = mainItems.filter { !$0.isSeparatorItem && !$0.isHidden }.map(\.title)
-        XCTAssertEqual(Array(titles.dropFirst()), ["Open Dashboard", "Settings…", "Restart BrainBar", "Quit BrainBar"])
-        XCTAssertFalse(status.contextMenuForTesting.items[0].isEnabled, "the first row is a status line")
-
-        let open = try XCTUnwrap(status.contextMenuForTesting.items.first { $0.title == "Open Dashboard" })
-        _ = (open.target as AnyObject).perform(open.action, with: open)
-        XCTAssertTrue(windowController.isShownForTesting)
-        XCTAssertEqual(windowController.selectedTabForTesting, .dashboard)
-
-        let settings = try XCTUnwrap(status.contextMenuForTesting.items.first { $0.title == "Settings…" })
-        _ = (settings.target as AnyObject).perform(settings.action, with: settings)
-        XCTAssertEqual(windowController.selectedTabForTesting, .settings)
-    }
 
     func test_the_status_line_says_whether_anything_needs_attention() {
         XCTAssertEqual(

@@ -33,6 +33,7 @@ import SwiftUI
     var drawnPageForTesting: NDPage?
 #endif
 
+    lazy var updates: BrainBarUpdates = (!isFixture ? runtime?.updates : nil) ?? BrainBarUpdates(installed: "1.6.11", defaults: preferences, feed: { "1.6.11" })
     let runtime: BrainBarRuntime?
     private let workspace: any BrainBarWorkspaceActing
     private var cancellables: Set<AnyCancellable> = []
@@ -41,6 +42,8 @@ import SwiftUI
     private var lastWaveFetch: Date?
     var waveNow: () -> Date = Date.init
     var fetchWaveBuckets: (@Sendable (Int, Int) async -> BrainDatabase.PipelineWindowBuckets?)?
+    /// Fixture sidecar override; production resolves beside the runtime's database.
+    var agentReadReceiptsURL: URL?
     private var lastHistoryRead: Date?
     private var waveGeneration = 0
     private var historyGeneration = 0
@@ -366,6 +369,7 @@ import SwiftUI
         waveTask?.cancel()
         let generation = waveGeneration, range = range
         let wantsHero = windowActive
+        let receiptsURL = agentReadReceiptsURL ?? runtime.map { BrainBarOperationReceipts.fileURL(dbPath: $0.databasePath ?? BrainBarServer.defaultDBPath()) }
         waveTask = Task { [weak self] in
             guard let self else { return }
             // Cancelling a waiter cannot stop SQLite already reading. Keep that read's slot until it finishes;
@@ -381,12 +385,21 @@ import SwiftUI
             }
             self.waveRead = (generation, read)
             let (m, h) = await read.value
+            let agentReads = await Task.detached(priority: .utility) {
+                guard wantsHero, let receiptsURL else { return BrainBarOperationReceipts.AgentReadActivity?.none }
+                let receipts = BrainBarOperationReceipts(url: receiptsURL)
+                return receipts.agentReadActivity(minutes: range.minutes, count: 60, end: sampledAt)
+            }.value
             if self.waveRead?.generation == generation { self.waveRead = nil }
             guard !Task.isCancelled, generation == self.waveGeneration else { return }
             self.waveTask = nil
             var next = self.inputs
             next.menuWave = m.map { Self.wave($0, end: sampledAt) } ?? NDWave(saves: [], reads: [], readable: false)
-            if wantsHero { next.heroWaves[range] = h.map { Self.wave($0, end: sampledAt) } ?? NDWave(saves: [], reads: [], readable: false) }
+            if wantsHero {
+                next.heroWaves[range] = h.map { Self.wave($0, end: sampledAt) } ?? NDWave(saves: [], reads: [], readable: false)
+                next.heroWaves[range]?.agentReads = agentReads?.buckets
+                next.heroWaves[range]?.agentReadsPeakPerMinute = agentReads?.peakPerMinute
+            }
             self.acceptWaves(next, applyWhileHeld: applyWhileHeld)
         }
     }

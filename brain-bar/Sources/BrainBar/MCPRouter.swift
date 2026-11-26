@@ -165,9 +165,9 @@ final class MCPRouter: @unchecked Sendable {
         let registry = PendingStoreDrainRegistry()
         let backupGate = PendingStoreBackupGate()
         let onFlushed: (@Sendable ([BrainDatabase.FlushedPendingStore]) -> Void)?
+        var stopped = false // Accessed only on the serial drain queue.
 #if DEBUG
         var onUnreadableTargetRetryForTesting: (@Sendable (String) -> Void)?
-        var stoppedForTesting = false // Accessed only on queue.
 #endif
 
         init(
@@ -306,10 +306,21 @@ final class MCPRouter: @unchecked Sendable {
 #if DEBUG
     var receiptPersistenceEnabledForTesting: Bool { receiptStore.isPersistent }
 
+    func enqueueStoreDrainForTesting(
+        beforeDrain: (@Sendable () -> Void)? = nil,
+        _ work: @escaping @Sendable () -> Void
+    ) {
+        let scheduler = pendingStoreDrainScheduler
+        scheduler.queue.async {
+            beforeDrain?()
+            scheduler.backupGate.withDrain(work)
+        }
+    }
+
     func finishOwnedWorkForTesting(deadline: DispatchTime) -> FixtureShutdownResult {
         let scheduler = pendingStoreDrainScheduler
         guard drainFixtureQueueForTesting(scheduler.queue, deadline: deadline, work: {
-            scheduler.stoppedForTesting = true
+            scheduler.stopped = true
         }) == .finished else { return .timedOut }
         return entityCache.stopAndDrainForTesting(deadline: deadline)
     }
@@ -472,6 +483,32 @@ final class MCPRouter: @unchecked Sendable {
         pendingStoreDrainScheduler.backupGate.finishBackup()
     }
 
+    static let pendingStoreDrainJoinTimeout: TimeInterval = 5
+
+    /// Called after backup work joins, from the server request queue. Marking the
+    /// scheduler stopped here also disables delayed retries that have not fired.
+    ///
+    /// Returns false when a drain already on the queue outlived `deadline`. A drain
+    /// can block without limit in the pending-store `flock`, which the Python side
+    /// takes too, so the join is bounded. The stop marker still runs once that drain
+    /// ends, ahead of any retry it schedules, because the queue is serial. On false
+    /// the caller must not close the write handle the drain is using.
+    @discardableResult
+    func stopPendingStoreDrains(
+        deadline: DispatchTime = .now() + MCPRouter.pendingStoreDrainJoinTimeout
+    ) -> Bool {
+        let scheduler = pendingStoreDrainScheduler
+        // Cleanup already joined the backup worker. Its normal gate-release
+        // callback is queued behind cleanup on the server queue, so release here
+        // before joining a drain that may be waiting at that gate.
+        scheduler.backupGate.finishBackup()
+        let joined = DispatchGroup()
+        scheduler.queue.async(group: joined) { scheduler.stopped = true }
+        let finished = joined.wait(timeout: deadline) == .success
+        entityCache.stopRefreshTimer()
+        return finished
+    }
+
     private let vacuumActivity = NSLock()
     private var activeVacuumCount = 0
 
@@ -492,9 +529,7 @@ final class MCPRouter: @unchecked Sendable {
     ) {
         scheduler.queue.asyncAfter(deadline: .now() + delay) { [weak scheduler, weak db] in
             guard let scheduler, let db, db.isOpen else { return }
-#if DEBUG
-            guard !scheduler.stoppedForTesting else { return }
-#endif
+            guard !scheduler.stopped else { return }
             scheduler.backupGate.withDrain {
                 guard let snapshot = db.pendingStoreQueueSnapshotIfReadable() else {
                     scheduleExistingPendingStoreScan(
@@ -538,9 +573,7 @@ final class MCPRouter: @unchecked Sendable {
     ) {
         scheduler.queue.asyncAfter(deadline: .now() + delay) { [weak scheduler, weak db] in
             guard let scheduler, let db, db.isOpen else { return }
-#if DEBUG
-            guard !scheduler.stoppedForTesting else { return }
-#endif
+            guard !scheduler.stopped else { return }
             scheduler.backupGate.withDrain {
                 let flushedStores = db.flushPendingStores(
                     busyTimeoutMillis: mcpStoreBusyTimeoutMillis,
@@ -703,6 +736,7 @@ final class MCPRouter: @unchecked Sendable {
         }
 
         let startedAt = ProcessInfo.processInfo.systemUptime
+        if toolName == "brain_recall" { receiptStore.recordAgentRead(toolName: toolName) }
         // Dispatch to handler
         do {
             try Self.validate(arguments: arguments, for: toolName)
@@ -1254,9 +1288,7 @@ final class MCPRouter: @unchecked Sendable {
 
         scheduler.queue.asyncAfter(deadline: .now() + delay) { [weak scheduler, weak db] in
             guard let scheduler, let db else { return }
-#if DEBUG
-            guard !scheduler.stoppedForTesting else { return }
-#endif
+            guard !scheduler.stopped else { return }
             scheduler.backupGate.withDrain {
                 drainPendingStoreTarget(
                     scheduler: scheduler,
@@ -1347,9 +1379,7 @@ final class MCPRouter: @unchecked Sendable {
             : min(pendingStoreDrainMaxDelay, max(pendingStoreDrainInitialDelay, delay * 2.0))
         scheduler.queue.asyncAfter(deadline: .now() + nextDelay) { [weak scheduler, weak db] in
             guard let scheduler, let db else { return }
-#if DEBUG
-            guard !scheduler.stoppedForTesting else { return }
-#endif
+            guard !scheduler.stopped else { return }
             scheduler.backupGate.withDrain {
                 drainPendingStoreTarget(
                     scheduler: scheduler,

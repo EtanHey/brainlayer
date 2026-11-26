@@ -1273,9 +1273,6 @@ final class BrainBarSettingsNavigation: ObservableObject {
 }
 
 struct BrainBarSettingsView: View {
-    @AppStorage(BrainBarNewMenuPreference.key) private var newMenuEnabled: Bool = BrainBarNewMenuPreference.defaultValue
-    /// L6: the whole UI's design, the same preference the new design's Settings window writes.
-    @AppStorage(BrainBarDesign.key) private var design: String = BrainBarDesign.defaultValue.rawValue
     @StateObject var viewModel: BrainBarSettingsViewModel
     @StateObject private var navigation = BrainBarSettingsNavigation()
     @Environment(\.brainBarDriveAuth) private var driveAuth
@@ -1451,7 +1448,6 @@ struct BrainBarSettingsView: View {
         switch navigation.selected {
         case .jobs:
             VStack(alignment: .leading, spacing: 16) {
-                designRow
                 BrainBarBackupFailureLogs(model: viewModel)
                 jobsGrid
             }
@@ -1476,14 +1472,6 @@ struct BrainBarSettingsView: View {
             }
         case .advanced:
             VStack(alignment: .leading, spacing: 16) {
-                HStack {
-                    Text("Use the new menu").font(.system(size: 12, weight: .semibold))
-                    Spacer()
-                    Toggle("Use the new menu", isOn: $newMenuEnabled)
-                        .labelsHidden().toggleStyle(.switch).controlSize(.small)
-                        .help("Turn this off to restore the previous menu and charts icon.")
-                }.padding(.vertical, 7)
-                Divider()
                 sectionHeading("Embedding model")
                 ForEach(BrainBarSettingsExplanation.model(BrainBarEmbeddingModel.configuredName, namesModel: false), id: \.self) { line in
                     Text(line).font(.system(size: 11)).foregroundStyle(Color.brainBarTextSecondary)
@@ -1500,17 +1488,6 @@ struct BrainBarSettingsView: View {
                 configFileRow
             }
         }
-    }
-
-    private var designRow: some View {
-        HStack {
-            Text("Design").font(.system(size: 12, weight: .semibold))
-            Spacer()
-            Picker("Design", selection: $design) {
-                ForEach(BrainBarDesign.allCases, id: \.rawValue) { Text($0.title).tag($0.rawValue) }
-            }
-            .labelsHidden().pickerStyle(.segmented).fixedSize()
-        }.padding(.vertical, 7)
     }
 
     /// E5: the one place the config file appears, with what it is and Copy / Reveal.
