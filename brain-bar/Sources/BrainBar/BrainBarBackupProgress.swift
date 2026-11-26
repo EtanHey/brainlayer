@@ -9,6 +9,8 @@ struct BrainBarBackupProgress: Equatable, Sendable {
     var total: Int64?
     var lastGoodAt: Date?
     var checkpointAt: Date? = nil
+    /// When the upload process started: an upload can run for many hours (a Mac that slept mid-upload).
+    var startedAt: Date? = nil
     var isStalled = false
     static let checkpointMaxAgeS: TimeInterval = 20 * 60
 
@@ -25,7 +27,7 @@ struct BrainBarBackupProgress: Equatable, Sendable {
                     identity: "\(local.destination ?? ""):\(started.timeIntervalSince1970)",
                     confirmed: verifying || !fresh ? nil : local.bytesConfirmed, total: verifying ? nil : local.bytesTotal,
                     lastGoodAt: backups.dbSnapshot.flatMap { $0.verified && $0.lastAt <= now ? $0.lastAt : nil },
-                    checkpointAt: !verifying ? local.bytesConfirmedAt : nil,
+                    checkpointAt: !verifying ? local.bytesConfirmedAt : nil, startedAt: started,
                     isStalled: !verifying && local.bytesConfirmedAt.map { now.timeIntervalSince($0) > checkpointMaxAgeS } == true)
     }
 
@@ -42,6 +44,25 @@ struct BrainBarBackupProgress: Equatable, Sendable {
         if isStalled { return BrainBarMenuPresenter.SurfaceSay.notUploadingSince }
         return phase == .upload ? BrainBarMenuPresenter.SurfaceSay.backupUploading : BrainBarMenuPresenter.SurfaceSay.backupVerifying
     }
+    /// Google Drive's status line in the Pipeline: what the upload is doing, in the station's own words. A fresh
+    /// checkpoint is under 20 minutes old by construction, so its time is left to the panel; once it is older the line
+    /// itself says since when nothing moved.
+    func stationLine(in timeZone: TimeZone = .autoupdatingCurrent) -> String {
+        typealias Say = BrainBarMenuPresenter.SurfaceSay
+        if isStalled, let checkpointAt { return Say.driveStalledSince(Self.clock(checkpointAt, in: timeZone)) }
+        if phase == .verification { return Say.backupVerifyingShort }
+        return percentage.map(Say.driveUploadingPercent) ?? Say.backupUploadingShort
+    }
+
+    /// "06:26": a clock time as the Pipeline's other lines write it.
+    static func clock(_ date: Date, in timeZone: TimeZone) -> String {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = timeZone
+        f.dateFormat = "HH:mm"
+        return f.string(from: date)
+    }
+
     func animates(after previous: Self?, reduceMotion: Bool) -> Bool {
         guard !reduceMotion, let previous, phase == .upload, previous.phase == phase,
               identity == previous.identity, total == previous.total,
@@ -52,33 +73,40 @@ struct BrainBarBackupProgress: Equatable, Sendable {
 
 /// No timer or looping spinner: motion occurs only when a measured byte checkpoint advances.
 /// The open-ended bar stays still when a total is unavailable, including under Reduce Motion.
+/// `compact` is the Pipeline's form: the bar alone, exactly its frame's height; its words are Google Drive's status
+/// line (`stationLine`) and the panel's rows, so nothing hangs below the station.
 struct BrainBarBackupProgressView: View {
+    typealias Say = BrainBarMenuPresenter.SurfaceSay
     let progress: BrainBarBackupProgress
     var compact = false
-    var barOnly = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var shown: BrainBarBackupProgress?
 
     var lastGoodText: String? {
-        guard !barOnly, let at = progress.lastGoodAt else { return nil }
-        return (compact ? BrainBarMenuPresenter.SurfaceSay.backupLastGoodShort : BrainBarMenuPresenter.SurfaceSay.backupLastGood)
-            + " " + at.formatted(date: .abbreviated, time: .shortened)
+        guard !compact, let at = progress.lastGoodAt else { return nil }
+        return Say.backupLastGood + " " + at.formatted(date: .abbreviated, time: .shortened)
+    }
+
+    var startedText: String? {
+        guard !compact, let at = progress.startedAt else { return nil }
+        return Say.backupUploadStarted + " " + at.formatted(date: .abbreviated, time: .shortened)
+    }
+
+    /// The right-hand words beside the title: the stall's time, or the percentage and when bytes last advanced.
+    var checkpointText: String? {
+        guard !compact, let at = progress.checkpointAt else { return nil }
+        let time = at.formatted(date: .omitted, time: .shortened)
+        if progress.isStalled { return time }
+        return progress.percentage.map { "\($0)% · " + Say.backupUpdatedAt(time) }
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
-            if !barOnly {
+            if !compact {
                 HStack(spacing: 6) {
-                    Text(compact && !progress.isStalled ? (progress.phase == .upload ? BrainBarMenuPresenter.SurfaceSay.backupUploadingShort
-                        : BrainBarMenuPresenter.SurfaceSay.backupVerifyingShort) : progress.title).lineLimit(1)
+                    Text(progress.title).lineLimit(1)
                     Spacer(minLength: 0)
-                    if let at = progress.checkpointAt {
-                        if progress.isStalled {
-                            Text(at.formatted(date: .omitted, time: .shortened)).monospacedDigit().lineLimit(1)
-                        } else if let percent = progress.percentage {
-                            Text("\(percent)% · " + at.formatted(date: .omitted, time: .shortened)).monospacedDigit().lineLimit(1)
-                        }
-                    }
+                    if let checkpointText { Text(checkpointText).monospacedDigit().lineLimit(1) }
                 }
             }
             GeometryReader { geometry in
@@ -92,13 +120,13 @@ struct BrainBarBackupProgressView: View {
                 }
             }
             .frame(height: 3)
-            if let lastGoodText {
-                Text(lastGoodText)
+            ForEach([startedText, lastGoodText].compactMap { $0 }, id: \.self) { line in
+                Text(line)
                     .foregroundStyle(.secondary)
                     .lineLimit(1).minimumScaleFactor(0.8)
             }
         }
-        .font(.system(size: compact ? 10 : 11))
+        .font(.system(size: 11))
         .accessibilityElement(children: .combine)
         .accessibilityLabel(progress.title)
         .accessibilityValue(progress.accessibilityValue)
