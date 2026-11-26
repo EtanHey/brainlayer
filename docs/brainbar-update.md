@@ -52,6 +52,18 @@ writes new ones. The helper copies both plists into
 the cask did not write, so the single `brainlayer brainbar activate --verify` call
 always finds both. The copy is removed after a successful update.
 
+**One activator.** `brainlayer brainbar activate` already serializes callers on
+`~/Library/LaunchAgents/.brainbar-activation.lock`: a manual caller waits and then
+finds the bundle running, and an automatic caller defers. The lock covers only the
+activation itself. Between the cask step and that call the helper restores plists
+and carries approval, so the formula supervisor's 5-second auto-activation tick
+also defers while `update.lock/pid` names a live process. Otherwise a new build
+could launch before its approval is carried. A dead or unreadable owner never blocks
+the supervisor. The deferral ships in the formula. Each tick is a fresh
+`/opt/homebrew/opt/brainlayer/libexec/venv/bin/python -m brainlayer.brainbar_auto_activation`
+process, and the opt link points at the new keg once the helper has upgraded the
+formula. The deferral is therefore live before the cask step, with no supervisor restart.
+
 **Approval.** After the cask step the helper runs the same gates as the release
 installer (`brainlayer-update-brainbar.sh`): `codesign --verify --deep --strict` and
 a Gatekeeper assessment that reports `accepted` and `Notarized Developer ID`. A

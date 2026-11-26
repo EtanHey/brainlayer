@@ -313,3 +313,28 @@ def test_manual_activation_proceeds_after_real_flock_is_released(installed, monk
         assert time.sleep is system_sleep, "Activation clock patches must not affect background threads"
         assert activation.activate(agents)["ok"]
     assert len(waits) == 1 and calls
+
+
+def test_concurrent_activations_launch_once(installed, monkeypatch):
+    """The in-app helper and the supervisor may activate together; the flock lets one launch."""
+    import threading
+
+    agents, calls, _ = installed
+    launchctl = activation.subprocess.run
+    second = {}
+
+    def racing(args, **kwargs):
+        if args[1] == "bootstrap" and "thread" not in second:
+            second["thread"] = threading.Thread(
+                target=lambda: second.update(report=activation.activate(agents, timeout_seconds=30))
+            )
+            second["thread"].start()
+            time.sleep(0.3)  # The second caller is now waiting on the activation flock.
+        return launchctl(args, **kwargs)
+
+    monkeypatch.setattr(activation.subprocess, "run", racing)
+    first = activation.activate(agents, timeout_seconds=30)
+    second["thread"].join(timeout=10)
+    assert first["ok"] and first["stage"] == "verified"
+    assert second["report"]["ok"] and second["report"]["stage"] == "already_running"
+    assert [call[0] for call in calls].count("bootstrap") == len(activation.JOBS)

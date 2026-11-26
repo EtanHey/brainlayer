@@ -65,9 +65,26 @@ def brew_active():
     return bool(brew_processes())
 
 
+def update_in_progress(root: Path) -> bool:
+    """The in-app updater owns BrainBar while update.lock names its live pid (stop to activation)."""
+    try:
+        pid = int((root / "update.lock" / "pid").read_text().strip())
+    except (OSError, ValueError):
+        return False
+    try:
+        os.kill(pid, 0)
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    return pid > 0
+
+
 class AutoActivator:
-    def __init__(self, agents: Path, state: Path):
+    def __init__(self, agents: Path, state: Path, update_root: Path | None = None):
         self.agents, self.state = agents, state
+        default = Path.home() / "Library/Application Support/BrainBar"
+        self.update_root = update_root or Path(os.environ.get("BRAINBAR_UPDATE_ROOT") or default)
 
     def tick(self):
         self.state.parent.mkdir(parents=True, exist_ok=True)
@@ -148,7 +165,9 @@ class AutoActivator:
         return bool(processes)
 
     def _tick(self):
-        if self._defer_for_brew():
+        # Between the cask step and its own activation the updater restores plists and carries
+        # approval without the activation lock; a launch here would race it on a new build.
+        if update_in_progress(self.update_root) or self._defer_for_brew():
             return
         apps = set()
         for label, _ in JOBS:
@@ -178,7 +197,7 @@ class AutoActivator:
                 report("brainbar-activation", reason)
                 _atomic_write_json(self.state, {"identity": identity, "stage": "failed", "reason": reason})
             return
-        if any(code == 0 for code in states) or self._defer_for_brew():
+        if any(code == 0 for code in states) or self._defer_for_brew() or update_in_progress(self.update_root):
             return
         # Write before launching: crash/restart is never permission to repeat.
         _atomic_write_json(self.state, {"identity": identity, "stage": "attempted"})

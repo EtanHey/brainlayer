@@ -1,5 +1,7 @@
 import json
+import os
 import plistlib
+import subprocess
 from types import SimpleNamespace
 
 import pytest
@@ -13,6 +15,7 @@ REAL_BREW_PROCESSES = auto.brew_processes
 @pytest.fixture
 def monitor(tmp_path, monkeypatch):
     monkeypatch.setenv("BRAINLAYER_JOB_ALERT_PATH", str(tmp_path / "job-alerts.json"))
+    monkeypatch.setenv("BRAINBAR_UPDATE_ROOT", str(tmp_path / "update-root"))
     agents = tmp_path / "agents"
     agents.mkdir()
     app = tmp_path / "BrainBar.app"
@@ -622,3 +625,27 @@ def test_unwritable_migration_never_clears_or_flaps(monitor, monkeypatch):
     assert len(alerts) == 3 and all(reason is not None for _, reason in alerts)
     assert not notifications and not calls
     assert not worker.state.with_suffix(".scan-migration.json").exists()
+
+
+@pytest.mark.parametrize("owner", ["live", "dead", "garbage"])
+def test_in_app_update_custody_defers_activation_until_the_helper_exits(monitor, tmp_path, owner):
+    """A new build's tick must not launch while the updater restores plists and carries approval."""
+    worker, _, calls, _ = monitor
+    lock = tmp_path / "update-root/update.lock"
+    lock.mkdir(parents=True)
+    dead = subprocess.Popen(["true"])
+    dead.wait()
+    (lock / "pid").write_text({"live": str(os.getpid()), "dead": str(dead.pid), "garbage": "x"}[owner] + "\n")
+    worker.tick()
+    if owner == "live":
+        assert not calls and not worker.state.exists()
+    else:
+        assert len(calls) == 1, "a dead or unreadable owner never blocks recovery"
+
+
+def test_custody_taken_during_preflight_defers_before_launch(monitor, monkeypatch, tmp_path):
+    worker, _, calls, _ = monitor
+    answers = iter([False, True])
+    monkeypatch.setattr(auto, "update_in_progress", lambda root: next(answers))
+    worker.tick()
+    assert not calls and not worker.state.exists()
