@@ -114,6 +114,8 @@ final class BrainDatabase: @unchecked Sendable {
     /// New chunks agents stored with `brain_store` in the rolling 24 h ending at `now`, by
     /// `created_at` (any stored timestamp format, normalised to UTC epoch seconds).
     func brainStoreWriteCount(now: Date = Date()) -> BrainStoreWriteCount {
+        transactionLock.lock()
+        defer { transactionLock.unlock() }
         guard let db else { return .unknown("database not open") }
         do {
             let columns = try tableColumns(name: "chunks", on: db)
@@ -939,6 +941,8 @@ final class BrainDatabase: @unchecked Sendable {
     /// check compares against THIS, never against whatever the pathname names at request time.
     private(set) var openedFileIdentity: FileIdentity?
     private let openConfiguration: OpenConfiguration
+    // Keep every handle borrow locked until its statements are finalized; close()
+    // takes this same lock. Recursive because reads also run inside transactions.
     private let transactionLock = NSRecursiveLock()
     private var explicitTransactionIsOpen = false
     private var injectionRecipientIdentityCache: [String: InjectionRecipientIdentity] = [:]
@@ -953,6 +957,9 @@ final class BrainDatabase: @unchecked Sendable {
     /// Runs inside the durability barrier after it resolved SQLite's file handle and before it
     /// calls xSync on it: the exact window a concurrent close() must not be able to free it in.
     var commitDurabilityBarrierWillSyncForTesting: (() throws -> Void)?
+    func hasStoredQueuedItemForTesting(queueID: String) throws -> Bool {
+        try hasStoredQueuedItem(queueID: queueID)
+    }
     /// True when another thread holds transactionLock, the lock close() needs to free the handle.
     func transactionLockIsHeldElsewhereForTesting() -> Bool {
         guard transactionLock.try() else { return true }
@@ -964,7 +971,19 @@ final class BrainDatabase: @unchecked Sendable {
     var onBackupStagingCreatedForTesting: (() -> Void)?
 #endif
     private static let pendingStoreFileLock = NSLock()
-    private(set) var isOpen = false
+    private var openState = false
+    private(set) var isOpen: Bool {
+        get {
+            transactionLock.lock()
+            defer { transactionLock.unlock() }
+            return openState
+        }
+        set {
+            transactionLock.lock()
+            defer { transactionLock.unlock() }
+            openState = newValue
+        }
+    }
     private(set) var lastOpenError: Error?
     private static let maximumConversationContextPerSide = 40
     /// Mirrors src/brainlayer/source_visibility.py (OPT_IN_ / ALWAYS_HIDDEN_SOURCE_CLASSES).
@@ -979,6 +998,8 @@ final class BrainDatabase: @unchecked Sendable {
     }
 
     private func openAndConfigure() {
+        transactionLock.lock()
+        defer { transactionLock.unlock() }
         do {
             db = try openConnection(path: path)
             openedFileIdentity = FileIdentity(path: path)
@@ -1020,6 +1041,8 @@ final class BrainDatabase: @unchecked Sendable {
     }
 
     func reopenIfNeeded() {
+        transactionLock.lock()
+        defer { transactionLock.unlock() }
         guard !isOpen else { return }
         openAndConfigure()
     }
@@ -1272,6 +1295,8 @@ final class BrainDatabase: @unchecked Sendable {
     /// The open file must still be at the served path (not moved, replaced or unlinked), and
     /// `expectedPath` must name that same dev/inode. A missing path never matches.
     func openDatabaseIdentityMismatch(expectedPath: String) -> String? {
+        transactionLock.lock()
+        defer { transactionLock.unlock() }
         guard let opened = openedFileIdentity else { return "the open database identity is unknown" }
         guard FileIdentity(path: path) == opened else {
             return "the open database was moved, replaced or unlinked from \(path) since it was opened"
@@ -1284,6 +1309,8 @@ final class BrainDatabase: @unchecked Sendable {
     }
 
     func vacuumInto(targetPath: String, expectedDatabasePath: String? = nil) throws -> Int64 {
+        transactionLock.lock()
+        defer { transactionLock.unlock() }
         guard let db else { throw DBError.notOpen }
         if let expectedDatabasePath, let mismatch = openDatabaseIdentityMismatch(expectedPath: expectedDatabasePath) {
             throw DBError.exec(SQLITE_MISUSE, "\(Self.backupIdentityMismatchPrefix): \(mismatch)")
@@ -1403,6 +1430,8 @@ final class BrainDatabase: @unchecked Sendable {
         guard Self.allowedPragmas.contains(name) else {
             throw DBError.invalidPragma(name)
         }
+        transactionLock.lock()
+        defer { transactionLock.unlock() }
         guard let db else { throw DBError.notOpen }
         var stmt: OpaquePointer?
         let rc = sqlite3_prepare_v2(db, "PRAGMA \(name)", -1, &stmt, nil)
@@ -1415,6 +1444,8 @@ final class BrainDatabase: @unchecked Sendable {
     }
 
     func tableExists(_ name: String) throws -> Bool {
+        transactionLock.lock()
+        defer { transactionLock.unlock() }
         guard let db else { throw DBError.notOpen }
         var stmt: OpaquePointer?
         let sql = "SELECT count(*) FROM sqlite_master WHERE type IN ('table','view') AND name = ?"
@@ -1438,6 +1469,8 @@ final class BrainDatabase: @unchecked Sendable {
         tags: String = "[]",
         createdAt: String? = nil
     ) throws {
+        transactionLock.lock()
+        defer { transactionLock.unlock() }
         guard let db else { throw DBError.notOpen }
         if (try? tableExists("chunks")) != true {
             try ensureSchema()
@@ -1483,6 +1516,8 @@ final class BrainDatabase: @unchecked Sendable {
         unreadOnly: Bool = false,
         includeHiddenSourceClasses: Bool = false
     ) throws -> [[String: Any]] {
+        transactionLock.lock()
+        defer { transactionLock.unlock() }
         guard db != nil else { throw DBError.notOpen }
         let trimmedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
 
@@ -1573,6 +1608,8 @@ final class BrainDatabase: @unchecked Sendable {
         unreadOnly: Bool,
         includeHiddenSourceClasses: Bool = false
     ) throws -> (rows: [[String: Any]], maxRowID: Int64) {
+        transactionLock.lock()
+        defer { transactionLock.unlock() }
         guard let db else { throw DBError.notOpen }
         let allowedTables = ["chunks_fts", "chunks_fts_trigram"]
         guard allowedTables.contains(tableName) else { throw DBError.exec(SQLITE_ERROR, "invalid FTS table") }
@@ -1678,6 +1715,8 @@ final class BrainDatabase: @unchecked Sendable {
         verifyContentIntegrity: Bool = false,
         metadata: [String: Any] = [:]
     ) throws -> StoredChunk {
+        transactionLock.lock()
+        defer { transactionLock.unlock() }
         guard let db else { throw DBError.notOpen }
 #if DEBUG
         onStoreTransactionForTesting?()
@@ -2194,6 +2233,8 @@ final class BrainDatabase: @unchecked Sendable {
 
     func subscription(agentID: String) throws -> SubscriberRecord? {
         try ensureAuxiliarySchema()
+        transactionLock.lock()
+        defer { transactionLock.unlock() }
         guard let db else { throw DBError.notOpen }
 
         var stmt: OpaquePointer?
@@ -2275,6 +2316,8 @@ final class BrainDatabase: @unchecked Sendable {
     }
 
     func chunkRowID(forChunkID chunkID: String) throws -> Int64? {
+        transactionLock.lock()
+        defer { transactionLock.unlock() }
         guard let db else { throw DBError.notOpen }
         var stmt: OpaquePointer?
         let rc = sqlite3_prepare_v2(db, "SELECT rowid FROM chunks WHERE id = ?", -1, &stmt, nil)
@@ -2286,6 +2329,8 @@ final class BrainDatabase: @unchecked Sendable {
     }
 
     func storedChunkDetails(chunkID: String, rowID: Int64) throws -> StoredChunkDetails? {
+        transactionLock.lock()
+        defer { transactionLock.unlock() }
         guard let db else { throw DBError.notOpen }
         var stmt: OpaquePointer?
         let rc = sqlite3_prepare_v2(db, "SELECT content, tags, importance FROM chunks WHERE id = ? AND rowid = ?", -1, &stmt, nil)
@@ -2307,6 +2352,8 @@ final class BrainDatabase: @unchecked Sendable {
     func unreadCount(agentID: String, tags: [String]? = nil) throws -> Int {
         try ensureAuxiliarySchema()
         let ackFloor = try subscription(agentID: agentID)?.lastAckedSeq ?? 0
+        transactionLock.lock()
+        defer { transactionLock.unlock() }
         guard let db else { throw DBError.notOpen }
 
         var conditions = ["rowid > ?"]
@@ -2527,6 +2574,8 @@ final class BrainDatabase: @unchecked Sendable {
     }
 
     func dataVersion() throws -> Int {
+        transactionLock.lock()
+        defer { transactionLock.unlock() }
         guard let db else { throw DBError.notOpen }
         var stmt: OpaquePointer?
         let rc = sqlite3_prepare_v2(db, "PRAGMA data_version", -1, &stmt, nil)
@@ -2559,6 +2608,8 @@ final class BrainDatabase: @unchecked Sendable {
     }
 
     private func scalarInt(_ sql: String) throws -> Int {
+        transactionLock.lock()
+        defer { transactionLock.unlock() }
         guard let db else { throw DBError.notOpen }
         var stmt: OpaquePointer?
         let rc = sqlite3_prepare_v2(db, sql, -1, &stmt, nil)
@@ -2576,6 +2627,8 @@ final class BrainDatabase: @unchecked Sendable {
         ftsIndexedChunkCount: Int,
         trigramIndexedChunkCount: Int
     ) {
+        transactionLock.lock()
+        defer { transactionLock.unlock() }
         guard let db else { throw DBError.notOpen }
         let searchableWhereClause = try searchableChunkWhereClause(alias: "c", includeHiddenSources: true)
         // Keep this route identical to vector_store.py's knowledge FTS triggers.
@@ -2613,6 +2666,8 @@ final class BrainDatabase: @unchecked Sendable {
         guard allowedTables[tableName] == idColumn else {
             throw DBError.exec(SQLITE_ERROR, "invalid coverage table")
         }
+        transactionLock.lock()
+        defer { transactionLock.unlock() }
         guard let db else { throw DBError.notOpen }
         guard try tableExists(tableName) else { return 0 }
         guard try tableColumns(name: tableName, on: db).contains(idColumn) else { return 0 }
@@ -2632,6 +2687,8 @@ final class BrainDatabase: @unchecked Sendable {
         includeHiddenSources: Bool = false,
         includeOptInHiddenSources: Bool = false
     ) throws -> String {
+        transactionLock.lock()
+        defer { transactionLock.unlock() }
         guard let db else { throw DBError.notOpen }
         let columns = try tableColumns(name: "chunks", on: db)
         var clauses: [String] = []
@@ -2785,6 +2842,8 @@ final class BrainDatabase: @unchecked Sendable {
         now: Date
     ) throws -> [Int] {
         guard bucketCount > 0, activityWindowMinutes > 0 else { return Array(repeating: 0, count: max(bucketCount, 0)) }
+        transactionLock.lock()
+        defer { transactionLock.unlock() }
         guard let db else { throw DBError.notOpen }
 
         let windowDuration = Double(activityWindowMinutes * 60)
@@ -2855,6 +2914,8 @@ final class BrainDatabase: @unchecked Sendable {
         subsecond: Bool,
         read: (OpaquePointer?) -> Value
     ) throws -> [Value] {
+        transactionLock.lock()
+        defer { transactionLock.unlock() }
         guard let db else { throw DBError.notOpen }
         let epochSQL = Self.normalizedUnixEpochSQL(for: column, subsecond: subsecond)
         let indexLowerBound = cutoffDate.addingTimeInterval(-Self.dashboardTimestampIndexLookbackPaddingSeconds)
@@ -2898,6 +2959,8 @@ final class BrainDatabase: @unchecked Sendable {
             return Date(timeIntervalSince1970: TimeInterval(recentEpoch))
         }
 
+        transactionLock.lock()
+        defer { transactionLock.unlock() }
         guard let db else { throw DBError.notOpen }
         let epochSQL = Self.normalizedUnixEpochSQL(for: column)
         var predicates = ["\(column) IS NOT NULL", "TRIM(\(column)) != ''"]
@@ -2931,6 +2994,8 @@ final class BrainDatabase: @unchecked Sendable {
         whereClause: String?,
         since cutoffDate: Date
     ) throws -> Int64? {
+        transactionLock.lock()
+        defer { transactionLock.unlock() }
         guard let db else { throw DBError.notOpen }
         let epochSQL = Self.normalizedUnixEpochSQL(for: column)
         let indexLowerBound = cutoffDate.addingTimeInterval(-Self.dashboardTimestampIndexLookbackPaddingSeconds)
@@ -2993,6 +3058,8 @@ final class BrainDatabase: @unchecked Sendable {
     }
 
     private func subscriptionTags(agentID: String) throws -> [String] {
+        transactionLock.lock()
+        defer { transactionLock.unlock() }
         guard let db else { throw DBError.notOpen }
         var stmt: OpaquePointer?
         let sql = "SELECT tag FROM brainbar_subscriptions WHERE agent_id = ? ORDER BY tag"
@@ -3074,13 +3141,8 @@ final class BrainDatabase: @unchecked Sendable {
     }
 
     private func execute(_ sql: String, retries: Int = 0, retryDelayMillis: UInt32 = 250) throws {
-        if Self.isMutationStatement(sql) {
-            transactionLock.lock()
-            defer { transactionLock.unlock() }
-            try executeUnlocked(sql, retries: retries, retryDelayMillis: retryDelayMillis)
-            return
-        }
-
+        transactionLock.lock()
+        defer { transactionLock.unlock() }
         try executeUnlocked(sql, retries: retries, retryDelayMillis: retryDelayMillis)
     }
 
@@ -3334,6 +3396,8 @@ final class BrainDatabase: @unchecked Sendable {
     }
 
     private func kgAliasReplacements(for token: String) -> [String] {
+        transactionLock.lock()
+        defer { transactionLock.unlock() }
         guard let db else { return [] }
         let normalized = normalizedAliasSurface(token)
         guard normalized.count >= 3 else { return [] }
@@ -3406,6 +3470,8 @@ final class BrainDatabase: @unchecked Sendable {
         importanceMin: Double?,
         includeHiddenSourceClasses: Bool = false
     ) throws -> [[String: Any]]? {
+        transactionLock.lock()
+        defer { transactionLock.unlock() }
         guard let db else { throw DBError.notOpen }
         guard limit > 0, !query.contains(where: { $0.isWhitespace }), query.contains("-") else {
             return nil
@@ -3461,6 +3527,8 @@ final class BrainDatabase: @unchecked Sendable {
     }
 
     private func chunkExists(id: String) throws -> Bool {
+        transactionLock.lock()
+        defer { transactionLock.unlock() }
         guard let db else { throw DBError.notOpen }
         var stmt: OpaquePointer?
         let sql = "SELECT 1 FROM chunks WHERE id = ? LIMIT 1"
@@ -3499,6 +3567,8 @@ final class BrainDatabase: @unchecked Sendable {
     }
 
     private func ensureInjectionEventColumns() throws {
+        transactionLock.lock()
+        defer { transactionLock.unlock() }
         guard let db else { throw DBError.notOpen }
         guard (try? tableExists("injection_events")) == true else { return }
         let existingColumns = try tableColumns(name: "injection_events", on: db)
@@ -3508,6 +3578,8 @@ final class BrainDatabase: @unchecked Sendable {
     }
 
     private func ensureChunkColumns() throws {
+        transactionLock.lock()
+        defer { transactionLock.unlock() }
         guard let db else { throw DBError.notOpen }
         try execute("""
             CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -3686,6 +3758,8 @@ final class BrainDatabase: @unchecked Sendable {
     }
 
     private func ensureKGEntityColumns() throws {
+        transactionLock.lock()
+        defer { transactionLock.unlock() }
         guard let db else { throw DBError.notOpen }
         try ensureKGEntityTable()
         let existingColumns = try tableColumns(name: "kg_entities", on: db)
@@ -3720,6 +3794,8 @@ final class BrainDatabase: @unchecked Sendable {
     }
 
     private func ensureKGRelationColumns() throws {
+        transactionLock.lock()
+        defer { transactionLock.unlock() }
         guard let db else { throw DBError.notOpen }
         try ensureKGRelationTable()
         let existingColumns = try tableColumns(name: "kg_relations", on: db)
@@ -3987,6 +4063,8 @@ final class BrainDatabase: @unchecked Sendable {
     }
 
     private func maxChunkRowID() throws -> Int64 {
+        transactionLock.lock()
+        defer { transactionLock.unlock() }
         guard let db else { throw DBError.notOpen }
         var stmt: OpaquePointer?
         let rc = sqlite3_prepare_v2(db, "SELECT COALESCE(MAX(rowid), 0) FROM chunks", -1, &stmt, nil)
@@ -4002,6 +4080,8 @@ final class BrainDatabase: @unchecked Sendable {
     }
 
     private func nextChunkBatch(after rowID: Int64, maxRowID: Int64, batchSize: Int) throws -> (upperRowID: Int64, rowCount: Int)? {
+        transactionLock.lock()
+        defer { transactionLock.unlock() }
         guard let db else { throw DBError.notOpen }
         var stmt: OpaquePointer?
         let rc = sqlite3_prepare_v2(
@@ -4082,6 +4162,8 @@ final class BrainDatabase: @unchecked Sendable {
     }
 
     private func trigramFTSStatus() throws -> (tableExists: Bool, schemaIsValid: Bool, chunkCount: Int, trigramCount: Int) {
+        transactionLock.lock()
+        defer { transactionLock.unlock() }
         guard let db else { throw DBError.notOpen }
         guard let sql = try sqliteMasterSQL(name: "chunks_fts_trigram", on: db) else {
             let chunkCount = try countRows(in: "chunks")
@@ -4100,6 +4182,8 @@ final class BrainDatabase: @unchecked Sendable {
     }
 
     private func countRows(in tableName: String) throws -> Int {
+        transactionLock.lock()
+        defer { transactionLock.unlock() }
         guard let db else { throw DBError.notOpen }
         let allowedTables = ["chunks", "chunks_fts", "chunks_fts_trigram"]
         guard allowedTables.contains(tableName) else { throw DBError.exec(SQLITE_ERROR, "invalid count table") }
@@ -4113,6 +4197,8 @@ final class BrainDatabase: @unchecked Sendable {
     }
 
     private func ftsTableNeedsRebuild() throws -> Bool {
+        transactionLock.lock()
+        defer { transactionLock.unlock() }
         guard let db else { throw DBError.notOpen }
         guard let sql = try sqliteMasterSQL(name: "chunks_fts", on: db) else { return true }
         let normalizedSQL = sql.lowercased()
@@ -4125,6 +4211,8 @@ final class BrainDatabase: @unchecked Sendable {
     }
 
     private func trigramFTSTableNeedsRebuild() throws -> Bool {
+        transactionLock.lock()
+        defer { transactionLock.unlock() }
         guard let db else { throw DBError.notOpen }
         guard let sql = try sqliteMasterSQL(name: "chunks_fts_trigram", on: db) else { return false }
         let normalizedSQL = sql.lowercased()
@@ -5220,6 +5308,8 @@ final class BrainDatabase: @unchecked Sendable {
     }
 
     private func hasStoredQueuedItem(queueID: String) throws -> Bool {
+        transactionLock.lock()
+        defer { transactionLock.unlock() }
         guard let db else { throw DBError.notOpen }
         var stmt: OpaquePointer?
         let sql = """
@@ -5373,6 +5463,8 @@ final class BrainDatabase: @unchecked Sendable {
     // MARK: - brain_tags: list unique tags with counts
 
     func listTags(query: String? = nil, limit: Int = 50) throws -> [[String: Any]] {
+        transactionLock.lock()
+        defer { transactionLock.unlock() }
         guard let db else { throw DBError.notOpen }
         
         // Use SQL aggregation for better performance with large datasets.
@@ -5426,6 +5518,8 @@ final class BrainDatabase: @unchecked Sendable {
     // MARK: - brain_update: update chunk importance/tags
 
     func updateChunk(id: String, importance: Int? = nil, tags: [String]? = nil) throws {
+        transactionLock.lock()
+        defer { transactionLock.unlock() }
         guard db != nil else { throw DBError.notOpen }
         var rowsChanged = 0
 
@@ -5489,6 +5583,8 @@ final class BrainDatabase: @unchecked Sendable {
         after: Int = 3,
         includeFullTargetContent: Bool = false
     ) throws -> [String: Any] {
+        transactionLock.lock()
+        defer { transactionLock.unlock() }
         guard let db else { throw DBError.notOpen }
         let boundedBefore = min(max(before, 0), Self.maximumConversationContextPerSide)
         let boundedAfter = min(max(after, 0), Self.maximumConversationContextPerSide)
@@ -5618,6 +5714,8 @@ final class BrainDatabase: @unchecked Sendable {
     /// (or its metadata `t3_thread_id`) is the thread id itself. Several matches order as
     /// live before deleted, active session first, then the newest thread.
     func t3ThreadInfo(conversationId: String?, t3ThreadId: String?) -> [String: Any]? {
+        transactionLock.lock()
+        defer { transactionLock.unlock() }
         guard let db else { return nil }
         let conversation = conversationId ?? ""
         if conversation.isEmpty && (t3ThreadId ?? "").isEmpty { return nil }
@@ -5659,6 +5757,8 @@ final class BrainDatabase: @unchecked Sendable {
     // MARK: - brain_entity: insert + lookup entities
 
     func insertEntity(id: String, type: String, name: String, metadata: String = "{}") throws {
+        transactionLock.lock()
+        defer { transactionLock.unlock() }
         guard let db else { throw DBError.notOpen }
         let sql = "INSERT OR REPLACE INTO kg_entities (id, entity_type, name, metadata) VALUES (?, ?, ?, ?)"
         try runWriteStatement(on: db, sql: sql, retries: 3) { stmt in
@@ -5670,6 +5770,8 @@ final class BrainDatabase: @unchecked Sendable {
     }
 
     func insertRelation(sourceId: String, targetId: String, relationType: String) throws {
+        transactionLock.lock()
+        defer { transactionLock.unlock() }
         guard let db else { throw DBError.notOpen }
         let relId = "\(sourceId)-\(relationType)-\(targetId)"
         let sql = "INSERT OR REPLACE INTO kg_relations (id, source_id, target_id, relation_type) VALUES (?, ?, ?, ?)"
@@ -5682,6 +5784,8 @@ final class BrainDatabase: @unchecked Sendable {
     }
 
     func lookupEntity(query: String, entityType: String? = nil) throws -> [String: Any]? {
+        transactionLock.lock()
+        defer { transactionLock.unlock() }
         guard let db else { throw DBError.notOpen }
 
         // Resolution tiers, first hit wins (#663):
@@ -5801,6 +5905,8 @@ final class BrainDatabase: @unchecked Sendable {
     /// Pure SQL KG fact lookup — no embeddings needed.
     /// Returns typed relations for an entity, excluding co_occurs_with.
     func lookupEntityFacts(entityName: String, limit: Int = 20) throws -> [KGFact] {
+        transactionLock.lock()
+        defer { transactionLock.unlock() }
         guard let db else { throw DBError.notOpen }
         let expirationSelects = try kgRelationExpirationSelects(alias: "r")
 
@@ -5846,8 +5952,14 @@ final class BrainDatabase: @unchecked Sendable {
         return facts
     }
 
-    /// Test-only raw handle; production reads go through withSQLiteHandle.
-    var dbHandle: OpaquePointer? { db }
+#if DEBUG
+    /// Tests must keep this fixture open while borrowing its raw handle.
+    var dbHandle: OpaquePointer? {
+        transactionLock.lock()
+        defer { transactionLock.unlock() }
+        return db
+    }
+#endif
 
     struct EnrichmentStatsSummary: Equatable, Sendable {
         let totalChunks: Int
@@ -5863,6 +5975,8 @@ final class BrainDatabase: @unchecked Sendable {
     }
 
     private func kgRelationExpirationSelects(alias: String) throws -> (validUntil: String, expiredAt: String) {
+        transactionLock.lock()
+        defer { transactionLock.unlock() }
         guard let db else { throw DBError.notOpen }
         let columns = try tableColumns(name: "kg_relations", on: db)
         let validUntil = columns.contains("valid_until")
@@ -5875,6 +5989,8 @@ final class BrainDatabase: @unchecked Sendable {
     }
 
     func linkEntityChunk(entityId: String, chunkId: String, relevance: Double = 1.0) throws {
+        transactionLock.lock()
+        defer { transactionLock.unlock() }
         guard let db else { throw DBError.notOpen }
         let sql = "INSERT OR REPLACE INTO kg_entity_chunks (entity_id, chunk_id, relevance) VALUES (?, ?, ?)"
         try runWriteStatement(on: db, sql: sql, retries: 3) { stmt in
@@ -5885,6 +6001,8 @@ final class BrainDatabase: @unchecked Sendable {
     }
 
     func getChunk(id: String) throws -> [String: Any]? {
+        transactionLock.lock()
+        defer { transactionLock.unlock() }
         guard let db else { throw DBError.notOpen }
         let sql = """
             SELECT id, content, content_type, source, summary, created_at, archived_at, superseded_by, tags, source_file
@@ -5978,6 +6096,8 @@ final class BrainDatabase: @unchecked Sendable {
     }
 
     private func fetchEntityMemories(entityID: String, context: String?, limit: Int) throws -> [[String: Any]] {
+        transactionLock.lock()
+        defer { transactionLock.unlock() }
         guard let db else { throw DBError.notOpen }
         let hasContext = context?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
         let sql: String
@@ -6036,6 +6156,8 @@ final class BrainDatabase: @unchecked Sendable {
     }
 
     func enrichmentStats() throws -> EnrichmentStatsSummary {
+        transactionLock.lock()
+        defer { transactionLock.unlock() }
         guard let db else { throw DBError.notOpen }
         let enrichedAtEpochSQL = Self.normalizedUnixEpochSQL(for: "enriched_at")
         let terminalCoveragePredicate = "enrich_status IS NOT NULL"
@@ -6071,6 +6193,8 @@ final class BrainDatabase: @unchecked Sendable {
     // MARK: - brain_recall
 
     func recallSession(sessionId: String, limit: Int = 20) throws -> [[String: Any]] {
+        transactionLock.lock()
+        defer { transactionLock.unlock() }
         guard let db else { throw DBError.notOpen }
         // Session recall shows hidden classes, as it always has for desktop rows; a thinking
         // row is labelled by the formatter (SearchResult.isThinking).
@@ -6108,6 +6232,8 @@ final class BrainDatabase: @unchecked Sendable {
     }
 
     func recallStats() throws -> [String: Any] {
+        transactionLock.lock()
+        defer { transactionLock.unlock() }
         guard let db else { throw DBError.notOpen }
 
         func queryInt(_ sql: String) throws -> Int {
@@ -6142,6 +6268,8 @@ final class BrainDatabase: @unchecked Sendable {
     }
 
     private func queryStrings(_ sql: String) throws -> [String] {
+        transactionLock.lock()
+        defer { transactionLock.unlock() }
         guard let db else { throw DBError.notOpen }
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
@@ -6162,6 +6290,8 @@ final class BrainDatabase: @unchecked Sendable {
 
     @discardableResult
     func recordInjectionEvent(sessionID: String, query: String, chunkIDs: [String], tokenCount: Int, timestamp: String? = nil) -> InjectionEvent {
+        transactionLock.lock()
+        defer { transactionLock.unlock() }
         guard let db else {
             return InjectionEvent(id: 0, sessionID: sessionID, timestamp: "", query: query, chunkIDs: chunkIDs, tokenCount: tokenCount)
         }
@@ -6189,6 +6319,8 @@ final class BrainDatabase: @unchecked Sendable {
     // MARK: - Injection event listing
 
     func listInjectionEvents(sessionID: String? = nil, limit: Int = 20) throws -> [InjectionEvent] {
+        transactionLock.lock()
+        defer { transactionLock.unlock() }
         guard let db else { throw DBError.notOpen }
         let columns = try tableColumns(name: "injection_events", on: db)
         let modeSelect = columns.contains("mode") ? "mode" : "'normal'"
@@ -6315,6 +6447,8 @@ final class BrainDatabase: @unchecked Sendable {
     }
 
     private func injectionRecipientProjectName(sessionID: String) throws -> String {
+        transactionLock.lock()
+        defer { transactionLock.unlock() }
         guard let db else { throw DBError.notOpen }
         let sql = """
         SELECT project
@@ -6487,6 +6621,8 @@ final class BrainDatabase: @unchecked Sendable {
     }
 
     private func injectionChunkDetails(ids: [String]) throws -> [InjectionChunk] {
+        transactionLock.lock()
+        defer { transactionLock.unlock() }
         guard let db else { throw DBError.notOpen }
         let orderedIDs = ids.filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
         guard !orderedIDs.isEmpty else { return [] }
@@ -6569,6 +6705,8 @@ final class BrainDatabase: @unchecked Sendable {
 
     /// Resolve one unambiguous active canonical entity; regex mentions cannot create KG rows.
     private func entityIDForDigestEntity(name: String) throws -> DigestEntityResolution? {
+        transactionLock.lock()
+        defer { transactionLock.unlock() }
         guard let db else { throw DBError.notOpen }
 
         let entityColumns = try tableColumns(name: "kg_entities", on: db)
@@ -6646,6 +6784,8 @@ final class BrainDatabase: @unchecked Sendable {
     }
 
     func digest(content: String, project: String? = nil, title: String? = nil) throws -> [String: Any] {
+        transactionLock.lock()
+        defer { transactionLock.unlock() }
         guard db != nil else { throw DBError.notOpen }
         // Scrub first (#962 review N1): entity mentions, URLs and code refs are
         // all taken from the text that will be stored, so each candidate's
