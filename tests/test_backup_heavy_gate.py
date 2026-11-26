@@ -97,6 +97,7 @@ def test_main_waits_then_runs_when_gate_opens(admission, monkeypatch, closed):
     def run(seconds):
         assert sleeps == [10]
         assert lock.is_dir()
+        assert "backup-daily" not in job_alerts.active_alerts()  # Admitted: no longer waiting.
         return 0
 
     monkeypatch.setattr(gate.time, "sleep", sleep)
@@ -146,6 +147,40 @@ def test_term_unwinds_owned_lock(admission):
     assert signal.getsignal(signal.SIGTERM) == previous
 
 
+@pytest.mark.parametrize("key", ["backup-daily", "backup-snapshot"])
+def test_admission_clears_the_wait_alert_this_gate_raised(admission, monkeypatch, key):
+    path, clock = admission
+    assert job_alerts.alert_path() == path / "alerts.json"  # Never the real job-alerts.json.
+    other = "backup-snapshot" if key == "backup-daily" else "backup-daily"
+    job_alerts.report(other, "Database backup failed; check the backup log")
+    monkeypatch.setattr(gate, "_pressure_reason", lambda *args: "swap too high" if clock[0] == 0 else None)
+    waits = []
+
+    def sleep(seconds):
+        waits.append(job_alerts.active_alerts()[key])
+        clock[0] += seconds
+
+    monkeypatch.setattr(gate.time, "sleep", sleep)
+    with gate.backup_heavy_gate(job_key=key):
+        alerts = job_alerts.active_alerts()
+        assert key not in alerts  # Admitted and running, so no longer "waiting behind the gate".
+        assert alerts[other] == "Database backup failed; check the backup log"  # Only its own key.
+    assert len(waits) == 1
+    assert "waiting behind the heavy-work gate" in waits[0] and "swap too high" in waits[0]
+
+
+@pytest.mark.parametrize("key", ["backup-daily", "backup-snapshot"])
+def test_admission_without_a_wait_keeps_an_alert_this_gate_did_not_raise(admission, monkeypatch, key):
+    path, _ = admission
+    assert job_alerts.alert_path() == path / "alerts.json"  # Never the real job-alerts.json.
+    previous_night = "Database backup failed; check the backup log"
+    job_alerts.report(key, previous_night)
+    monkeypatch.setattr(gate.time, "sleep", lambda seconds: pytest.fail("the gate waited"))
+    with gate.backup_heavy_gate(job_key=key):
+        assert job_alerts.active_alerts()[key] == previous_night
+    assert job_alerts.active_alerts()[key] == previous_night  # Only the backup's own end clears it.
+
+
 def test_snapshot_deadline_bounds_admission(admission, monkeypatch):
     path, clock = admission
     (path / "lock").mkdir()
@@ -172,14 +207,14 @@ def test_probe_failure_is_closed(monkeypatch):
     assert gate._pressure_reason(9, 12) == "swap usage unavailable"
 
 
-def test_pressure_window_ends_runs_under_lock_and_clears_alert_on_success(admission, monkeypatch):
+def test_pressure_window_ends_runs_under_lock_and_clears_alert_on_admission(admission, monkeypatch):
     path, clock = admission
     monkeypatch.setattr(gate, "_pressure_reason", lambda *args: "swap too high")
 
     def run(seconds):
         assert clock[0] == 20
         assert (path / "lock").is_dir()
-        assert "swap too high" in job_alerts.active_alerts()["backup-daily"]
+        assert "backup-daily" not in job_alerts.active_alerts()  # The heavy log keeps the ignored reason.
         assert seconds == 3580
         return 0
 
@@ -205,14 +240,15 @@ def test_past_window_still_waits_for_another_lanes_lock(admission, monkeypatch):
     def run(seconds):
         assert clock[0] == 30
         assert lock.is_dir()
-        assert "backup-daily" in job_alerts.active_alerts()
+        assert "backup-daily" not in job_alerts.active_alerts()  # Admitted: no longer waiting.
         return 1
 
     monkeypatch.setattr(gate.time, "sleep", sleep)
     monkeypatch.setattr(backup, "_supervise_backup_process", run)
     assert backup.main() == 1
     assert not lock.exists()
-    assert "backup-daily" in job_alerts.active_alerts()  # A failed forced run never clears it.
+    # A failed forced run reports its failure, never a stale "waiting" alert.
+    assert job_alerts.active_alerts()["backup-daily"] == "Database backup failed; check the backup log"
 
 
 @pytest.mark.parametrize("value", ["nan", "inf", "0", "-1"])

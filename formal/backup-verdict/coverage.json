@@ -16,8 +16,8 @@
       "sha256": "be07e9ab22b67de9552645470c003305f47b41e572c6530e8d9a0f03e57a70a7"
     },
     "src/brainlayer/backup_heavy_gate.py": {
-      "sha": "merge #1859 c3db0a18 with main 89eb7417 (#1867 APFS clone R1): both sides pinned with no model change; source hunks merged without conflict",
-      "sha256": "a9b5a9bb373d01ad2bc65519a0f09eeb5891c11aff3abe8d96896e9ae24c88ba"
+      "sha": "fix/backup-gate-alert-cleared-on-admission on main 3e25ceee (2026-11-26): on admission the gate clears its job alert (job_alerts.report(key, None)) only when this invocation reported a wait; an alert it did not raise stays for backup_daily.main's end. Re-read: DotTable abstracts a run only by its outcome (ok clears, failed sets, deferred keeps), which is unchanged; an extra clear mid-run removes a note that never lights the dot, so NoStuckAlert and AlertClears hold. No path:line ref points into this file. No model change. Previous pin: merge #1859 c3db0a18 with main 89eb7417 (#1867 APFS clone R1)",
+      "sha256": "cc85f8cb837cb548dc90481db11d72aab038385b60907ce1c683b9bac6134ce6"
     },
     "src/brainlayer/maintenance.py": {
       "sha": "5882de81",
