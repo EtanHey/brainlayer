@@ -207,8 +207,8 @@ def test_brainbar_revival_holds_custody_during_both_launchctl_children(tmp_path,
     probe = tmp_path / "custody-probe.txt"
     monkeypatch.setenv("BRAINBAR_UPDATE_ROOT", str(root))
     monkeypatch.setenv("CUSTODY_PROBE", str(probe))
-    # Each real shell child attempts the updater's exclusive lock. This is an
-    # event-time check inside enable AND bootstrap, without timing/sleep races.
+    # Each real shell child checks updater exclusion AND auto-activator sharing.
+    # Probe inside enable AND bootstrap, without timing/sleep races.
     script = FAKE_LAUNCHCTL.replace(
         'if [ "$1" = "print-disabled" ]; then',
         """case "$1" in
@@ -216,7 +216,8 @@ enable|bootstrap)
     /usr/bin/ruby -e '
       File.open(File.join(ENV.fetch("BRAINBAR_UPDATE_ROOT"), "update-custody.lock"), "a") do |lock|
         held = !lock.flock(File::LOCK_EX | File::LOCK_NB)
-        File.open(ENV.fetch("CUSTODY_PROBE"), "a") { |out| out.puts "#{ARGV[0]}:#{held}" }
+        shared = !!lock.flock(File::LOCK_SH | File::LOCK_NB)
+        File.open(ENV.fetch("CUSTODY_PROBE"), "a") { |out| out.puts "#{ARGV[0]}:#{held}:#{shared}" }
       end
     ' "$1"
     ;;
@@ -229,7 +230,7 @@ if [ "$1" = "print-disabled" ]; then""",
     assert result.process.returncode == 0, result.process.stderr
     assert result.enabled() == set(labels)
     assert result.bootstrapped() == set(labels)
-    assert probe.read_text().splitlines() == ["enable:true", "bootstrap:true"] * 2
+    assert probe.read_text().splitlines() == ["enable:true:true", "bootstrap:true:true"] * 2
     with (root / "update-custody.lock").open("a") as custody:
         fcntl.flock(custody, fcntl.LOCK_EX | fcntl.LOCK_NB)
 
