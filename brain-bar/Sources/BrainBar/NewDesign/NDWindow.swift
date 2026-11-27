@@ -3,9 +3,10 @@ import SwiftUI
 
 private typealias Say = BrainBarMenuPresenter.SurfaceSay
 
-/// The window (DESIGN-SPEC-R1 § 2.3 to 2.6): a unified 52 pt title bar holding only the centred tabs, one page, and a
-/// 28 pt footer that says when it was checked. Each page takes its own height (L17); nothing animates on a tab switch,
-/// nor on a two-finger page swipe (`NDPageSwipe`), which makes the same switch.
+/// The window (DESIGN-SPEC-R1 § 2.3 to 2.6): a unified 52 pt title bar holding only the centred tabs, the pages, and a
+/// 28 pt footer that says when it was checked. Each page takes its own height (L17). The pages and the tabs' glass pill
+/// follow a two-finger swipe live and settle on one spring after it or after a click (the shared tab-swipe spec,
+/// `GlassTabPager`); under Reduce Motion the pages cross-fade in place.
 struct NDWindowRoot: View {
     @ObservedObject var store: NDStore
     /// Headless renders have no toolbar, so they draw the same row themselves, with stand-in traffic lights.
@@ -23,42 +24,16 @@ struct NDWindowRoot: View {
                 ND.bar.frame(height: NDGrid.titleBar).overlay(alignment: .bottom) { ND.hair.frame(height: 0.5) }
             }
             BrainBarUpdateRow(updates: store.updates, header: true, showDetails: { NDSettingsWindowController.show(store: store) })
-            ScrollView(.vertical) {
-                let shown = page ?? store.shownPage
-                Group {
-                    switch shown {
-                    case .overview: NDOverviewPage(store: store).onAppear { drawn(.overview) }
-                    case .backups: NDBackupsPage(store: store).onAppear { drawn(.backups) }
-                    case .jobs: NDJobsPage(store: store).onAppear { drawn(.jobs) }
-                    }
-                }
-                // R1.10.1: the page swaps at once, never through a transition. During a transition the scroll view lays out
-                // both pages, stacked, the old one on top, so a window shrinking to the new page showed the old Overview
-                // under a selected Jobs or Backups tab (stuck there when the removal did not finish).
-                // R1.10.3: the root says which page it now holds and how it got it, in the update pass itself (the one signal
-                // a window that is never shown gives synchronously; page bodies are built on a display pass).
-                .transaction(value: shown) { t in
-                    let animated = t.animation != nil
-                    MainActor.assumeIsolated { NDLaidOutPagesProbe.swap?(shown, animated) }
-                }
-                .padding(.horizontal, NDGrid.pageSide)
-                .padding(.top, NDGrid.pageTop)
-                .padding(.bottom, 20)
-                .frame(maxWidth: .infinity, alignment: .topLeading)
-            }
-            .scrollIndicators(.automatic)
-            // A page longer than its view scrolls under a 28 pt fade with the system scroller (two or more faults).
-            .overlay(alignment: .bottom) {
-                LinearGradient(colors: [ND.bg.opacity(0), ND.bg], startPoint: .top, endPoint: .bottom)
-                    .frame(height: 28)
-                    .allowsHitTesting(false)
-                    .accessibilityHidden(true)
-            }
+            // The pages sit side by side and move with the tabs' pill (`GlassTabPager`): a swipe drags them 1:1, a
+            // release or a click settles them on one spring. At rest only the selected page exists.
+            NDPageStrip(store: store, pager: store.tabs, shown: page ?? store.shownPage, drawn: drawn)
             NDFooter(left: r1.footerLeft, right: r1.footerRight)
         }
         .ignoresSafeArea(.container, edges: .top)
-        // Phase 14: a two-finger sideways swipe moves to the neighbouring page, through the same change a tab click makes.
-        .background(NDPageSwipeMonitor { store.swipePage($0) })
+        // A two-finger sideways swipe moves the pages and the pill with the fingers; the release settles on a tab.
+        .background(NDPageSwipeMonitor { drive, time, width in store.drivePages(drive, at: time, width: width) })
+        // The settle's frames come from the display itself, only while a settle runs.
+        .background(GlassTabPagerClock(pager: store.tabs))
         .background(ND.bg)
         .foregroundStyle(ND.t1)
         .environment(\.ndPalette, .window)
@@ -123,7 +98,7 @@ struct NDFooter: View {
                  willBeInsertedIntoToolbar flag: Bool) -> NSToolbarItem? {
         guard id == Self.pages else { return nil }
         let item = NSToolbarItem(itemIdentifier: id)
-        item.view = NSHostingView(rootView: NDSegmentedPages(store: store).fixedSize().environment(\.ndPalette, .window))
+        item.view = NSHostingView(rootView: NDPageTabs(store: store).fixedSize().environment(\.ndPalette, .window))
         item.label = "Pages"
         return item
     }
@@ -148,7 +123,7 @@ struct NDTitleBar: View {
                 }
                 Spacer()
             }
-            NDSegmentedPages(store: store).fixedSize()
+            NDPageTabs(store: store).fixedSize()
         }
         .frame(height: NDGrid.titleBar)
         .background(ND.bar)
@@ -156,8 +131,9 @@ struct NDTitleBar: View {
     }
 }
 
-/// The native segmented control with its labels drawn by us (t1 Medium selected, t2 otherwise), and a page with faults
-/// carries a 16 pt red-tint count pill after its label. Selection, keyboard and VoiceOver stay native.
+/// The native segmented control with its labels drawn by us (t1 Medium selected, t2 otherwise, each segment as wide as
+/// its Medium label), and a label with a count carries a 16 pt count pill after it. Selection, keyboard and VoiceOver
+/// stay native. Only the range switch uses it now; the page tabs are `NDPageTabs`.
 struct NDSegments: NSViewRepresentable {
     let titles: [String]
     var counts: [Int] = []
@@ -217,14 +193,19 @@ struct NDSegments: NSViewRepresentable {
         let countFont = NSFont.monospacedDigitSystemFont(ofSize: NDScale.caption, weight: .semibold)
         let numeral = NSAttributedString(string: String(count), attributes: [.font: countFont])
         let pill = max(16, ceil(numeral.size().width) + 8)
-        let width = ceil(label.size().width + (count > 0 ? 6 + pill : 0))
+        // The width is always the SELECTED (Medium) label's, the label centred in it: a selection never changes a
+        // segment's width, so nothing beside it moves (tab-swipe spec 4).
+        let medium = NSAttributedString(string: title, attributes: [.font: NSFont.systemFont(ofSize: size, weight: .medium)])
+        let width = ceil(medium.size().width + (count > 0 ? 6 + pill : 0))
+        let drawn = label.size().width + (count > 0 ? 6 + pill : 0)
         let height = max(16, ceil(label.size().height))
         let image = NSImage(size: NSSize(width: width, height: height), flipped: false) { rect in
             let y = (rect.height - label.size().height) / 2
+            let x = (rect.width - drawn) / 2
             NSAttributedString(string: title, attributes: [.font: font, .foregroundColor: selected ? NDColor.t1 : NDColor.t2])
-                .draw(at: NSPoint(x: 0, y: y))
+                .draw(at: NSPoint(x: x, y: y))
             if count > 0 {
-                let box = NSRect(x: label.size().width + 6, y: (rect.height - 16) / 2, width: pill, height: 16)
+                let box = NSRect(x: x + label.size().width + 6, y: (rect.height - 16) / 2, width: pill, height: 16)
                 badgeFill.setFill()
                 NSBezierPath(roundedRect: box, xRadius: 8, yRadius: 8).fill()
                 NSAttributedString(string: String(count), attributes: [.font: countFont, .foregroundColor: badgeText])
@@ -233,21 +214,106 @@ struct NDSegments: NSViewRepresentable {
             return true
         }
         image.isTemplate = false
-        image.accessibilityDescription = count > 0
+        image.accessibilityDescription = spokenLabel(title, count: count)
+        return image
+    }
+
+    /// "Backups, 2 things need you": what VoiceOver says for a tab with a count.
+    static func spokenLabel(_ title: String, count: Int) -> String {
+        count > 0
             ? "\(title), \(count == 1 ? BrainBarMenuPresenter.Say.countOne.text : BrainBarMenuPresenter.SurfaceSay.thingsNeedYou(count))"
             : title
-        return image
     }
 }
 
-struct NDSegmentedPages: View {
+/// The window's page tabs: Overview, Backups, Jobs, each with its count of problems, on the glass pill that follows the
+/// pages (`GlassTabBar`). Slots are fixed at the selected weight, so nothing but the pill moves when the selection does.
+struct NDPageTabs: View {
     @ObservedObject var store: NDStore
     var body: some View {
-        NDSegments(titles: NDPage.allCases.map(\.title),
-                   counts: NDPage.allCases.map { [.backups: store.r1.backupsBadge, .jobs: store.r1.jobsBadge][$0] ?? 0 },
-                   selection: Binding(get: { NDPage.allCases.firstIndex(of: store.page) ?? 0 },
-                                      set: { store.page = NDPage.allCases[max(0, min($0, NDPage.allCases.count - 1))] }),
-                   accessibilityLabel: "Pages")
+        GlassTabBar(pager: store.tabs, tabs: Self.tabs(store.r1), accessibilityLabel: "Pages", metrics: Self.metrics,
+                    colors: Self.colors)
+    }
+
+    static let metrics = GlassTabMetrics()
+    static let colors = GlassTabColors(text: ND.t2, selectedText: ND.t1, track: Color(nsColor: NDColor.control),
+                                       pill: ND.controlSelected, countFill: Color(nsColor: NDSegments.badgeFill),
+                                       countText: Color(nsColor: NDSegments.badgeText))
+
+    static func tabs(_ r1: NDR1) -> [GlassTab] {
+        NDPage.allCases.map { page in
+            let count = [NDPage.backups: r1.backupsBadge, .jobs: r1.jobsBadge][page] ?? 0
+            return GlassTab(title: page.title, count: count, spokenLabel: NDSegments.spokenLabel(page.title, count: count))
+        }
+    }
+}
+
+/// The pages side by side, each in its own vertical scroll, offset by the pager's progress and clipped to the window: a
+/// swipe or a settle moves them exactly as far as the pill moves between its slots. Only the pages on screen (and the
+/// one the window is sized for) exist. Reduce Motion: they stay in place and cross-fade by the same progress.
+struct NDPageStrip: View {
+    let store: NDStore
+    @ObservedObject var pager: GlassTabPager
+    /// The page the window is sized for (`NDStore.shownPage`, or the one the controller handed the root).
+    let shown: NDPage
+    let drawn: (NDPage) -> Void
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        GeometryReader { geometry in
+            let width = geometry.size.width
+            let progress = pager.progress
+            ZStack(alignment: .topLeading) {
+                ForEach(Self.pages(progress: progress, shown: shown), id: \.self) { page in
+                    let distance = Double(NDPage.allCases.firstIndex(of: page) ?? 0) - progress
+                    pageScroll(page)
+                        .frame(width: width, height: geometry.size.height)
+                        .offset(x: reduceMotion ? 0 : CGFloat(distance) * width)
+                        .opacity(reduceMotion ? max(0, 1 - abs(distance)) : 1)
+                        .allowsHitTesting(abs(distance) < 0.5)
+                        .accessibilityHidden(abs(distance) >= 0.5)
+                }
+            }
+        }
+        .clipped()
+        // R1.10.3: the root says which page it now holds and how it got it, in the update pass itself (the one signal a
+        // window that is never shown gives synchronously; page bodies are built on a display pass).
+        .transaction(value: shown) { t in
+            let animated = t.animation != nil
+            MainActor.assumeIsolated { NDLaidOutPagesProbe.swap?(shown, animated) }
+        }
+    }
+
+    /// The pages drawn at `progress`: the one or two on screen, and the one the window is sized for.
+    static func pages(progress: Double, shown: NDPage) -> [NDPage] {
+        let all = NDPage.allCases
+        let p = min(max(progress, 0), Double(all.count - 1))
+        let on = Set([Int(p.rounded(.down)), Int(p.rounded(.up))].map { all[$0] } + [shown])
+        return all.filter(on.contains)
+    }
+
+    private func pageScroll(_ page: NDPage) -> some View {
+        ScrollView(.vertical) {
+            Group {
+                switch page {
+                case .overview: NDOverviewPage(store: store).onAppear { drawn(.overview) }
+                case .backups: NDBackupsPage(store: store).onAppear { drawn(.backups) }
+                case .jobs: NDJobsPage(store: store).onAppear { drawn(.jobs) }
+                }
+            }
+            .padding(.horizontal, NDGrid.pageSide)
+            .padding(.top, NDGrid.pageTop)
+            .padding(.bottom, 20)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+        }
+        .scrollIndicators(.automatic)
+        // A page longer than its view scrolls under a 28 pt fade with the system scroller (two or more faults).
+        .overlay(alignment: .bottom) {
+            LinearGradient(colors: [ND.bg.opacity(0), ND.bg], startPoint: .top, endPoint: .bottom)
+                .frame(height: 28)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+        }
     }
 }
 

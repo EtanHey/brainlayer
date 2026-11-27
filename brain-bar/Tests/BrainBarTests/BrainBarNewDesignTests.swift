@@ -244,9 +244,9 @@ import SwiftUI
         return nil
     }
 
-    /// D1 (real screen, round 1): a click on a tab changes the page, the selected segment and the window's height together.
-    /// It drives the action the toolbar's segmented control sends (selection, then its target/action), three times, and
-    /// after each checks the stored page, the page the window root drew, the control's selected segment and the height.
+    /// D1 (real screen, round 1): a click on a tab changes the page, the selected tab and the window's height together.
+    /// It drives what the toolbar's tab bar does on a click (the pager's `select`), three times, and after each checks
+    /// the stored page, the page the window root drew, the selected tab and the height.
     func testATabClickChangesPageSegmentAndHeightTogether() throws {
         let d = defaults()
         d.set("new", forKey: BrainBarDesign.key)
@@ -258,7 +258,8 @@ import SwiftUI
         let host = try XCTUnwrap(item.view)
         host.frame = NSRect(origin: .zero, size: host.fittingSize)
         host.layoutSubtreeIfNeeded()
-        let control = try XCTUnwrap(segmentedControl(in: host))
+        XCTAssertGreaterThan(host.fittingSize.width, 200, "the toolbar item hosts the page tabs")
+        XCTAssertNil(segmentedControl(in: host), "the page tabs are the glass tab bar")
         let store = controller.newDesignStore
         func settle() {
             for _ in 0..<3 {
@@ -270,12 +271,12 @@ import SwiftUI
         settle()
         for page in [NDPage.backups, .jobs, .overview] {
             let index = try XCTUnwrap(NDPage.allCases.firstIndex(of: page))
-            control.selectedSegment = index
-            XCTAssertTrue(NSApp.sendAction(try XCTUnwrap(control.action), to: control.target, from: control), "the control's own action")
+            store.tabs.select(index, at: CACurrentMediaTime())
             settle()
             XCTAssertEqual(store.page, page)
             XCTAssertEqual(store.drawnPageForTesting, page, "the window root drew the page the tab names")
-            XCTAssertEqual(control.selectedSegment, index, "the selected segment names the same page")
+            XCTAssertEqual(store.tabs.selection, index, "the selected tab names the same page")
+            XCTAssertEqual(store.tabs.progress, Double(index), "a window never shown lands at once")
             // L25: the page's height, capped the way the controller caps it (the runner's screen is small: 644 pt).
             let height = NDPageHeight.window(store, page: page, screen: controller.fitScreenHeight, titleBarHeight: controller.fitTitleBarHeight)
             let held = controller.windowWillResize(window, to: NSSize(width: 1200, height: 300)).height

@@ -20,9 +20,23 @@ import SwiftUI
     @Published var page: NDPage = .overview {
         didSet {
             guard page != oldValue else { return }
+            // A change made anywhere else (a menu item, a test) moves the tabs and pages too; one made by the tabs is
+            // already their selection.
+            tabs.follow(NDPage.allCases.firstIndex(of: page) ?? 0)
+            // The window's height (L17) waits for the pill and pages to come to rest: while two pages share the window
+            // mid-swipe or mid-settle, nothing but the pages and the pill moves (tab-swipe spec 4; the QA judge saw the
+            // height change right after each page swap on 1.6.13).
+            guard tabs.phase == .resting else {
+                pageAwaitsRest = true
+                return
+            }
             if let pageDidChange { pageDidChange(page) } else { shownPage = page }
         }
     }
+    private var pageAwaitsRest = false
+    /// The tab bar's pill and the pages' position, moved live by a swipe, a click or a dragged pill (`GlassTabPager`).
+    /// Its selection is `page`: a tab picked there sets `page` at once, while the pill and pages still settle.
+    let tabs = GlassTabPager(count: NDPage.allCases.count)
     /// R2 item 3: the page the window root draws. It changes only when the window can hold it: after the window has grown
     /// to a taller page, before it shrinks to a shorter one, so a page is never drawn clipped.
     @Published var shownPage: NDPage = .overview
@@ -160,6 +174,7 @@ import SwiftUI
         inputs = first
         model = NDModel.make(first)
         report = Self.reportText(model, verdict: first.capture.verdict, extras: first.extras, now: first.capture.now)
+        connectTabs()
     }
 
     /// A store that holds one invented moment and reads nothing (headless renders, tests, capture mode).
@@ -174,6 +189,17 @@ import SwiftUI
         shownPage = page
         report = Self.reportText(model, verdict: fixture.capture.verdict, extras: fixture.extras, version: "fixture",
                                  now: fixture.capture.now)
+        connectTabs()
+    }
+
+    private func connectTabs() {
+        tabs.jump(to: NDPage.allCases.firstIndex(of: page) ?? 0)
+        tabs.onSelect = { [weak self] index in self?.page = NDPage.allCases[index] }
+        tabs.onRest = { [weak self] in
+            guard let self, pageAwaitsRest else { return }
+            pageAwaitsRest = false
+            if let pageDidChange { pageDidChange(page) } else { shownPage = page }
+        }
     }
 
     /// F03: the report says what the surfaces show, runtime warnings included, through the existing scrubber.
