@@ -483,6 +483,16 @@ def verify_mcp_transport(*, bridge_command: str | None = None, timeout_seconds: 
         if not isinstance(call_result, dict) or call_result.get("isError") is True:
             raise RuntimeError(f"MCP deployment tool call failed: {smoke_tool}")
         return len(tools)
+    except BrokenPipeError as exc:
+        try:
+            _, stderr = process.communicate(timeout=max(0, deadline - time.monotonic()))
+        except subprocess.TimeoutExpired:
+            raise RuntimeError("MCP bridge closed stdin without exiting before the transport deadline") from exc
+        message = f"MCP bridge exited with code {process.returncode} during transport verification"
+        stderr_lines = stderr.decode(errors="replace").strip().splitlines()
+        if stderr_lines:
+            message += f": {stderr_lines[-1]}"
+        raise RuntimeError(message) from exc
     finally:
         process.terminate()
         try:

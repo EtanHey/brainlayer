@@ -434,8 +434,24 @@ def test_clone_alert_deadline_still_stops_without_fallback(artifact_lane, monkey
 
 @needs_clone_control
 @pytest.mark.parametrize("statement", ["PRAGMA wal_checkpoint(TRUNCATE)", "PRAGMA journal_mode=DELETE"])
-@pytest.mark.parametrize("error_type", [sqlite3.DatabaseError, sqlite3.OperationalError])
-def test_clone_recovery_error_alert_lifecycle(artifact_lane, monkeypatch, statement, error_type):
+@pytest.mark.parametrize(
+    "error_type,code,name,is_corruption",
+    [
+        (sqlite3.DatabaseError, sqlite3.SQLITE_BUSY, "SQLITE_BUSY", False),
+        (sqlite3.DatabaseError, sqlite3.SQLITE_IOERR, "SQLITE_IOERR", False),
+        (sqlite3.DatabaseError, sqlite3.SQLITE_CORRUPT, "SQLITE_CORRUPT", True),
+        (sqlite3.DatabaseError, sqlite3.SQLITE_NOTADB, "SQLITE_NOTADB", True),
+        (sqlite3.DatabaseError, sqlite3.SQLITE_CORRUPT_VTAB, "SQLITE_CORRUPT_VTAB", True),
+        (sqlite3.DatabaseError, None, "SQLITE_CORRUPT", True),
+        (sqlite3.DatabaseError, None, "SQLITE_NOTADB", True),
+        (sqlite3.DatabaseError, sqlite3.SQLITE_BUSY, "SQLITE_CORRUPT", False),
+        (sqlite3.DatabaseError, None, None, False),
+        (sqlite3.OperationalError, None, None, False),
+    ],
+)
+def test_clone_recovery_error_alert_lifecycle(
+    artifact_lane, monkeypatch, statement, error_type, code, name, is_corruption
+):
     from brainlayer import job_alerts
 
     backup, source, output, _ = artifact_lane
@@ -458,7 +474,12 @@ def test_clone_recovery_error_alert_lifecycle(artifact_lane, monkeypatch, statem
 
         def execute(self, sql, *args, **kwargs):
             if sql == statement:
-                raise error_type(reason)
+                error = error_type(reason)
+                if code is not None:
+                    error.sqlite_errorcode = code
+                if name is not None:
+                    error.sqlite_errorname = name
+                raise error
             return self.connection.execute(sql, *args, **kwargs)
 
     def fail_recovery(database, *args, **kwargs):
@@ -474,11 +495,11 @@ def test_clone_recovery_error_alert_lifecycle(artifact_lane, monkeypatch, statem
         assert artifact.snapshot_method == "vacuum"
         assert message in artifact.clone_fallback
         alerts = job_alerts.active_alerts()
-        if error_type is sqlite3.DatabaseError:
+        if is_corruption:
             assert message in alerts["backup-clone-integrity"]
         else:
             assert "backup-clone-integrity" not in alerts
-    assert len(notifications) == (1 if error_type is sqlite3.DatabaseError else 0)
+    assert len(notifications) == (1 if is_corruption else 0)
     monkeypatch.setattr(clone.sqlite3, "connect", connect)
     artifact = backup.create_sqlite_backup_artifact(
         source, output, date_stamp="2026-11-22", socket_path=source.parent / "unused.sock"
