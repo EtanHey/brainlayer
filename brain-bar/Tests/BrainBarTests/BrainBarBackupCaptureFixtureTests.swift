@@ -65,8 +65,9 @@ import SwiftUI
     func testUploadStalled() throws {
         let i = try inputs("upload-stalled")
         let p = try XCTUnwrap(i.backupProgress)
-        XCTAssertNil(p.percentage)
         XCTAssertTrue(p.isStalled)
+        XCTAssertEqual(p.barFill(), .grey(0.25), "Review 1886 B2: frozen at its last amount, in grey")
+        XCTAssertFalse(p.stationLine().contains("%"))
         XCTAssertEqual(i.capture.now.timeIntervalSince(try XCTUnwrap(p.checkpointAt)), 21 * 60)
         XCTAssertFalse(p.animates(after: p, reduceMotion: false))
     }
@@ -105,7 +106,8 @@ import SwiftUI
         XCTAssertTrue(lane.strong)
         XCTAssertNotNil(lane.stalledFrom)
         XCTAssertFalse(lane.events.isEmpty)
-        XCTAssertNil(i.backupProgress?.percentage, "Gap 22: a stalled checkpoint older than the display limit carries no number")
+        XCTAssertEqual(i.backupProgress?.stationLine().contains("%"), false,
+                       "Gap 22: a stalled checkpoint older than the display limit says no number (its grey bar keeps the amount)")
         XCTAssertEqual(i.capture.driveAuthModel, .valid)
         XCTAssertEqual(i.capture.verdict?.checks.first { $0.name == "drive_auth" }?.state, .green)
         XCTAssertEqual(i.backupProgress?.isStalled, true)
@@ -125,7 +127,8 @@ import SwiftUI
             let wordsBottom = try XCTUnwrap(L.labelRects(.drive, state).map(\.maxY).max())
             XCTAssertEqual(frame.midX, drive.x)
             XCTAssertEqual(frame.size, CGSize(width: 96, height: 3))
-            XCTAssertEqual(frame.minY - wordsBottom, 5, accuracy: 0.01, name)
+            // Review 1886 B1: 3 pt under the words box (was 5), so the bar belongs to its words, not the border below.
+            XCTAssertEqual(frame.minY - wordsBottom, 3, accuracy: 0.01, name)
             XCTAssertTrue(L.keptSafe.contains(frame), name)
             for station in NDStation.allCases {
                 for rect in L.labelRects(station, state) { XCTAssertFalse(frame.intersects(rect), "\(name): \(station) text") }
@@ -142,7 +145,8 @@ import SwiftUI
                 attributes: [.font: NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .semibold)]).size()
             let nativeBottom = max(drive.y + 29 - 13 * 0.36 + nameSize.height / 2,
                                    L.statusTop(.drive) + 10 - 11 * 0.36 + statusSize.height / 2)
-            XCTAssertGreaterThanOrEqual(frame.minY - nativeBottom, 4, name)
+            // The native line box ends below the descenders (it includes leading); the glyphs clear the bar by ~3.5 pt.
+            XCTAssertGreaterThanOrEqual(frame.minY - nativeBottom, 2.5, name)
             XCTAssertFalse(frame.intersects(L.hub), "\(name): Memory text")
             XCTAssertFalse(frame.intersects(L.agentsFrame), "\(name): agent labels")
             XCTAssertFalse(frame.intersects(L.pipelineHeading), "\(name): Pipeline heading")
