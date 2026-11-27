@@ -299,6 +299,11 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
         if pageObserver == nil {
             // D1: after the page is stored (didSet), never from `$page` (willSet).
             newDesignStore.pageDidChange = { [weak self] page in self?.fitPage(page) }
+            // Tab-swipe spec 4: no height change while the pill and pages are between tabs. A refit asked for then
+            // (a page change, any store update) is held and runs once at rest; a resize still running when they
+            // start to move again finishes at once.
+            newDesignStore.tabsDidRest = { [weak self] in self?.runHeldPageFit() }
+            newDesignStore.tabsWillMove = { [weak self] in self?.finishPageResizeNow() }
             pageObserver = AnyCancellable { [weak store = newDesignStore] in
                 MainActor.assumeIsolated { store?.pageDidChange = nil }
             }
@@ -363,7 +368,40 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
     /// never advances AppKit's animation, so a test steps the frames itself through this seam.
     var pageFrameAnimatorForTesting: ((NSRect, Double, CAMediaTimingFunction, @escaping () -> Void) -> Void)?
 
+    /// A refit asked for while the tabs moved.
+    private var pageFitHeld = false
+    /// The running resize: its target, and its completion (run once, by AppKit or by `finishPageResizeNow`).
+    private var runningPageResize: (target: NSRect, finish: () -> Void)?
+    private var pageResizeGeneration = 0
+
+    private func runHeldPageFit() {
+        guard pageFitHeld else { return }
+        pageFitHeld = false
+        fitPage(newDesignStore.page)
+    }
+
+    /// The tabs started to move during a resize: land the window on the resize's target now, so its height never
+    /// moves while two pages share it.
+    func finishPageResizeNow() {
+        guard let running = runningPageResize else { return }
+        runningPageResize = nil
+        if pageFrameAnimatorForTesting == nil {
+            // A zero-length animation of the same frame replaces the running one.
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0
+                window.animator().setFrame(running.target, display: true)
+            }
+        }
+        window.setFrame(running.target, display: window.isVisible, animate: false)
+        running.finish()
+    }
+
     func fitPage(_ page: NDPage) {
+        // Tab-swipe spec 4: the height never moves while the pill and pages are between tabs; it waits for the rest.
+        guard newDesignStore.tabs.phase == .resting else {
+            pageFitHeld = true
+            return
+        }
         // Finish one frame animation before starting another; the newest content wins at its completion.
         guard !pageResizeInFlight else {
             pageFitPending = true
@@ -407,9 +445,13 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
         let c = NDPageSwitch.curve
         let curve = CAMediaTimingFunction(controlPoints: c.0, c.1, c.2, c.3)
         pageResizeInFlight = true
+        pageResizeGeneration += 1
+        let generation = pageResizeGeneration
         let finish: () -> Void = { [weak self] in
             MainActor.assumeIsolated {
-                guard let self else { return }
+                // Once per resize: AppKit's completion after `finishPageResizeNow` already ran it changes nothing.
+                guard let self, self.pageResizeGeneration == generation, self.pageResizeInFlight else { return }
+                self.runningPageResize = nil
                 self.pageResizeInFlight = false
                 self.window.contentMinSize = size
                 self.window.contentMaxSize = size
@@ -419,6 +461,7 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
                 }
             }
         }
+        runningPageResize = (target, finish)
         if let animator = pageFrameAnimatorForTesting { return animator(target, duration, curve, finish) }
         NSAnimationContext.runAnimationGroup({ context in
             context.duration = duration

@@ -75,6 +75,11 @@ struct GlassTabSpring: Equatable {
     /// The pill and the pages came to rest on `selection` (after a settle, a jump or a release that needed none). The
     /// app moves anything that must not move mid-swipe here (BrainBar: the window's height).
     var onRest: (() -> Void)?
+    /// The pill and the pages leave rest (a swipe or a pressed pill takes hold, or a settle starts). The app finishes
+    /// anything still moving from the last rest here (BrainBar: a running window resize).
+    var onMove: (() -> Void)?
+    /// The tab the current motion started from (the selection when the pager last left rest).
+    private(set) var motionOrigin: Int
 
     private var raw: Double = 0
     private var origin = 0
@@ -87,6 +92,7 @@ struct GlassTabSpring: Equatable {
         self.spring = spring
         let index = min(max(selection, 0), count - 1)
         self.selection = index
+        motionOrigin = index
         progress = Double(index)
     }
 
@@ -97,6 +103,7 @@ struct GlassTabSpring: Equatable {
 
     /// A gesture takes hold: from the presented position, interrupting any settle.
     func grab(at time: Double) {
+        if phase == .resting { motionOrigin = selection }
         raw = unrubber(progress)
         origin = selection
         samples = [(time, raw)]
@@ -189,8 +196,16 @@ struct GlassTabSpring: Equatable {
     // MARK: Private
 
     private func settle(to index: Int, velocity v: Double, at time: Double, user: Bool) {
+        if phase == .resting { motionOrigin = selection }
         samples = []
         velocity = reduceMotion ? 0 : min(max(v, -Self.maximumSpeed), Self.maximumSpeed)
+        // At the first and last tab there is nothing past the target to show: carried-in velocity toward it is capped
+        // at ω·|offset|, the most a critically damped spring can take without crossing the target.
+        if index == 0 || index == lastIndex {
+            let offset = progress - Double(index)
+            let limit = spring.omega * abs(offset)
+            if offset != 0, velocity * offset < 0, abs(velocity) > limit { velocity = -limit * offset.sign.unit }
+        }
         lastTick = time
         let changed = selection != index
         if changed { selection = index }
@@ -231,8 +246,10 @@ struct GlassTabSpring: Equatable {
     private func setPhase(_ next: Phase) {
         let before = needsFrames
         let rests = next == .resting && phase != .resting
+        let moves = next != .resting && phase == .resting
         phase = next
         if needsFrames != before { onNeedsFrames?(needsFrames) }
+        if moves { onMove?() }
         if rests { onRest?() }
     }
 
@@ -255,6 +272,10 @@ struct GlassTabSpring: Equatable {
     }
 }
 
+private extension FloatingPointSign {
+    var unit: Double { self == .minus ? -1 : 1 }
+}
+
 // MARK: - The tab bar
 
 /// One tab: its title, an optional count drawn in a small pill after it, and what VoiceOver says.
@@ -264,8 +285,8 @@ struct GlassTab: Equatable {
     var spokenLabel: String
 }
 
-/// The bar's measurements. Every slot's width is its title at the SELECTED weight plus its count, so a selection never
-/// changes a width (spec 4).
+/// The bar's measurements. Every slot's width is its title (one weight for all labels) plus its count, so a selection
+/// never changes a width (spec 4).
 struct GlassTabMetrics: Equatable {
     var fontSize: CGFloat = 13
     var countFontSize: CGFloat = 11
@@ -275,7 +296,8 @@ struct GlassTabMetrics: Equatable {
     var inset: CGFloat = 2
     var countGap: CGFloat = 6
 
-    func titleFont(selected: Bool) -> NSFont { .systemFont(ofSize: fontSize, weight: selected ? .medium : .regular) }
+    /// One weight for every label, selected or not: the pill splits labels on colour only, never mid-word on weight.
+    var titleFont: NSFont { .systemFont(ofSize: fontSize, weight: .medium) }
     var countFont: NSFont { .monospacedDigitSystemFont(ofSize: countFontSize, weight: .semibold) }
 
     func countWidth(_ count: Int) -> CGFloat {
@@ -284,9 +306,9 @@ struct GlassTabMetrics: Equatable {
         return max(16, ceil(numeral) + 8)
     }
 
-    /// The label's width at the selected weight, count included.
+    /// The label's width, count included.
     func labelWidth(_ tab: GlassTab) -> CGFloat {
-        let title = NSAttributedString(string: tab.title, attributes: [.font: titleFont(selected: true)]).size().width
+        let title = NSAttributedString(string: tab.title, attributes: [.font: titleFont]).size().width
         return ceil(title + (tab.count > 0 ? countGap + countWidth(tab.count) : 0))
     }
 
@@ -344,9 +366,10 @@ struct GlassTabColors {
     var countText: Color = .primary
 }
 
-/// The bar: fixed slots, a glass pill overlay at the pager's progress, and the selected style drawn only inside the
-/// pill (two label layers split by the pill's shape), so a moving selection never changes a label's colour, weight or
-/// place. Click, press-and-drag of the pill, keyboard arrows and VoiceOver all go through the pager.
+/// The bar: fixed slots, a glass pill overlay at the pager's progress, and the selected colour drawn only inside the
+/// pill (two label layers at one weight, split by the pill's shape), so a moving selection never changes a label's
+/// weight or place. Click, press-and-drag of the pill, keyboard arrows and VoiceOver all go through the pager.
+/// Press feedback: the pressed pill swells to 1.03 and settles back on the same spring; a pressed tab's label dims.
 struct GlassTabBar: View {
     @ObservedObject var pager: GlassTabPager
     let tabs: [GlassTab]
@@ -358,13 +381,10 @@ struct GlassTabBar: View {
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.glassTabSolidPill) private var solidPill
-    @State private var press: Press?
-
-    private struct Press {
-        var onPill: Bool
-        var pillCentre: CGFloat
-        var dragging = false
-    }
+    @State private var livePress: GlassTabPress?
+    @Environment(\.glassTabPreviewPress) private var previewPress
+    /// The press drawn: the pointer's, or a render's stand-in.
+    private var press: GlassTabPress? { livePress ?? previewPress }
 
     var body: some View {
         let frames = metrics.slotFrames(tabs)
@@ -405,10 +425,12 @@ struct GlassTabBar: View {
         let shape = Capsule()
         Group {
             if #available(macOS 26.0, *), !solidPill {
+                // Not `.interactive()`: the pill never takes a hit (the bar's gesture does), so the press response is
+                // ours, below.
                 GlassEffectContainer {
                     shape.fill(.clear)
                         .frame(width: pill.width, height: pill.height)
-                        .glassEffect(.regular.interactive(), in: .capsule)
+                        .glassEffect(.regular, in: .capsule)
                 }
             } else {
                 shape.fill(colors.pill)
@@ -416,6 +438,9 @@ struct GlassTabBar: View {
                     .shadow(color: .black.opacity(0.12), radius: 1, y: 0.5)
             }
         }
+        .scaleEffect(press?.onPill == true && !reduceMotion ? GlassTabPress.pillScale : 1)
+        // Only the press animates here (the offset below follows the pager frame by frame, unanimated).
+        .animation(GlassTabPress.pressSpring, value: press?.onPill == true)
         .offset(x: pill.minX, y: pill.minY)
         .allowsHitTesting(false)
     }
@@ -425,6 +450,7 @@ struct GlassTabBar: View {
             ForEach(tabs.indices, id: \.self) { i in
                 label(tabs[i], selected: selected)
                     .frame(width: frames[i].width, height: metrics.height)
+                    .opacity(press?.slot == i ? GlassTabPress.pressedLabelOpacity : 1)
                     .offset(x: frames[i].minX)
             }
         }
@@ -436,7 +462,7 @@ struct GlassTabBar: View {
     private func label(_ tab: GlassTab, selected: Bool) -> some View {
         HStack(spacing: metrics.countGap) {
             Text(tab.title)
-                .font(Font(metrics.titleFont(selected: selected)))
+                .font(Font(metrics.titleFont))
                 .foregroundStyle(selected ? colors.selectedText : colors.text)
                 .lineLimit(1)
                 .fixedSize()
@@ -450,31 +476,63 @@ struct GlassTabBar: View {
         }
     }
 
-    /// Click: the slot under the pointer on release. Press on the pill and move: the pill follows the pointer, and the
-    /// release settles it like a trackpad release (any tab may be the target).
+    /// Click: the slot under the pointer on release (`GlassTabPress`). Press on the pill and move: the pill follows the
+    /// pointer, and the release settles it like a trackpad release (any tab may be the target).
     private func pressGesture(frames: [CGRect]) -> some Gesture {
         DragGesture(minimumDistance: 0, coordinateSpace: .local)
             .onChanged { value in
-                if press == nil {
-                    let pill = metrics.pillFrame(tabs, progress: pager.progress)
-                    press = Press(onPill: pill.insetBy(dx: -metrics.inset, dy: -metrics.inset).contains(value.startLocation),
-                                  pillCentre: pill.midX)
+                if livePress == nil {
+                    livePress = GlassTabPress.begin(at: value.startLocation, pager: pager, tabs: tabs, metrics: metrics, time: now())
                 }
-                guard var current = press, current.onPill else { return }
-                if !current.dragging, abs(value.translation.width) < 3 { return }
-                current.dragging = true
-                press = current
-                pager.drag(to: metrics.progress(forPillCentre: current.pillCentre + value.translation.width, tabs), at: now())
+                livePress?.move(translation: value.translation.width, pager: pager, tabs: tabs, metrics: metrics, time: now())
             }
             .onEnded { value in
-                defer { press = nil }
-                if press?.dragging == true {
-                    pager.release(at: now(), oneStep: false)
-                } else if let index = metrics.slot(at: value.location.x, tabs),
-                          value.location.y >= -8, value.location.y <= metrics.height + 8 {
-                    pager.select(index, at: now())
-                }
+                livePress?.end(at: value.location, pager: pager, tabs: tabs, metrics: metrics, time: now())
+                livePress = nil
             }
+    }
+}
+
+/// What a pointer press on the bar does to the pager (drawing aside), so tests drive it without a window.
+struct GlassTabPress: Equatable {
+    static let dragThreshold: CGFloat = 3
+    static let pillScale: CGFloat = 1.03
+    static let pressedLabelOpacity: Double = 0.6
+    /// The pager's spring, for the press swell and its release.
+    static let pressSpring = Animation.spring(response: GlassTabSpring.standard.response, dampingFraction: 1.0)
+
+    /// Pressed on the pill: the pill is held where it is drawn (a settle under it stops there) and moving drags it.
+    var onPill: Bool
+    /// The tab under a press that is not on the pill: its label dims until release; the click commits on release.
+    var slot: Int?
+    /// The held pill's centre, the origin of a drag.
+    var pillCentre: CGFloat
+    var dragging = false
+
+    @MainActor static func begin(at location: CGPoint, pager: GlassTabPager, tabs: [GlassTab], metrics: GlassTabMetrics,
+                                 time: Double) -> GlassTabPress {
+        let pill = metrics.pillFrame(tabs, progress: pager.progress)
+        let onPill = pill.insetBy(dx: -metrics.inset, dy: -metrics.inset).contains(location)
+        // Hold the pill at its presented position now, so a drag that starts after a pause moves from where it is drawn.
+        if onPill { pager.grab(at: time) }
+        return GlassTabPress(onPill: onPill, slot: onPill ? nil : metrics.slot(at: location.x, tabs), pillCentre: pill.midX)
+    }
+
+    @MainActor mutating func move(translation: CGFloat, pager: GlassTabPager, tabs: [GlassTab], metrics: GlassTabMetrics,
+                                  time: Double) {
+        guard onPill, dragging || abs(translation) >= Self.dragThreshold else { return }
+        dragging = true
+        pager.drag(to: metrics.progress(forPillCentre: pillCentre + translation, tabs), at: time)
+    }
+
+    @MainActor func end(at location: CGPoint, pager: GlassTabPager, tabs: [GlassTab], metrics: GlassTabMetrics, time: Double) {
+        if dragging { return pager.release(at: time, oneStep: false) }
+        if let index = metrics.slot(at: location.x, tabs), location.y >= -8, location.y <= metrics.height + 8 {
+            pager.select(index, at: time)
+        } else if onPill {
+            // A held pill let go away from the bar settles on the nearest tab.
+            pager.release(at: time, oneStep: false)
+        }
     }
 }
 
@@ -482,6 +540,8 @@ extension EnvironmentValues {
     /// Draw the pill as a solid capsule instead of Liquid Glass. Offscreen renders only: `cacheDisplay` cannot capture
     /// glass, which the window server composites on screen.
     @Entry var glassTabSolidPill = false
+    /// Renders only: draw the bar as if this press were held.
+    @Entry var glassTabPreviewPress: GlassTabPress? = nil
 }
 
 /// The pill's shape as a mask: inside only, or everything but the inside.

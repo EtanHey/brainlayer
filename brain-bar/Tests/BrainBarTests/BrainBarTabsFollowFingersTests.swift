@@ -218,15 +218,29 @@ final class BrainBarTabsFollowFingersTests: XCTestCase {
 
     // MARK: The window's height holds while two pages share it
 
-    /// QA r2 (1.6.13): the window resized to the new page right after each swap. Now, on the controller's real path, the
-    /// window's height never changes on a frame where the pill and pages are between tabs (a live swipe, its settle, a
-    /// click and its settle); it moves once, after they rest, on the existing 200 ms resize.
-    func testTheWindowHeightHoldsWhileTwoPagesShareIt() throws {
+    /// A controller on the real path, with a live pager and the resize seam; `finishes` decides whether the resize
+    /// lands at once or waits for the test.
+    private func liveController() -> BrainBarDashboardPanelController {
         NSApplication.shared.setActivationPolicy(.prohibited)
         let controller = BrainBarDashboardPanelController(workspace: BrainBarRecordingWorkspace(), runtime: BrainBarRuntime())
         controller.visibleHeightOverride = 2000
         controller.reduceMotionForTesting = false
         controller.animatesPageSwitchForTesting = true
+        controller.newDesignStore.tabs.isLive = { true }
+        return controller
+    }
+
+    /// Lets the run loop turn once, so `NDPageFitObserver`'s scheduled refit (a `Task`) runs.
+    private func yieldToObservers() {
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.002))
+    }
+
+    /// QA r2 (1.6.13): the window resized to the new page right after each swap. Review r1 (B1): a store update while
+    /// the tabs move must not refit either. On the controller's real path, with the run loop turning between frames and
+    /// the store publishing mid-swipe, the window's height never changes on a frame where the pill and pages are
+    /// between tabs; it moves once, after they rest, on the existing 200 ms resize.
+    func testTheWindowHeightHoldsWhileTwoPagesShareIt() throws {
+        let controller = liveController()
         let store = controller.newDesignStore
         let window = controller.windowForTesting
         var resizes: [(progress: Double, from: CGFloat, to: CGFloat)] = []
@@ -235,56 +249,58 @@ final class BrainBarTabsFollowFingersTests: XCTestCase {
             window.setFrame(target, display: false)
             finish()
         }
-        store.tabs.isLive = { true }
         var time = 100.0
         var fractionalFrames = 0
-        func frameCheck(_ name: String) {
+        func frameCheck(_ name: String, height: CGFloat) {
+            yieldToObservers()
             let p = store.tabs.progress
             guard p != p.rounded() else { return }
             fractionalFrames += 1
+            XCTAssertEqual(window.frame.height, height, "\(name): the window holds its height between tabs (progress \(p))")
             XCTAssertTrue(resizes.isEmpty, "\(name): no resize while between tabs (progress \(p))")
         }
-        func settle(_ name: String) {
+        func settle(_ name: String, height: CGFloat) {
             for _ in 0..<120 where store.tabs.phase != .resting {
                 time += frame
-                let height = window.frame.height
                 store.tabs.tick(at: time)
-                if store.tabs.phase != .resting {
-                    XCTAssertEqual(window.frame.height, height, "\(name): the window holds its height mid-settle")
-                    frameCheck(name)
-                }
+                if store.tabs.phase != .resting { frameCheck(name, height: height) }
             }
             XCTAssertEqual(store.tabs.phase, .resting, name)
+            yieldToObservers()
         }
 
-        // A live swipe Overview → Backups: tracking, then its settle.
+        // A live swipe Overview → Backups, with the store publishing (as a refresh does) every few frames.
         let start = window.frame.height
         store.drivePages(.grab(-30), at: time, width: NDGrid.windowWidth)
-        for _ in 0..<40 {
+        for step in 0..<40 {
             time += frame
             store.drivePages(.move(-12), at: time, width: NDGrid.windowWidth)
-            XCTAssertEqual(window.frame.height, start, "swipe: the window holds its height while the fingers move")
-            frameCheck("swipe")
+            if step % 5 == 0 { store.objectWillChange.send() }
+            frameCheck("swipe", height: start)
         }
         time += frame
         store.drivePages(.release, at: time, width: NDGrid.windowWidth)
         XCTAssertEqual(store.page, .backups, "the release picked Backups")
-        XCTAssertTrue(resizes.isEmpty, "...but the window waits for the rest")
-        settle("swipe settle")
+        store.objectWillChange.send()
+        yieldToObservers()
+        XCTAssertTrue(resizes.isEmpty, "...but the window waits for the rest, through a store update too")
+        settle("swipe settle", height: start)
         XCTAssertEqual(resizes.count, 1, "then the height moves once")
         XCTAssertEqual(resizes.last?.progress, 1, "from the rested page")
         XCTAssertEqual(store.shownPage, .backups)
 
-        // A click Backups → Jobs, and a click back to Overview mid-settle.
+        // A click Backups → Jobs, and a click back to Overview mid-settle, the store publishing throughout.
         resizes.removeAll()
+        let rested = window.frame.height
         store.tabs.select(2, at: time)
         for _ in 0..<10 {
             time += frame
             store.tabs.tick(at: time)
-            frameCheck("click")
+            store.objectWillChange.send()
+            frameCheck("click", height: rested)
         }
         store.tabs.select(0, at: time)
-        settle("click back")
+        settle("click back", height: rested)
         XCTAssertEqual(store.page, .overview)
         XCTAssertEqual(resizes.count, 1, "one resize, after the last settle, to the page it rested on")
         XCTAssertEqual(resizes.last?.progress, 0)
@@ -292,6 +308,70 @@ final class BrainBarTabsFollowFingersTests: XCTestCase {
                        NDPageHeight.window(store, page: .overview, screen: controller.fitScreenHeight,
                                            titleBarHeight: controller.fitTitleBarHeight), accuracy: 0.5)
         XCTAssertGreaterThan(fractionalFrames, 60, "the checks ran on frames between tabs")
+    }
+
+    /// Review r1 (B3): a new swipe or click during the 200 ms resize that follows a rest lands the window on that
+    /// resize's target at once, before anything moves; no frame between tabs changes the height. The seam here keeps
+    /// the resize running (it never calls `finish` itself).
+    func testANewSwipeDuringTheResizeLandsTheWindowFirst() throws {
+        let controller = liveController()
+        let store = controller.newDesignStore
+        let window = controller.windowForTesting
+        var running: (target: NSRect, finish: () -> Void)?
+        var started = 0
+        controller.pageFrameAnimatorForTesting = { target, _, _, finish in
+            started += 1
+            running = (target, finish)
+        }
+        var time = 100.0
+        for kind in ["swipe", "click"] {
+            // Rest on a new page: its resize starts and keeps running.
+            started = 0
+            store.tabs.select(store.tabs.selection == 0 ? 1 : 0, at: time)
+            for _ in 0..<120 where store.tabs.phase != .resting {
+                time += frame
+                store.tabs.tick(at: time)
+            }
+            yieldToObservers()
+            let resize = try XCTUnwrap(running, "\(kind): the rest started the resize")
+            XCTAssertEqual(started, 1)
+            XCTAssertNotEqual(window.frame.height, resize.target.height, "\(kind): mid-resize, not yet at the target")
+
+            // Move again before it finishes.
+            let next = store.tabs.selection == 0 ? 1 : 0
+            if kind == "swipe" {
+                store.drivePages(.grab(next == 1 ? -30 : 30), at: time, width: NDGrid.windowWidth)
+            } else {
+                store.tabs.select(next, at: time)
+            }
+            XCTAssertEqual(window.frame.height, resize.target.height, "\(kind): the window lands on the resize's target at once")
+            running = nil
+            let held = window.frame.height
+            for _ in 0..<30 {
+                time += frame
+                if kind == "swipe" {
+                    store.drivePages(.move(next == 1 ? -12 : 12), at: time, width: NDGrid.windowWidth)
+                } else {
+                    store.tabs.tick(at: time)
+                }
+                yieldToObservers()
+                if store.tabs.progress != store.tabs.progress.rounded() {
+                    XCTAssertEqual(window.frame.height, held, "\(kind): no height change between tabs")
+                    XCTAssertEqual(started, 1, "\(kind): no new resize between tabs")
+                }
+            }
+            if kind == "swipe" {
+                time += frame
+                store.drivePages(.release, at: time, width: NDGrid.windowWidth)
+            }
+            for _ in 0..<120 where store.tabs.phase != .resting {
+                time += frame
+                store.tabs.tick(at: time)
+            }
+            yieldToObservers()
+            running?.finish()
+            running = nil
+        }
     }
 
     // MARK: (d) Reduce Motion
@@ -356,6 +436,120 @@ final class BrainBarTabsFollowFingersTests: XCTestCase {
         XCTAssertEqual(NDPageStrip.pages(progress: 0.2, shown: .jobs), [.overview, .backups, .jobs],
                        "the page the window is sized for is laid out from the first frame")
         XCTAssertEqual(NDPageStrip.pages(progress: -0.1, shown: .overview), [.overview], "the rubber band shows no page past the end")
+        // Review r1 (N6): while moving, origin, target and their neighbours stay built (no page is built mid-motion, and
+        // one that slides out and back keeps its scroll position).
+        XCTAssertEqual(NDPageStrip.pages(progress: 0.1, shown: .overview, motion: 0...0), [.overview, .backups])
+        XCTAssertEqual(NDPageStrip.pages(progress: 0.1, shown: .overview, motion: 0...2), [.overview, .backups, .jobs],
+                       "a click on Jobs builds Jobs before the slide reaches it")
+        XCTAssertEqual(NDPageStrip.pages(progress: 1.9, shown: .jobs, motion: 0...2), [.overview, .backups, .jobs],
+                       "and keeps where it came from")
+        let pager = GlassTabPager(count: 3, selection: 0)
+        pager.isLive = { true }
+        XCTAssertNil(NDPageStrip.motion(pager), "at rest no motion")
+        pager.select(2, at: 0)
+        XCTAssertEqual(NDPageStrip.motion(pager), 0...2)
+    }
+
+    // MARK: Review r1: the pressed pill, one weight, the ends
+
+    /// B2: a press on the pill during a settle holds the pill where it is drawn; a drag that starts after a pause moves
+    /// from there, never from where the pill was when pressed earlier in the settle.
+    func testAPressedPillHoldsDuringASettleAndDragsFromWhereItIs() {
+        let pager = GlassTabPager(count: 3, selection: 0)
+        pager.isLive = { true }
+        var time = 0.0
+        pager.select(2, at: time)
+        for _ in 0..<8 {
+            time += frame
+            pager.tick(at: time)
+        }
+        let drawn = pager.progress
+        XCTAssertGreaterThan(drawn, 0.3)
+        let centre = metrics.pillFrame(tabs, progress: drawn)
+        var press = GlassTabPress.begin(at: CGPoint(x: centre.midX, y: centre.midY), pager: pager, tabs: tabs, metrics: metrics,
+                                        time: time)
+        XCTAssertTrue(press.onPill)
+        for _ in 0..<30 { // a 250 ms pause: the settle under the press is stopped
+            time += frame
+            pager.tick(at: time)
+            press.move(translation: 1, pager: pager, tabs: tabs, metrics: metrics, time: time) // under the drag threshold
+        }
+        XCTAssertEqual(pager.progress, drawn, "held where it was drawn")
+        time += frame
+        press.move(translation: 6, pager: pager, tabs: tabs, metrics: metrics, time: time)
+        XCTAssertEqual(pager.progress, metrics.progress(forPillCentre: centre.midX + 6, tabs), accuracy: 1e-9,
+                       "the drag moves from where the pill is drawn")
+        XCTAssertGreaterThan(pager.progress, drawn, "never rewound")
+        time += frame
+        press.end(at: CGPoint(x: centre.midX + 6, y: centre.midY), pager: pager, tabs: tabs, metrics: metrics, time: time)
+        XCTAssertEqual(pager.phase, .settling)
+    }
+
+    /// N4 and N5: the press response. On the pill: held, swelling to 1.03 (drawn from the press, released on the same
+    /// spring). On another tab: that label dims to 0.6, and nothing is selected until the release.
+    func testPressFeedbackAndCommitOnRelease() {
+        XCTAssertEqual(GlassTabPress.pillScale, 1.03)
+        XCTAssertEqual(GlassTabPress.pressedLabelOpacity, 0.6)
+        let pager = GlassTabPager(count: 3, selection: 0)
+        pager.isLive = { true }
+        let jobs = metrics.slotFrames(tabs)[2]
+        let press = GlassTabPress.begin(at: CGPoint(x: jobs.midX, y: jobs.midY), pager: pager, tabs: tabs, metrics: metrics, time: 0)
+        XCTAssertFalse(press.onPill)
+        XCTAssertEqual(press.slot, 2, "the pressed tab's label dims")
+        XCTAssertEqual(pager.selection, 0, "mouse-down selects nothing")
+        XCTAssertEqual(pager.phase, .resting)
+        press.end(at: CGPoint(x: jobs.midX, y: jobs.midY), pager: pager, tabs: tabs, metrics: metrics, time: 0.2)
+        XCTAssertEqual(pager.selection, 2, "mouse-up commits")
+        // A press on the resting pill and a release in place: held, then back at rest on the same tab.
+        let rest = GlassTabPager(count: 3, selection: 1)
+        rest.isLive = { true }
+        let pill = metrics.pillFrame(tabs, progress: 1)
+        let held = GlassTabPress.begin(at: CGPoint(x: pill.midX, y: pill.midY), pager: rest, tabs: tabs, metrics: metrics, time: 0)
+        XCTAssertTrue(held.onPill)
+        XCTAssertNil(held.slot)
+        held.end(at: CGPoint(x: pill.midX, y: pill.midY), pager: rest, tabs: tabs, metrics: metrics, time: 0.3)
+        XCTAssertEqual(rest.phase, .resting)
+        XCTAssertEqual(rest.progress, 1)
+    }
+
+    /// N3: every label at one weight, so the pill splits a label on colour only; the slot is that label's width.
+    func testLabelsUseOneWeight() {
+        let font = metrics.titleFont
+        XCTAssertEqual(font.pointSize, 13)
+        let traits = NSFontManager.shared.weight(of: font)
+        XCTAssertEqual(traits, NSFontManager.shared.weight(of: NSFont.systemFont(ofSize: 13, weight: .medium)))
+        for (tab, width) in zip(tabs, metrics.slotWidths(tabs)) {
+            let title = NSAttributedString(string: tab.title, attributes: [.font: font]).size().width
+            XCTAssertEqual(width, ceil(title + (tab.count > 0 ? metrics.countGap + metrics.countWidth(tab.count) : 0)) + 2 * metrics.padding,
+                           tab.title)
+        }
+    }
+
+    /// N7: a hard flick onto the first or last tab never crosses it (nothing lies past the end to show).
+    func testAHardFlickAtTheEndsNeverCrossesTheEnd() {
+        for (start, toward) in [(1, 2), (1, 0)] {
+            let pager = GlassTabPager(count: 3, selection: start)
+            pager.isLive = { true }
+            var time = 0.0
+            pager.grab(at: time)
+            // 0.81 tab in 75 ms (10.8 tabs/s), 0.19 tab short of the end: without the cap the spring would carry past it.
+            let step = toward > start ? 0.09 : -0.09
+            for _ in 0..<9 {
+                time += frame
+                pager.drag(by: step, at: time)
+            }
+            time += frame
+            pager.release(at: time)
+            XCTAssertEqual(pager.selection, toward)
+            let target = Double(toward)
+            for _ in 0..<120 {
+                time += frame
+                pager.tick(at: time)
+                XCTAssertTrue(toward > start ? pager.progress <= target + 1e-12 : pager.progress >= target - 1e-12,
+                              "\(start)→\(toward): never past the end (\(pager.progress))")
+            }
+            XCTAssertEqual(pager.progress, target)
+        }
     }
 
     // MARK: Renders (offscreen)
@@ -385,6 +579,21 @@ final class BrainBarTabsFollowFingersTests: XCTestCase {
                     let slots = metrics.slotFrames(t).map { "(\(Int($0.minX)), \(Int($0.width)))" }.joined(separator: " ")
                     table.append("| \(name) | \(store.tabs.progress) | \(pill.minX) | \(pill.width) | \(slots) |")
                 }
+            }
+            // Review r1: the press states (pill held and swelled; another tab's label dimmed until release).
+            let pressed = NDStore(fixture: BrainBarDesignFixture.inputs(.twoFaults), page: .overview)
+            let t = NDPageTabs.tabs(pressed.r1)
+            let presses: [(String, GlassTabPress)] = [
+                ("press-pill", GlassTabPress(onPill: true, slot: nil, pillCentre: metrics.pillFrame(t, progress: 0).midX)),
+                ("press-jobs", GlassTabPress(onPill: false, slot: 2, pillCentre: metrics.pillFrame(t, progress: 0).midX)),
+            ]
+            for (name, press) in presses {
+                let size = NSSize(width: 520, height: NDGrid.titleBar)
+                let view = NDPageTabs(store: pressed).fixedSize().environment(\.glassTabSolidPill, true)
+                    .environment(\.glassTabPreviewPress, press).transaction { $0.disablesAnimations = true }
+                    .frame(width: size.width, height: size.height).background(ND.bar)
+                try NDRenderHarness.write(try NDRenderHarness.host(view, size: size, appearance: appearance),
+                                          name: "after-header-\(name)-solid-\(suffix)", in: url)
             }
             let window = NDStore(fixture: BrainBarDesignFixture.inputs(.calm), page: .overview)
             window.tabs.present(0.5)

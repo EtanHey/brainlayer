@@ -264,7 +264,7 @@ struct NDPageStrip: View {
             let width = geometry.size.width
             let progress = pager.progress
             ZStack(alignment: .topLeading) {
-                ForEach(Self.pages(progress: progress, shown: shown), id: \.self) { page in
+                ForEach(Self.pages(progress: progress, shown: shown, motion: Self.motion(pager)), id: \.self) { page in
                     let distance = Double(NDPage.allCases.firstIndex(of: page) ?? 0) - progress
                     pageScroll(page)
                         .frame(width: width, height: geometry.size.height)
@@ -284,11 +284,22 @@ struct NDPageStrip: View {
         }
     }
 
-    /// The pages drawn at `progress`: the one or two on screen, and the one the window is sized for.
-    static func pages(progress: Double, shown: NDPage) -> [NDPage] {
+    /// The tabs a motion in progress spans (where it started, where it is going), nil at rest.
+    static func motion(_ pager: GlassTabPager) -> ClosedRange<Int>? {
+        guard pager.phase != .resting else { return nil }
+        return min(pager.motionOrigin, pager.selection)...max(pager.motionOrigin, pager.selection)
+    }
+
+    /// The pages drawn at `progress`: the one or two on screen and the one the window is sized for; while a motion is
+    /// in progress also its origin, its target and their neighbours, so no page is built mid-motion and a page that
+    /// slides out and back keeps its scroll position. At rest the others are let go.
+    static func pages(progress: Double, shown: NDPage, motion: ClosedRange<Int>? = nil) -> [NDPage] {
         let all = NDPage.allCases
         let p = min(max(progress, 0), Double(all.count - 1))
-        let on = Set([Int(p.rounded(.down)), Int(p.rounded(.up))].map { all[$0] } + [shown])
+        var on = Set([Int(p.rounded(.down)), Int(p.rounded(.up))].map { all[$0] } + [shown])
+        if let motion {
+            on.formUnion(all[max(0, motion.lowerBound - 1)...min(all.count - 1, motion.upperBound + 1)])
+        }
         return all.filter(on.contains)
     }
 

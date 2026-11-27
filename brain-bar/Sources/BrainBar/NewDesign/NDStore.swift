@@ -34,6 +34,10 @@ import SwiftUI
         }
     }
     private var pageAwaitsRest = false
+    /// The window controller: the tabs and pages came to rest (a refit held while they moved runs now).
+    var tabsDidRest: (@MainActor () -> Void)?
+    /// The window controller: the tabs and pages leave rest (a window resize still running finishes at once).
+    var tabsWillMove: (@MainActor () -> Void)?
     /// The tab bar's pill and the pages' position, moved live by a swipe, a click or a dragged pill (`GlassTabPager`).
     /// Its selection is `page`: a tab picked there sets `page` at once, while the pill and pages still settle.
     let tabs = GlassTabPager(count: NDPage.allCases.count)
@@ -196,10 +200,14 @@ import SwiftUI
         tabs.jump(to: NDPage.allCases.firstIndex(of: page) ?? 0)
         tabs.onSelect = { [weak self] index in self?.page = NDPage.allCases[index] }
         tabs.onRest = { [weak self] in
-            guard let self, pageAwaitsRest else { return }
-            pageAwaitsRest = false
-            if let pageDidChange { pageDidChange(page) } else { shownPage = page }
+            guard let self else { return }
+            if pageAwaitsRest {
+                pageAwaitsRest = false
+                if let pageDidChange { pageDidChange(page) } else { shownPage = page }
+            }
+            tabsDidRest?()
         }
+        tabs.onMove = { [weak self] in self?.tabsWillMove?() }
     }
 
     /// F03: the report says what the surfaces show, runtime warnings included, through the existing scrubber.

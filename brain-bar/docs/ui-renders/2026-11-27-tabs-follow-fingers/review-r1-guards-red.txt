@@ -1,0 +1,14 @@
+Review r1 guards: each fix reverted on its own in the branch tree, its guard test run (M4, swift test).
+
+B1 reverted -> testTheWindowHeightHoldsWhileTwoPagesShareIt: exit 1
+  BrainBarTabsFollowFingersTests.swift:259: error: -[BrainBarTests.BrainBarTabsFollowFingersTests testTheWindowHeightHoldsWhileTwoPagesShareIt] : XCTAssertEqual failed: ("472.0") is not equal to ("742.0") - swipe settle: the window holds its height between tabs (progress 0.583744755593403)
+  BrainBarTabsFollowFingersTests.swift:260: error: -[BrainBarTests.BrainBarTabsFollowFingersTests testTheWindowHeightHoldsWhileTwoPagesShareIt] : XCTAssertTrue failed - swipe settle: no resize while between tabs (progress 0.583744755593403)
+B3 reverted -> testANewSwipeDuringTheResizeLandsTheWindowFirst: exit 1
+  BrainBarTabsFollowFingersTests.swift:347: error: -[BrainBarTests.BrainBarTabsFollowFingersTests testANewSwipeDuringTheResizeLandsTheWindowFirst] : XCTAssertEqual failed: ("742.0") is not equal to ("472.0") - swipe: the window lands on the resize's target at once
+  BrainBarTabsFollowFingersTests.swift:336: error: -[BrainBarTests.BrainBarTabsFollowFingersTests testANewSwipeDuringTheResizeLandsTheWindowFirst] : XCTUnwrap failed: expected non-nil value of type "(target: CGRect, finish: () -> ())" - click: the rest started the resize
+B2 reverted -> testAPressedPillHoldsDuringASettleAndDragsFromWhereItIs: exit 1
+  BrainBarTabsFollowFingersTests.swift:477: error: -[BrainBarTests.BrainBarTabsFollowFingersTests testAPressedPillHoldsDuringASettleAndDragsFromWhereItIs] : XCTAssertEqual failed: ("1.9798936809942127") is not equal to ("0.8137531837468117") - held where it was drawn
+N7 reverted -> testAHardFlickAtTheEndsNeverCrossesTheEnd: exit 0  (first flick, 7.2 tabs/s at 0.4 short, did not exceed ω·|offset|: the test could not fail; strengthened to 10.8 tabs/s at 0.19 short, rerun below)
+N7 reverted -> testAHardFlickAtTheEndsNeverCrossesTheEnd: exit 1
+  BrainBarTabsFollowFingersTests.swift:548: error: -[BrainBarTests.BrainBarTabsFollowFingersTests testAHardFlickAtTheEndsNeverCrossesTheEnd] : XCTAssertTrue failed - 1→2: never past the end (2.018584621745371)
+  BrainBarTabsFollowFingersTests.swift:548: error: -[BrainBarTests.BrainBarTabsFollowFingersTests testAHardFlickAtTheEndsNeverCrossesTheEnd] : XCTAssertTrue failed - 1→2: never past the end (2.039357592256003)
