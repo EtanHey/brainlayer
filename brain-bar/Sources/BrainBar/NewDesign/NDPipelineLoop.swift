@@ -561,15 +561,22 @@ enum NDPipelineLayout {
     /// further right. The knock-out of "Search answers" ends here, so no open panel's edge ever cuts through it (R13).
     static var answersClearEdge: CGFloat { purposeRect(.jobs)?.maxX ?? .greatestFiniteMagnitude }
 
-    /// Each caption's words box: its line box centred on its line, horizontally centred on the line's straight run. The
-    /// return line's caption moves left of that centre only as far as the job panels force it (`answersClearEdge`).
+    /// The one column both route captions share, so they read as a pair: the middle of their straight runs, moved left
+    /// only as far as the job panels force "Search answers" (its knock-out ends at `answersClearEdge`).
+    static var laneLabelColumn: CGFloat {
+        let mids = laneLabels.map { straightRun($0.pipe) }.map { ($0.start.x + $0.end.x) / 2 }
+        let answers = textWidth(Say.searchAnswers, size: 11, weight: .medium)
+        return min(mids.min() ?? 0, answersClearEdge - laneLabelKnockoutPad - answers / 2)
+    }
+
+    /// Each caption's words box: its line box centred on its own line, horizontally centred on the shared column.
     static func laneLabelRects() -> [(String, CGRect)] {
-        laneLabels.map { words, pipe in
+        let x = laneLabelColumn
+        return laneLabels.map { words, pipe in
             let run = straightRun(pipe)
-            var centre = CGPoint(x: (run.start.x + run.end.x) / 2, y: (run.start.y + run.end.y) / 2)
+            let y = (run.start.y + run.end.y) / 2
             let w = textWidth(words, size: 11, weight: .medium), h = laneLabelLineHeight
-            if pipe == .answers { centre.x = min(centre.x, answersClearEdge - laneLabelKnockoutPad - w / 2) }
-            return (words, CGRect(x: centre.x - w / 2, y: centre.y - h / 2, width: w, height: h))
+            return (words, CGRect(x: x - w / 2, y: y - h / 2, width: w, height: h))
         }
     }
 

@@ -26,14 +26,14 @@ import XCTest
 
     static let captions: [(String, NDPipe)] = [(Say.sessionBackups, .rail), (Say.searchAnswers, .answers)]
 
-    /// Where each caption's centre belongs: the middle of its straight run. The return line's caption gives way only as far
-    /// as the job panels force: Nightly check-up's panel (its arrow included) opens beside its purpose line and crosses the
-    /// return line, so the knock-out of "Search answers" may end no further right than that line ends.
+    /// Where both captions' centres belong, one shared column so they read as a pair: the middle of their straight runs,
+    /// moved left only as far as the job panels force. Nightly check-up's panel (its arrow included) opens beside its
+    /// purpose line and crosses the return line, so the knock-out of "Search answers" may end no further right than that
+    /// line ends.
     static func expectedMidX(_ words: String, _ pipe: NDPipe) throws -> CGFloat {
-        let run = try run(pipe), mid = (run.start.x + run.end.x) / 2
-        guard pipe == .answers else { return mid }
+        let mids = try captions.map { try run($0.1) }.map { ($0.start.x + $0.end.x) / 2 }
         let edge = try XCTUnwrap(L.purposeRect(.jobs)).maxX
-        return min(mid, edge - 6 - L.textWidth(words, size: 11, weight: .medium) / 2)
+        return min(mids.min() ?? 0, edge - 6 - L.textWidth(Say.searchAnswers, size: 11, weight: .medium) / 2)
     }
 
     /// The knock-out the brief asks for: 6 pt past the words on each side, 16 pt tall, centred on the words.
@@ -41,17 +41,20 @@ import XCTest
         CGRect(x: words.minX - 6, y: words.midY - 8, width: words.width + 12, height: 16)
     }
 
-    /// Layout: each caption's centre lies on its own line segment within 0.5 pt, at the middle of its straight run (the
-    /// return line's only as far left of it as the job panels force).
+    /// Layout: each caption's centre lies on its own line segment within 0.5 pt, and both share one column (x 348 today:
+    /// the runs' middle, moved left only as far as the job panels force), so they align vertically.
     func testEachCaptionIsCentredOnItsOwnLine() throws {
         let rects = Dictionary(uniqueKeysWithValues: L.laneLabelRects())
         XCTAssertEqual(rects.count, 2)
+        let top = try XCTUnwrap(rects[Say.sessionBackups]), bottom = try XCTUnwrap(rects[Say.searchAnswers])
+        XCTAssertEqual(top.midX, bottom.midX, accuracy: 0.01, "the two route captions share one column")
+        XCTAssertEqual(top.midX, 348, accuracy: 0.5, "the shared column is the forced Search answers centre")
         for (words, pipe) in Self.captions {
             let rect = try XCTUnwrap(rects[words], words)
             let run = try Self.run(pipe)
             XCTAssertEqual(run.start.y, run.end.y, "\(words): its run is horizontal")
             XCTAssertEqual(rect.midY, run.start.y, accuracy: 0.5, "\(words): the line passes through the words' centre")
-            XCTAssertEqual(rect.midX, try Self.expectedMidX(words, pipe), accuracy: 0.5, "\(words): centred on the straight run")
+            XCTAssertEqual(rect.midX, try Self.expectedMidX(words, pipe), accuracy: 0.5, "\(words): on the shared column")
             XCTAssertGreaterThan(rect.minX, min(run.start.x, run.end.x) + 16, "\(words): the line shows on its left")
             XCTAssertLessThan(rect.maxX, max(run.start.x, run.end.x) - 16, "\(words): the line shows on its right")
         }
