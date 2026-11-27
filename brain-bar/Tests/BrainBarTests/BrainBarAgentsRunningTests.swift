@@ -251,4 +251,110 @@ import XCTest
         let snapshot = AgentActivityMonitor(snapshotProvider: { nil }, executablePathResolver: { _ in nil }).sample()
         XCTAssertTrue(AgentHarness.allCases.allSatisfy { snapshot.running.count($0) == nil })
     }
+    // MARK: Cursor pass on 96c61fd8 (K1-K5)
+
+    /// K1: a list that fills its buffer may be cut short: read again bigger, and give up as unknown, never a short list.
+    func testAFullFDListIsReadAgainAndNeverReturnedCutShort() {
+        var calls = 0
+        let alwaysFull: AgentTranscriptActivity.ListFDs = { _, buffer, bytes in
+            if buffer == nil { return 64 * Int32(MemoryLayout<proc_fdinfo>.stride) }
+            calls += 1
+            buffer?.initializeMemory(as: UInt8.self, repeating: 0, count: Int(bytes))
+            return bytes
+        }
+        XCTAssertNil(AgentTranscriptActivity.openFilePaths(getpid(), listFDs: alwaysFull))
+        XCTAssertEqual(calls, AgentTranscriptActivity.listRetries)
+
+        var sizes: [Int32] = []
+        let fullOnce: AgentTranscriptActivity.ListFDs = { _, buffer, bytes in
+            if buffer == nil { return 64 * Int32(MemoryLayout<proc_fdinfo>.stride) }
+            sizes.append(bytes)
+            buffer?.initializeMemory(as: UInt8.self, repeating: 0, count: Int(bytes))  // fd type 0: not a file
+            return sizes.count == 1 ? bytes : bytes / 2
+        }
+        XCTAssertEqual(AgentTranscriptActivity.openFilePaths(getpid(), listFDs: fullOnce), [])
+        XCTAssertEqual(sizes.count, 2)
+        XCTAssertEqual(sizes[1], sizes[0] * 2, "read again into a buffer twice the size")
+    }
+
+    /// K2: a new file is read within the sample's budget and resumed on the next; until it is caught up, unknown.
+    func testALargeNewRolloutIsUnknownUntilCaughtUp() throws {
+        let filler = #"{"type":"response_item","payload":{"type":"message","text":"\#(String(repeating: "z", count: 4000))"}}"#
+        let lines = [event("task_started")] + Array(repeating: filler, count: 5000) + [event("task_complete")]
+        let path = try rollout(71, lines: lines)
+        let size = try XCTUnwrap(FileManager.default.attributesOfItem(atPath: path)[.size] as? Int)
+        XCTAssertGreaterThan(size, 2 * AgentTranscriptActivity.CodexTurnTracker.defaultSampleBudget)
+        let t = tracker([1: [path]])
+        var samples: [Int?] = []
+        for _ in 0..<(size / AgentTranscriptActivity.CodexTurnTracker.defaultSampleBudget + 1) {
+            samples.append(t.runningThreads(hosts: [1]))
+        }
+        XCTAssertEqual(samples.dropLast(), Array(repeating: nil, count: samples.count - 1), "unknown while catching up")
+        XCTAssertEqual(samples.last, 0, "caught up: the turn completed")
+        // Another held thread is still proven while the big one catches up? No: the harness stays unknown until then.
+        let small = try rollout(72, lines: [event("task_started")])
+        let big = try rollout(73, lines: lines)
+        let u = tracker([1: [small, big]])
+        XCTAssertNil(u.runningThreads(hosts: [1]))
+    }
+
+    /// K3: failed samples never grow the kept state beyond what live hosts hold.
+    func testFailedSamplesDoNotGrowTheKeptState() throws {
+        let unreadable = try rollout(80, lines: [event("task_started")])
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: unreadable)
+        let paths = try (81...90).map { try rollout($0, lines: [event("task_started")]) }
+        final class Tick: @unchecked Sendable { var n = 0 }
+        let tick = Tick()
+        let t = AgentTranscriptActivity.CodexTurnTracker(openFiles: { pid in
+            pid == 1 ? [paths[tick.n % paths.count], unreadable] : nil
+        })
+        for n in 0..<paths.count {
+            tick.n = n
+            XCTAssertNil(t.runningThreads(hosts: [1]), "one held file is unreadable")
+            XCTAssertLessThanOrEqual(t.trackedFiles, 2, "only what is held now")
+        }
+        tick.n = 0
+        XCTAssertNil(t.runningThreads(hosts: [1, 2]), "the second host cannot be listed")
+        XCTAssertLessThanOrEqual(t.trackedFiles, 2)
+    }
+
+    /// K4: the same path holding a different file starts over, whether it was replaced, rewritten in place or shrank.
+    func testAReplacedFileAtTheSamePathStartsOver() throws {
+        let path = try rollout(91, lines: [event("task_started")])
+        let t = tracker([1: [path]])
+        XCTAssertEqual(t.runningThreads(hosts: [1]), 1)
+        // Replaced: a new file renamed over the old one (a new inode), longer than what was read.
+        let uuid = String(format: "00000000-0000-7000-8000-%012d", 91)
+        let replaced = [meta(uuid, originator: "T3 Code", subagent: false), event("task_started"), event("task_complete"),
+                        event("task_started"), event("task_complete")].map { $0 + "\n" }.joined()
+        try replaced.write(toFile: path, atomically: true, encoding: .utf8)
+        XCTAssertEqual(t.runningThreads(hosts: [1]), 0)
+        // Rewritten in place (same inode), at least as long, its first bytes changed.
+        let handle = try XCTUnwrap(FileHandle(forWritingAtPath: path))
+        let rewritten = [meta(uuid, originator: "Codex Desktop", subagent: false), event("task_started"),
+                         event("task_started"), event("task_started"), event("task_started")].map { $0 + "\n" }.joined()
+        try handle.truncate(atOffset: 0)
+        try handle.write(contentsOf: Data(rewritten.utf8))
+        try handle.close()
+        XCTAssertEqual(t.runningThreads(hosts: [1]), 1)
+        // Shrunk below what was read: read again from the start.
+        try ([meta(uuid, originator: "T3 Code", subagent: false), event("task_started"), event("task_complete")]
+            .map { $0 + "\n" }.joined()).write(toFile: path, atomically: false, encoding: .utf8)
+        XCTAssertEqual(t.runningThreads(hosts: [1]), 0)
+    }
+
+    /// K5: a complete session record whose originator cannot be read is unknown, never hosted.
+    func testAnUnreadableSessionRecordIsUnknown() throws {
+        let dir = home.appendingPathComponent(".codex/sessions/2026/11/28", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let path = dir.appendingPathComponent("rollout-2026-11-28T00-00-00-00000000-0000-7000-8000-000000000095.jsonl").path
+        try (#"{"type":"session_meta","payload":{"id":"x","originator":"# + "\n" + event("task_started") + "\n")
+            .write(toFile: path, atomically: true, encoding: .utf8)
+        XCTAssertNil(tracker([1: [path]]).runningThreads(hosts: [1]))
+        // A sub-agent record is known (not hosted) even when the rest of it does not parse.
+        let sub = dir.appendingPathComponent("rollout-2026-11-28T00-00-00-00000000-0000-7000-8000-000000000096.jsonl").path
+        try (#"{"type":"session_meta","payload":{"source":{"subagent":"review"},"id":"#  + "\n" + event("task_started") + "\n")
+            .write(toFile: sub, atomically: true, encoding: .utf8)
+        XCTAssertEqual(tracker([1: [sub]]).runningThreads(hosts: [1]), 0)
+    }
 }

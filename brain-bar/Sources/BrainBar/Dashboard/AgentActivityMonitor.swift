@@ -221,7 +221,7 @@ final class AgentActivityMonitor: Sendable {
     }
 
     /// #1899 R2: read on every sample (no cache): the hosts' open files, then only what each held rollout appended since.
-    private static let liveCodexTurns = AgentTranscriptActivity.CodexTurnTracker(openFiles: AgentTranscriptActivity.openFilePaths)
+    private static let liveCodexTurns = AgentTranscriptActivity.CodexTurnTracker(openFiles: { AgentTranscriptActivity.openFilePaths($0) })
 
     func sample() -> AgentActivitySnapshot {
         guard let snapshot = snapshotProvider() else { return .unavailable("ps capture failed") }

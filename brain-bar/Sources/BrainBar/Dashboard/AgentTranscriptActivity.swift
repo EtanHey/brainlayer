@@ -156,48 +156,84 @@ enum AgentTranscriptActivity {
     /// nothing, so its orphaned thread is not counted while another (or a restarted) server lives. Two live servers each
     /// own the files they hold; a file held by both counts once. (2) is read incrementally per file, from the file's start,
     /// so no record is ever cut by a tail window (R3).
-    /// Anything not measured makes the whole count nil (unknown): a host whose open files cannot be listed, a held rollout
-    /// that cannot be opened or read, a session record that cannot be read, or a marker line that does not parse (R1).
+    /// Anything not proven makes the whole count nil (unknown): a host whose open files cannot be listed, a held rollout
+    /// that cannot be opened or read, a session record whose originator cannot be read (K5), a marker line that does not
+    /// parse, or a file still being caught up (K2).
     final class CodexTurnTracker: @unchecked Sendable {
         enum Turn: Equatable { case none, started, finished, unknown }
+        /// What the session record (the first line) says: not complete yet, a hosted thread, not one, or unreadable.
+        enum Kind: Equatable { case pending, hosted, notHosted, unknown }
+
+        /// K4: a file is the same file while the open fd's device, inode and birth time match and its first bytes are
+        /// the ones read before. A replaced file, a reused inode or an in-place rewrite starts over.
+        struct Identity: Equatable {
+            var device: UInt64
+            var inode: UInt64
+            var born: timespec
+
+            static func == (a: Identity, b: Identity) -> Bool {
+                a.device == b.device && a.inode == b.inode && a.born.tv_sec == b.born.tv_sec && a.born.tv_nsec == b.born.tv_nsec
+            }
+        }
 
         private struct Entry {
-            var file: UInt64   // the file's id: a replaced file starts over
-            var offset: UInt64 // the end of the last complete line read
-            var turn: Turn
-            var hosted: Bool   // a top-level thread from a hosted originator
+            var identity: Identity
+            var head = Data()      // the first `headLength` bytes read, compared on every sample (K4)
+            var offset: UInt64 = 0 // bytes consumed: complete lines read, plus `pending`
+            var pending = Data()   // a line still without its newline, carried to the next read (K2)
+            var turn: Turn = .none
+            var kind: Kind = .pending
+            var caughtUp = false   // every byte up to the size measured this sample is consumed
         }
 
         private let lock = NSLock()
         private var entries: [String: Entry] = [:]
         private let openFiles: @Sendable (Int32) -> [String]?
-        /// Bytes read per call: the read is bounded by the size measured first, so appends during it wait for the next.
+        private let sampleBudget: Int
+        /// Bytes per read.
         static let chunk = 1 << 20
+        /// K2: bytes read per sample, across every held file; a file further behind resumes on the next sample.
+        static let defaultSampleBudget = 8 << 20
+        static let headLength = 256
 
-        init(openFiles: @escaping @Sendable (Int32) -> [String]?) {
+        init(openFiles: @escaping @Sendable (Int32) -> [String]?, sampleBudget: Int = defaultSampleBudget) {
             self.openFiles = openFiles
+            self.sampleBudget = sampleBudget
+        }
+
+        /// Files whose state is kept (K3: only the ones a live host held at the last sample).
+        var trackedFiles: Int {
+            lock.lock()
+            defer { lock.unlock() }
+            return entries.count
         }
 
         func runningThreads(hosts: [Int32]) -> Int? {
             lock.lock()
             defer { lock.unlock() }
             var held: Set<String> = []
+            // K3: whatever happens below, keep state only for files a live host holds.
+            defer { entries = entries.filter { held.contains($0.key) } }
             for pid in hosts {
                 guard let files = openFiles(pid) else { return nil }
                 held.formUnion(files.filter(Self.isRollout))
             }
+            var budget = sampleBudget
+            var proven = true
             var running: Set<String> = []
-            for path in held {
-                guard let entry = advance(path) else { return nil }
-                guard entry.hosted else { continue }
-                switch entry.turn {
-                case .started: running.insert(AgentTranscriptActivity.sessionID(URL(fileURLWithPath: path)))
-                case .none, .finished: continue
-                case .unknown: return nil
+            for path in held.sorted() {
+                guard let entry = advance(path, budget: &budget), entry.caughtUp else {
+                    proven = false  // unreadable, or still catching up: keep reading the others
+                    continue
+                }
+                switch (entry.kind, entry.turn) {
+                case (.pending, _), (.notHosted, _): continue
+                case (.unknown, _), (.hosted, .unknown): proven = false
+                case (.hosted, .started): running.insert(AgentTranscriptActivity.sessionID(URL(fileURLWithPath: path)))
+                case (.hosted, .none), (.hosted, .finished): continue
                 }
             }
-            entries = entries.filter { held.contains($0.key) }  // forget files no live host holds
-            return running.count
+            return proven ? running.count : nil
         }
 
         static func isRollout(_ path: String) -> Bool {
@@ -205,45 +241,51 @@ enum AgentTranscriptActivity {
             return name.hasPrefix("rollout-") && name.hasSuffix(".jsonl")
         }
 
-        /// Reads what was appended since the last call (from the start for a new or replaced file); nil when unreadable.
-        private func advance(_ path: String) -> Entry? {
-            guard let attributes = try? FileManager.default.attributesOfItem(atPath: path),
-                  let size = (attributes[.size] as? NSNumber)?.uint64Value,
-                  let file = (attributes[.systemFileNumber] as? NSNumber)?.uint64Value else { return nil }
-            var entry = entries[path].flatMap { $0.file == file && $0.offset <= size ? $0 : nil }
-            if entry == nil {
-                guard let probe = FileHandle(forReadingAtPath: path) else { return nil }
-                try? probe.close()
-                let first = AgentTranscriptActivity.codexFirstLine(URL(fileURLWithPath: path))
-                // Its session record is not written yet: nothing has started (asked again next time).
-                if UInt64(first.count) >= size { return Entry(file: file, offset: 0, turn: .none, hosted: false) }
-                let subagent = first.range(of: AgentTranscriptActivity.codexSubagentMarker) != nil
-                let own = AgentTranscriptActivity.codexOriginator(first).map(codexOwnProcessOriginators.contains) ?? false
-                entry = Entry(file: file, offset: 0, turn: .none, hosted: !subagent && !own)
-            }
-            guard var next = entry else { return nil }
-            if next.offset < size {
-                guard let handle = FileHandle(forReadingAtPath: path) else { return nil }
-                defer { try? handle.close() }
-                guard (try? handle.seek(toOffset: next.offset)) != nil else { return nil }
-                var pending = Data()
-                var position = next.offset
-                while position < size {
-                    guard let data = try? handle.read(upToCount: Int(min(UInt64(Self.chunk), size - position))),
-                          !data.isEmpty else { return nil }
-                    position += UInt64(data.count)
-                    pending.append(data)
-                    // Complete lines only; a partial last line waits for its newline.
-                    guard let lastNewline = pending.lastIndex(of: UInt8(ascii: "\n")) else { continue }
-                    let complete = pending[pending.startIndex..<lastNewline]
-                    for line in complete.split(separator: UInt8(ascii: "\n")) { next.turn = Self.turn(after: next.turn, line: line) }
-                    let consumed = UInt64(lastNewline - pending.startIndex + 1)
-                    next.offset += consumed
-                    pending = Data(pending[(lastNewline + 1)...])
+        /// Reads, within `budget`, what the file gained since the last sample (from the start for a new or different
+        /// file); nil when it cannot be opened, measured or read.
+        private func advance(_ path: String, budget: inout Int) -> Entry? {
+            // K4: open first, then measure the open file, so the bytes read are the bytes measured.
+            let fd = open(path, O_RDONLY | O_CLOEXEC)
+            guard fd >= 0 else { return nil }
+            let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
+            var st = stat()
+            guard fstat(fd, &st) == 0 else { return nil }
+            let size = UInt64(max(0, st.st_size))
+            let identity = Identity(device: UInt64(UInt32(bitPattern: st.st_dev)), inode: UInt64(st.st_ino), born: st.st_birthtimespec)
+            var next = Entry(identity: identity)
+            if let kept = entries[path], kept.identity == identity, kept.offset <= size {
+                if kept.head.isEmpty { next = kept } else {
+                    guard (try? handle.seek(toOffset: 0)) != nil, let head = try? handle.read(upToCount: kept.head.count) else { return nil }
+                    if head == kept.head { next = kept }
                 }
             }
+            while next.offset < size, budget > 0 {
+                let want = Int(min(UInt64(Self.chunk), size - next.offset, UInt64(budget)))
+                guard (try? handle.seek(toOffset: next.offset)) != nil,
+                      let data = try? handle.read(upToCount: want), !data.isEmpty else { return nil }
+                budget -= data.count
+                if next.head.count < Self.headLength, next.offset == UInt64(next.head.count) {
+                    next.head.append(data.prefix(Self.headLength - next.head.count))
+                }
+                next.offset += UInt64(data.count)
+                next.pending.append(data)
+                guard let lastNewline = next.pending.lastIndex(of: UInt8(ascii: "\n")) else { continue }
+                for line in next.pending[next.pending.startIndex..<lastNewline].split(separator: UInt8(ascii: "\n"),
+                                                                                     omittingEmptySubsequences: false) {
+                    if next.kind == .pending { next.kind = Self.kind(line) } else { next.turn = Self.turn(after: next.turn, line: line) }
+                }
+                next.pending = Data(next.pending[(lastNewline + 1)...])
+            }
+            next.caughtUp = next.offset == size
             entries[path] = next
             return next
+        }
+
+        /// K5: the session record decides the kind; one whose originator cannot be read is unknown, never hosted.
+        static func kind(_ line: Data.SubSequence) -> Kind {
+            if line.range(of: AgentTranscriptActivity.codexSubagentMarker) != nil { return .notHosted }
+            guard let originator = AgentTranscriptActivity.codexOriginator(Data(line)) else { return .unknown }
+            return codexOwnProcessOriginators.contains(originator) ? .notHosted : .hosted
         }
 
         private static let markers = ["task_started", "task_complete", "turn_aborted"].map { Data("\"type\":\"\($0)\"".utf8) }
@@ -262,29 +304,47 @@ enum AgentTranscriptActivity {
         }
     }
 
+    /// The kernel's fd list call, `proc_pidinfo(pid, PROC_PIDLISTFDS, …)`: bytes written, or ≤ 0 on failure.
+    typealias ListFDs = (_ pid: Int32, _ buffer: UnsafeMutableRawPointer?, _ bytes: Int32) -> Int32
+    static func kernelListFDs(_ pid: Int32, _ buffer: UnsafeMutableRawPointer?, _ bytes: Int32) -> Int32 {
+        proc_pidinfo(pid, PROC_PIDLISTFDS, 0, buffer, bytes)
+    }
+    static let listRetries = 4
+
     /// The paths of the files a live process holds open, from the kernel (`proc_pidinfo` / `proc_pidfdinfo`); nil when the
-    /// list cannot be read. An fd closed between the list and its read is skipped; any other failure is nil.
-    static func openFilePaths(_ pid: Int32) -> [String]? {
-        let needed = proc_pidinfo(pid, PROC_PIDLISTFDS, 0, nil, 0)
+    /// list cannot be read whole. K1: a list that fills its buffer may be cut short, so it is read again into a buffer
+    /// twice the size, at most `listRetries` times, then nil. An fd closed between the list and its read is skipped; any
+    /// other failure is nil.
+    static func openFilePaths(_ pid: Int32, listFDs: ListFDs = kernelListFDs) -> [String]? {
+        let needed = listFDs(pid, nil, 0)
         guard needed > 0 else { return nil }
         let stride = MemoryLayout<proc_fdinfo>.stride
-        var fds = [proc_fdinfo](repeating: proc_fdinfo(), count: Int(needed) / stride + 32)
-        let used = fds.withUnsafeMutableBytes { proc_pidinfo(pid, PROC_PIDLISTFDS, 0, $0.baseAddress, Int32($0.count)) }
-        guard used > 0 else { return nil }
-        var paths: [String] = []
-        for fd in fds.prefix(Int(used) / stride) where fd.proc_fdtype == UInt32(PROX_FDTYPE_VNODE) {
-            var info = vnode_fdinfowithpath()
-            let size = Int32(MemoryLayout<vnode_fdinfowithpath>.size)
-            let got = proc_pidfdinfo(pid, fd.proc_fd, PROC_PIDFDVNODEPATHINFO, &info, size)
-            if got != size {
-                if errno == EBADF { continue }
-                return nil
+        var capacity = Int(needed) / stride + 32
+        for _ in 0..<listRetries {
+            var fds = [proc_fdinfo](repeating: proc_fdinfo(), count: capacity)
+            let bytes = Int32(capacity * stride)
+            let used = fds.withUnsafeMutableBytes { listFDs(pid, $0.baseAddress, bytes) }
+            guard used > 0 else { return nil }
+            guard used < bytes else {
+                capacity *= 2
+                continue
             }
-            let path = withUnsafeBytes(of: &info.pvip.vip_path) { raw in
-                String(cString: raw.bindMemory(to: CChar.self).baseAddress!)
+            var paths: [String] = []
+            for fd in fds.prefix(Int(used) / stride) where fd.proc_fdtype == UInt32(PROX_FDTYPE_VNODE) {
+                var info = vnode_fdinfowithpath()
+                let size = Int32(MemoryLayout<vnode_fdinfowithpath>.size)
+                let got = proc_pidfdinfo(pid, fd.proc_fd, PROC_PIDFDVNODEPATHINFO, &info, size)
+                if got != size {
+                    if errno == EBADF { continue }
+                    return nil
+                }
+                let path = withUnsafeBytes(of: &info.pvip.vip_path) { raw in
+                    String(cString: raw.bindMemory(to: CChar.self).baseAddress!)
+                }
+                paths.append(path)
             }
-            paths.append(path)
+            return paths
         }
-        return paths
+        return nil
     }
 }
