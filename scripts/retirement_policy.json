@@ -112,6 +112,16 @@
         "target": "subprocess.SubprocessError"
       }
     },
+    "05657fea4de73eb9e1a3b8b80ae04133f531ed4a1a94d7d6c80047f559330393": {
+      "non_cloud_purpose": "Local cask recovery and identity verification only: bounded launchctl, ps/lsof vnode inspection, or supervised installed activation CLI; no cloud/enrichment sender. src/brainlayer/brainbar_auto_activation.py subprocess.run",
+      "site": {
+        "call_sha256": "c7fd474aa226faf574ca49abd297cb1ae78f34a4db04c7e75af827623e8d4996",
+        "kind": "child_process",
+        "owner": "<module>.AutoActivator._tick_with_custody",
+        "path": "src/brainlayer/brainbar_auto_activation.py",
+        "target": "subprocess.run"
+      }
+    },
     "062e096a44e8f63c1d329c9ec3500133905d9747ed03d5afac4e26d632cc13c4": {
       "non_cloud_purpose": "Private retirement build/probe/validation harness; positive controls are blocked before sending",
       "site": {
@@ -470,6 +480,16 @@
         "owner": "<module>",
         "path": "src/brainlayer/backup_daily.py",
         "target": "requests.ConnectionError"
+      }
+    },
+    "1685e19bff63a12f672c1c39e260030fba54e29dba2fd240bd23f7eed95a77ad": {
+      "non_cloud_purpose": "Local cask recovery and identity verification only: bounded launchctl, ps/lsof vnode inspection, or supervised installed activation CLI; no cloud/enrichment sender. src/brainlayer/brainbar_auto_activation.py subprocess.SubprocessError",
+      "site": {
+        "call_sha256": "cc683a58fabd9cf77fdd68bfe74e2a582706ccd4edb71e3d47fa4b6254b91911",
+        "kind": "callable_reference",
+        "owner": "<module>.AutoActivator._tick_with_custody",
+        "path": "src/brainlayer/brainbar_auto_activation.py",
+        "target": "subprocess.SubprocessError"
       }
     },
     "1699bc9f7f227cf52e3b895480f6355658fbdb645e6f5519473c5a18e7b539dc": {
@@ -3102,16 +3122,6 @@
         "target": "sqlite3.connect"
       }
     },
-    "716a46f8417012142374a6948ce754716e2bf7d6a4a532ad5396dd57fe171ba3": {
-      "non_cloud_purpose": "Local cask recovery and identity verification only: bounded launchctl, ps/lsof vnode inspection, or supervised installed activation CLI; no cloud/enrichment sender. src/brainlayer/brainbar_auto_activation.py subprocess.SubprocessError",
-      "site": {
-        "call_sha256": "cc683a58fabd9cf77fdd68bfe74e2a582706ccd4edb71e3d47fa4b6254b91911",
-        "kind": "callable_reference",
-        "owner": "<module>.AutoActivator._tick",
-        "path": "src/brainlayer/brainbar_auto_activation.py",
-        "target": "subprocess.SubprocessError"
-      }
-    },
     "726262acac34f424fcb85e0ba8e0479aee90e9b3ed2f7a24ce5158c8d623bd4b": {
       "non_cloud_purpose": "Google Drive OAuth refresh transport wrapper: delegates the existing token request to google-auth and observes only successful token lifetime metadata; no LLM enrichment or model sender.",
       "site": {
@@ -3250,14 +3260,6 @@
         "owner": "<module>.collapse_archive_representations",
         "path": "src/brainlayer/archive_collapse.py",
         "target": "sqlite3.connect"
-      }
-    },
-    "758a4e46f2438c45a638722da9accefd8ddeb24f1c512d497ce9caa50dfd2412": {
-      "non_cloud_purpose": "Homebrew release updater: inherited local file-lock custody through supervisor/installer lifetime and the exec handoff to the new keg helper; stops BrainBar locally (launchctl bootout, SIGTERM/SIGKILL by bundle path) before pinned install, local codesign/Gatekeeper checks and recovery; no model transport.",
-      "site": {
-        "body_sha256": "0ccbdfa4d065cbf9246dafa16d95b8b658ea5f0419d683723e7c5893b9402149",
-        "kind": "non_python_source",
-        "path": "scripts/brainbar-update.sh"
       }
     },
     "7682ed1b976e3e3a13acb5b7d1ff74a6a4da858dc7d3e9da1c5a6210a8fafb84": {
@@ -4242,16 +4244,6 @@
         "owner": "<module>._fetch_json3_transcript",
         "path": "scripts/index_youtube.py",
         "target": "urllib.request.urlopen"
-      }
-    },
-    "9bb7c8dd294384c2ea364f8c63bbb48660c26aea96ff9cbec7e008ac62de9248": {
-      "non_cloud_purpose": "Local cask recovery and identity verification only: one bounded /bin/ps -o command= -p <pid> to confirm the update.lock owner is still the in-app updater before deferring activation; no cloud/enrichment sender. src/brainlayer/brainbar_auto_activation.py process_command subprocess.Popen",
-      "site": {
-        "call_sha256": "c35db0d474c7a7f354e4e9b1f041b3af00ed8bd4a8e65db7ba8d509d2faf5c1a",
-        "kind": "child_process",
-        "owner": "<module>.process_command",
-        "path": "src/brainlayer/brainbar_auto_activation.py",
-        "target": "subprocess.Popen"
       }
     },
     "9bd0c3c4b2634f14d17a31e7cee191815de37091912f59a7efc146679cd94663": {
@@ -5652,16 +5644,6 @@
         "target": "import importlib"
       }
     },
-    "c6723bf2f56a30f5d8450891c0452e7a5888941f74d4585e3a1fcc1a77926ef9": {
-      "non_cloud_purpose": "Local cask recovery and identity verification only: bounded launchctl, ps/lsof vnode inspection, or supervised installed activation CLI; no cloud/enrichment sender. src/brainlayer/brainbar_auto_activation.py subprocess.run",
-      "site": {
-        "call_sha256": "c7fd474aa226faf574ca49abd297cb1ae78f34a4db04c7e75af827623e8d4996",
-        "kind": "child_process",
-        "owner": "<module>.AutoActivator._tick",
-        "path": "src/brainlayer/brainbar_auto_activation.py",
-        "target": "subprocess.run"
-      }
-    },
     "c6a3ff5efc8d88d4b732100301298b1f6bd76d3351ea8073331feb71627892e4": {
       "non_cloud_purpose": "Local SQLite writer barrier and private APFS clone recovery only; no network or model sender.",
       "site": {
@@ -6040,16 +6022,6 @@
         "owner": "<module>",
         "path": "src/brainlayer/pipeline/semantic_style.py",
         "target": "import importlib.util as _importlib_util"
-      }
-    },
-    "d86a34fd9d5c77e692dec67649bcf50b1ec986bdbaa9fc4d0f69a8bd113bd622": {
-      "non_cloud_purpose": "Local process-scan exception classification only; kills the bounded ps child on subprocess.TimeoutExpired, which the monitor counts as an inspection timeout; no network transport or cloud model. Site: src/brainlayer/brainbar_auto_activation.py <module>.process_command subprocess.TimeoutExpired.",
-      "site": {
-        "call_sha256": "1b7cb65a24712b797899490ddf718930caed0e6c3b88de8205b76493ee49027d",
-        "kind": "callable_reference",
-        "owner": "<module>.process_command",
-        "path": "src/brainlayer/brainbar_auto_activation.py",
-        "target": "subprocess.TimeoutExpired"
       }
     },
     "d86e7eb6ae85d044634d31012fb19c7630b0bceba2d94580aca2809f640dab81": {
@@ -6460,6 +6432,14 @@
         "owner": "<module>.merged_sha",
         "path": "scripts/golems_approve_release.py",
         "target": "subprocess.run"
+      }
+    },
+    "e94454718235da54d856f13a74ec650cd3b35c90e0de07ead6557fa168da71f2": {
+      "non_cloud_purpose": "Homebrew release updater: inherited local file-lock custody through supervisor/installer lifetime and the exec handoff to the new keg helper; stops BrainBar locally (launchctl bootout, SIGTERM/SIGKILL by bundle path) before pinned install, local codesign/Gatekeeper checks and recovery; no model transport.",
+      "site": {
+        "body_sha256": "49fc41a5f80243075f8897eb20d6deeda5f4bcf90d2240f462243f71bbf56ad5",
+        "kind": "non_python_source",
+        "path": "scripts/brainbar-update.sh"
       }
     },
     "e99e49be5ae8608284a32a6996ca8c6f830a95fc18d4d96051a562828dc9689e": {

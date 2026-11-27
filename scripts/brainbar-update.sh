@@ -74,38 +74,53 @@ MUTATED=0
 BACKUP=""
 SAVED=""
 STOPPED=0
+UNKNOWN=0
 FAILURE=""
 state() { printf '%s\n%s\n%s\n' "$OP" "$1" "${2:-}" > "$ROOT/update-state.new"; mv "$ROOT/update-state.new" "$ROOT/update-state"; }
 cleanup() { rm -f "$LOCK/pid" "$LOCK/operation" "$LOCK/formula.json" "$LOCK/cask.json"; rmdir "$LOCK"; }
-# A BrainBar process is one running an executable inside the bundle, found before the bundle moves.
+# A BrainBar process is one whose executable (argv[0], as launchd starts it) is inside the bundle;
+# a process that only names a bundle path in a later argument (tail, codesign, grep) is not.
 app_pids() {
   # The prefix travels in the environment: macOS awk rewrites its argv, so an argument would match awk itself.
   ps -axo pid=,command= | BRAINBAR_EXE_PREFIX="$APP/Contents/MacOS/" awk '
-    {p = ENVIRON["BRAINBAR_EXE_PREFIX"]; c = $0; sub(/^ *[0-9]+ +/, "", c)} index(c, p) == 1 || index(c, " " p) {print $1}'
+    {p = ENVIRON["BRAINBAR_EXE_PREFIX"]; c = $0; sub(/^ *[0-9]+ +/, "", c)} index(c, p) == 1 {print $1}'
 }
+# Every scan's exit status counts: an unknown process state never permits a bundle move.
+scan() { pids=$(app_pids) || { UNKNOWN=1; echo 'Could not list processes; BrainBar state is unknown' >&2; return 1; }; }
 # Stop BrainBar ourselves: Homebrew's AppleScript quit needs Automation access a launchd job never has.
 stop_brainbar() {
-  local label pids deadline
+  local label rc deadline
   STOPPED=1
   for label in $LABELS; do
-    if launchctl print "gui/$(id -u)/$label" >/dev/null 2>&1; then
+    rc=0
+    launchctl print "gui/$(id -u)/$label" >/dev/null 2>&1 || rc=$?
+    if [ "$rc" = 0 ]; then
       launchctl bootout "gui/$(id -u)/$label" || { echo "Could not unload $label" >&2; return 1; }
+    elif [ "$rc" != 113 ]; then
+      UNKNOWN=1; echo "Could not inspect $label (launchctl $rc)" >&2; return 1
     fi
   done
-  pids=$(app_pids)
+  scan || return 1
   [ -n "$pids" ] || return 0
   kill -TERM $pids 2>/dev/null || true
   deadline=$((SECONDS + ${BRAINBAR_UPDATE_STOP_TIMEOUT:-30}))
-  while [ -n "$(app_pids)" ]; do
-    if [ "$SECONDS" -ge "$deadline" ]; then
-      kill -KILL $(app_pids) 2>/dev/null || true
-      sleep 1
-      [ -n "$(app_pids)" ] || return 0
-      echo 'BrainBar did not exit' >&2
-      return 1
-    fi
+  while [ "$SECONDS" -lt "$deadline" ]; do
     sleep 0.2
+    scan || return 1
+    [ -n "$pids" ] || return 0
   done
+  kill -KILL $pids 2>/dev/null || true
+  sleep 1
+  scan || return 1
+  [ -n "$pids" ] || return 0
+  echo 'BrainBar did not exit' >&2
+  return 1
+}
+# A failed plist restore cannot be fixed by re-activation; say exactly how to put them back.
+restore_or_recover() {
+  restore_agents && return 0
+  state recovery-required "Restore plists: cp -p '$SAVED/com.brainlayer.brainbar.plist' '$SAVED/com.brainlayer.brainbar-daemon.plist' '$AGENTS/' then run: $CLI brainbar activate --verify --timeout 90"
+  exit 1
 }
 # The cask uninstall trashes both plists; put back the saved copy of any that postflight did not write.
 restore_agents() {
@@ -143,16 +158,20 @@ finish() {
   rc=$?
   trap - EXIT
   if [ "$rc" -ne 0 ]; then
+    if [ "$UNKNOWN" = 1 ]; then
+      state recovery-required "BrainBar process state unknown; nothing more was moved. Check ps and launchctl, then run: $CLI brainbar activate --verify --timeout 90"
+      exit 1
+    fi
     if [ -n "$BACKUP" ] && [ -d "$BACKUP" ]; then
       # Same order as the update: stop whatever runs from the replacement before moving it.
-      stop_brainbar || { state recovery-required "BrainBar did not stop. Restore $BACKUP to $APP"; exit 1; }
+      stop_brainbar || { state recovery-required "BrainBar did not stop or its state is unknown. Restore $BACKUP to $APP"; exit 1; }
       # Preserve the failed replacement rather than delete a bundle we did not create.
       if [ -e "$APP" ]; then
         failed="$ROOT/Backups.noindex/BrainBar.failed-$OP.app"
         mv "$APP" "$failed" || { state recovery-required "Restore $BACKUP to $APP"; exit 1; }
       fi
       mv "$BACKUP" "$APP" || { state recovery-required "$BACKUP"; exit 1; }
-      restore_agents || true
+      restore_or_recover
       if ! "$CLI" brainbar activate --verify --timeout 90; then
         state recovery-required "Run: $CLI brainbar activate --verify --timeout 90"
         exit 1
@@ -169,7 +188,7 @@ finish() {
       fi
     elif [ "$STOPPED" = 1 ]; then
       # Stopped but never moved: bring the untouched app back.
-      restore_agents || true
+      restore_or_recover
       if ! "$CLI" brainbar activate --verify --timeout 90; then
         state recovery-required "Run: $CLI brainbar activate --verify --timeout 90"
         exit 1

@@ -38,34 +38,45 @@ A signature failure leaves the cask and services untouched.
 
 **Stop first.** The helper stops BrainBar itself before it touches the bundle. It
 boots out `com.brainlayer.brainbar` and `com.brainlayer.brainbar-daemon`, sends
-SIGTERM to every process running an executable inside `BrainBar.app`, waits up to
+SIGTERM to every process whose executable (argv[0], as launchd starts it) is inside
+`BrainBar.app` (a process that only names a bundle path, such as `tail`, is left
+alone), waits up to
 `BRAINBAR_UPDATE_STOP_TIMEOUT` seconds (default 30), and sends SIGKILL only after
 that. It never relies on Homebrew's quit: that is an AppleScript request that needs
 Automation access, which a launchd job never has (on 24 Nov 2026 it failed with
 "did not quit", the running bundle was moved, and the M1's socket stayed down).
 The backup move happens only after every BrainBar process has exited. If the stop
-fails, the untouched app is activated again and the attempt ends `failed`.
+fails, the untouched app is activated again and the attempt ends `failed`. Every
+process scan's exit status counts: if `ps` or `launchctl print` fails, the process
+state is unknown, nothing more is moved, nothing is activated, and the attempt ends
+`recovery-required` with the activation command.
 
 **Plists.** The cask uninstall trashes both LaunchAgent plists and its postflight
 writes new ones. The helper copies both plists into
 `Backups.noindex/LaunchAgents-<operation>` before the stop and puts back any plist
 the cask did not write, so the single `brainlayer brainbar activate --verify` call
-always finds both. The copy is removed after a successful update.
+always finds both. The copy is removed after a successful update. If putting a plist
+back fails, activation cannot recreate it: the attempt ends `recovery-required`
+with the saved plist paths and the exact `cp -p … ~/Library/LaunchAgents/` and
+activation commands.
 
 **One activator.** `brainlayer brainbar activate` already serializes callers on
 `~/Library/LaunchAgents/.brainbar-activation.lock`: a manual caller waits and then
-finds the bundle running, and an automatic caller defers. The lock covers only the
-activation itself. Between the cask step and that call the helper restores plists
-and carries approval, so the formula supervisor's 5-second auto-activation tick
-also defers while `update.lock/pid` names a process whose command line is still
-the updater (`brainbar-update.sh` or an `update-<op>.sh` copy run with
-`--custody-held`). Otherwise a new build could launch before its approval is
-carried. A dead, unreadable or reused pid (the lock outlives a SIGKILL or a panic)
-never blocks the supervisor. A deferral longer than 15 minutes raises the
-`brainbar-activation-update` job alert, which clears when the deferral ends. The deferral ships in the formula. Each tick is a fresh
+finds the bundle running, and an automatic caller defers. That lock covers only the
+activation itself; between the cask step and that call the helper restores plists
+and carries approval. The formula supervisor's 5-second auto-activation tick
+therefore also takes a SHARED non-blocking flock on
+`~/Library/Application Support/BrainBar/update-custody.lock` and holds it from its
+first check until the activation child exits. While an update holds its EXCLUSIVE
+custody, the tick defers. While a tick holds the shared lock, an update cannot take
+custody: it exits 75 ("Another update owns custody") before any change, and the
+offer retries at the next check. A flock dies with its holder, so a SIGKILLed or
+panicked updater never blocks activation. A deferral longer than 15 minutes raises
+the `brainbar-activation-update` job alert, cleared when the deferral ends. The fence
+ships in the formula: each tick is a fresh
 `/opt/homebrew/opt/brainlayer/libexec/venv/bin/python -m brainlayer.brainbar_auto_activation`
 process, and the opt link points at the new keg once the helper has upgraded the
-formula. The deferral is therefore live before the cask step, with no supervisor restart.
+formula, so the fence is live before the cask step.
 
 **Approval.** After the cask step the helper runs the same gates as the release
 installer (`brainlayer-update-brainbar.sh`): `codesign --verify --deep --strict` and

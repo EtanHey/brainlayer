@@ -12,41 +12,43 @@ import pytest
 SCRIPT = Path(os.environ.get("BRAINBAR_UPDATE_SCRIPT", Path(__file__).parents[1] / "scripts/brainbar-update.sh"))
 
 
-# Shared by the fakes: a BrainBar process is any process running an executable inside the bundle.
-# The fake app ignores SIGTERM, like an app that Homebrew's AppleScript quit cannot stop.
+# Shared by the fakes. A BrainBar process is one whose argv[0] is an executable inside the bundle,
+# as launchd starts it. The fake app ignores SIGTERM (SIG_IGN survives exec), like an app that
+# Homebrew's AppleScript quit cannot stop; `exec -a` gives the real sleep binary that argv[0].
 APP_ALIVE = """
-app_alive() { /bin/ps -axo command= | /usr/bin/grep -F -- "$BRAINBAR_UPDATE_APP/Contents/MacOS/" | /usr/bin/grep -vq grep; }
+app_alive() {
+  /bin/ps -axo command= | P="$BRAINBAR_UPDATE_APP/Contents/MacOS/" /usr/bin/awk 'index($0, ENVIRON["P"]) == 1 {f = 1} END {exit !f}'
+}
 start_app() {
-  /bin/mkdir -p "$1/Contents/MacOS"
-  printf '#!/bin/bash\\ntrap "" TERM\\nwhile :; do /bin/sleep 0.05; done\\n' > "$1/Contents/MacOS/BrainBar"
-  /bin/chmod 700 "$1/Contents/MacOS/BrainBar"
-  nohup "$1/Contents/MacOS/BrainBar" >/dev/null 2>&1 &
+  nohup /bin/bash -c 'trap "" TERM; exec -a "$0" /bin/sleep 300' "$1/Contents/MacOS/BrainBar" >/dev/null 2>&1 &
   echo $!
 }
 """
+STUBBORN = 'trap "" TERM; exec -a "$0" /bin/sleep 300'
 
 
-def _alive(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    # A killed child of this test stays a zombie until reaped; ps reports it as Z.
-    state = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True).stdout.strip()
-    return bool(state) and not state.startswith("Z")
-
-
-def _start_stubborn_app(app: Path) -> int:
-    out = subprocess.run(["bash", "-c", APP_ALIVE + 'start_app "$1"', "-", str(app)], capture_output=True, text=True)
-    pid = int(out.stdout.strip())
+def _wait_for_command(proc: subprocess.Popen, prefix: str) -> subprocess.Popen:
     deadline = time.monotonic() + 5
-    while (
-        "Contents/MacOS/BrainBar"
-        not in subprocess.run(["ps", "-o", "command=", "-p", str(pid)], capture_output=True, text=True).stdout
-    ):
-        assert time.monotonic() < deadline
+    while not subprocess.run(
+        ["ps", "-o", "command=", "-p", str(proc.pid)], capture_output=True, text=True
+    ).stdout.startswith(prefix):
+        assert time.monotonic() < deadline, "fixture process never showed its command line"
         time.sleep(0.02)
-    return pid
+    return proc
+
+
+def _start_stubborn_app(app: Path) -> subprocess.Popen:
+    exe = str(app / "Contents/MacOS/BrainBar")
+    # Its own session, so cleanup can reap the whole process group.
+    return subprocess.Popen(["/bin/bash", "-c", STUBBORN, exe], start_new_session=True)
+
+
+def _reap(proc: subprocess.Popen) -> None:
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    proc.wait(timeout=10)
 
 
 def _kill(pid: int) -> None:
@@ -105,7 +107,7 @@ elif [ "$2" = --cask ]; then
   mkdir -p "$BRAINBAR_UPDATE_APP"
   echo new > "$BRAINBAR_UPDATE_APP/identity"
   [ "$FAIL_STEP" != cask ]
-  if [ "$FAIL_STEP" != no-plists ]; then
+  if [ "$FAIL_STEP" != no-plists ] && [ "$FAIL_STEP" != restore-copy ]; then
     for label in brainbar brainbar-daemon; do echo cask > "$BRAINBAR_UPDATE_AGENTS/com.brainlayer.$label.plist"; done
   fi
 else [ "$FAIL_STEP" != formula ]; fi
@@ -134,6 +136,23 @@ esac
     command(
         commands / "mv",
         'if [ "$1" = "$BRAINBAR_UPDATE_APP" ] && app_alive; then echo MOVED_RUNNING >> "$TEST_LOG"; fi\nexec /bin/mv "$@"\n',
+    )
+    command(
+        commands / "ps",
+        """
+count=$(( $(/bin/cat "$TEST_PREFIX/ps-count" 2>/dev/null || echo 0) + 1 ))
+echo "$count" > "$TEST_PREFIX/ps-count"
+if [ -n "${PS_FAIL_ON:-}" ] && [ "$count" -ge "$PS_FAIL_ON" ]; then echo "ps: injected failure" >&2; exit 1; fi
+exec /bin/ps "$@"
+""",
+    )
+    command(
+        commands / "cp",
+        """
+for last; do :; done
+case "$last" in "$BRAINBAR_UPDATE_AGENTS"/*) [ "$FAIL_STEP" != restore-copy ] || exit 1 ;; esac
+exec /bin/cp "$@"
+""",
     )
     command(
         commands / "codesign",
@@ -510,16 +529,63 @@ def test_custody_survives_supervisor_death_until_installer_exits(install):
 
 def test_running_app_that_ignores_quit_is_stopped_before_bundle_moves(install, tmp_path):
     """The M1 failure: Homebrew's quit cannot stop the app from a launchd job, so the helper must."""
-    pid = _start_stubborn_app(tmp_path / "Applications/BrainBar.app")
+    app_path = tmp_path / "Applications/BrainBar.app"
+    proc = _start_stubborn_app(app_path)
     try:
+        _wait_for_command(proc, str(app_path / "Contents/MacOS/BrainBar"))
         result, log, root, app = install()
         assert "MOVED_RUNNING" not in log, "the running bundle was moved"
         assert "ALIVE_AT_CASK" not in log, "BrainBar was still running when Homebrew reinstalled the cask"
-        assert not _alive(pid), "the old BrainBar process survived the update"
+        assert proc.poll() is not None, "the old BrainBar process survived the update"
         assert result.returncode == 0, result.stderr
         assert "success" in (root / "update-state").read_text()
     finally:
-        _kill(pid)
+        _reap(proc)
+
+
+def test_process_that_only_names_the_bundle_is_left_alone(install, tmp_path):
+    """Only a process whose executable is in the bundle is BrainBar; `tail <bundle file>` is not."""
+    exe = tmp_path / "Applications/BrainBar.app/Contents/MacOS/BrainBar"
+    exe.parent.mkdir(parents=True)
+    exe.write_text("")
+    proc = subprocess.Popen(["/usr/bin/tail", "-f", str(exe)], start_new_session=True)
+    try:
+        _wait_for_command(proc, "/usr/bin/tail")
+        result, log, root, app = install()
+        assert proc.poll() is None, "a process that merely names a bundle path was killed"
+        assert result.returncode == 0, result.stderr
+        assert "success" in (root / "update-state").read_text()
+    finally:
+        _reap(proc)
+
+
+@pytest.mark.parametrize("failing_scan", ["1", "2"])
+def test_failed_process_scan_is_recovery_required_and_moves_nothing(install, tmp_path, failing_scan):
+    """An unknown process state (the first scan, or the wait loop after SIGTERM) never moves the bundle."""
+    app_path = tmp_path / "Applications/BrainBar.app"
+    proc = _start_stubborn_app(app_path)
+    try:
+        _wait_for_command(proc, str(app_path / "Contents/MacOS/BrainBar"))
+        result, log, root, app = install(PS_FAIL_ON=failing_scan)
+        assert result.returncode != 0
+        assert "MOVED_RUNNING" not in log and "reinstall --cask" not in log
+        assert (app / "identity").read_text() == "old"
+        assert "activate\n" not in log, "unknown state must not be re-activated blindly"
+        state = (root / "update-state").read_text()
+        assert "recovery-required" in state and "state unknown" in state
+    finally:
+        _reap(proc)
+
+
+def test_failed_plist_restore_is_recovery_required_with_exact_commands(install):
+    result, log, root, app = install("restore-copy")
+    assert result.returncode != 0
+    assert (app / "identity").read_text() == "old"
+    assert "activate\n" not in log, "activation cannot recreate missing plists"
+    state = (root / "update-state").read_text()
+    assert "recovery-required" in state
+    assert "Backups.noindex/LaunchAgents-test-operation/com.brainlayer.brainbar.plist" in state
+    assert "brainbar activate --verify --timeout 90" in state
 
 
 def test_services_boot_out_before_cask_and_activation_runs_once(install, tmp_path):
@@ -574,7 +640,8 @@ def test_rollback_stops_the_new_app_before_moving_it(install, tmp_path):
     try:
         assert result.returncode != 0
         assert "MOVED_RUNNING" not in log, "rollback moved the running new bundle"
-        assert not _alive(new_pid)
+        alive = subprocess.run(["ps", "-o", "stat=", "-p", str(new_pid)], capture_output=True, text=True).stdout.strip()
+        assert not alive or alive.startswith("Z"), "the new BrainBar process survived rollback"
         assert (app / "identity").read_text() == "old"
         rollback = log[log.index("activate") :]
         assert "launchctl bootout" in rollback and rollback.index("launchctl bootout") < rollback.index("activate", 1)

@@ -1,8 +1,6 @@
+import fcntl
 import json
-import os
 import plistlib
-import subprocess
-import time
 from types import SimpleNamespace
 
 import pytest
@@ -628,73 +626,66 @@ def test_unwritable_migration_never_clears_or_flaps(monitor, monkeypatch):
     assert not worker.state.with_suffix(".scan-migration.json").exists()
 
 
-@pytest.mark.parametrize("owner", ["updater", "handoff", "reused", "dead", "garbage"])
-def test_in_app_update_custody_defers_activation_until_the_helper_exits(monitor, tmp_path, owner):
-    """A new build's tick must not launch while the updater restores plists and carries approval.
+def _hold_custody(tmp_path, mode=fcntl.LOCK_EX):
+    """Take update-custody.lock the way the updater's Ruby supervisor does, as a separate holder."""
+    (tmp_path / "update-root").mkdir(exist_ok=True)
+    holder = (tmp_path / "update-root/update-custody.lock").open("a")
+    try:
+        fcntl.flock(holder, mode | fcntl.LOCK_NB)
+    except BlockingIOError:
+        holder.close()
+        raise
+    return holder
 
-    Only a pid that is still the updater counts: after a SIGKILL or panic the lock stays, and a
-    reused pid (here the test process itself) must never defer activation forever.
-    """
+
+def test_update_custody_defers_activation_and_the_lock_dies_with_its_holder(monitor, tmp_path):
+    """A new build's tick must not launch while the updater restores plists and carries approval."""
     worker, _, calls, _ = monitor
-    lock = tmp_path / "update-root/update.lock"
-    lock.mkdir(parents=True)
-    copy = {"updater": "/x/BrainBar/update-op-1.sh", "handoff": "/keg/brainlayer/launchd/brainbar-update.sh"}
-    holder = None
-    if owner in copy:
-        # A compound command keeps bash (and its argv) alive instead of exec-ing sleep.
-        argv = ["/bin/bash", "-c", "sleep 30; :", "bash", copy[owner], "--custody-held", "1.0.0", "op"]
-        holder = subprocess.Popen(argv)
-        pid = str(holder.pid)
-        deadline = time.monotonic() + 5
-        while "--custody-held" not in auto.process_command(holder.pid):
-            assert time.monotonic() < deadline
-            time.sleep(0.02)
-    elif owner == "dead":
-        dead = subprocess.Popen(["true"])
-        dead.wait()
-        pid = str(dead.pid)
-    else:
-        pid = {"reused": str(os.getpid()), "garbage": "x"}[owner]
-    (lock / "pid").write_text(pid + "\n")
+    holder = _hold_custody(tmp_path)
     try:
         worker.tick()
-    finally:
-        if holder:
-            holder.kill()
-            holder.wait()
-    if owner in copy:
         assert not calls and not worker.state.exists()
-    else:
-        assert len(calls) == 1, "a dead, reused or unreadable owner never blocks recovery"
+    finally:
+        holder.close()  # A SIGKILLed or panicked updater releases custody the same way.
+    worker.tick()
+    assert len(calls) == 1
+
+
+def test_update_cannot_take_custody_between_final_check_and_activation_child(monitor, monkeypatch, tmp_path):
+    worker, _, calls, _ = monitor
+    contended = []
+    write = auto._atomic_write_json
+
+    def attempted(path, payload):
+        if payload.get("stage") == "attempted":  # Last step before the activation child starts.
+            with pytest.raises(BlockingIOError):
+                _hold_custody(tmp_path)
+            contended.append(True)
+        return write(path, payload)
+
+    monkeypatch.setattr(auto, "_atomic_write_json", attempted)
+    worker.tick()
+    assert contended == [True] and len(calls) == 1
+    _hold_custody(tmp_path).close()  # Released once the activation child has exited.
 
 
 def test_update_deferral_alerts_after_fifteen_minutes_and_recovers(monitor, monkeypatch, tmp_path):
     worker, _, calls, alerts = monitor
-    lock = tmp_path / "update-root/update.lock"
-    lock.mkdir(parents=True)
-    (lock / "pid").write_text("4242\n")
-    command = {"value": "/bin/bash /x/BrainBar/update-op.sh --custody-held 1.0.0 op"}
-    monkeypatch.setattr(auto, "process_command", lambda pid: command["value"])
     clock = [1000.0]
     monkeypatch.setattr(auto, "time", SimpleNamespace(time=lambda: clock[0]))
-    worker.tick()
-    clock[0] += 899
-    worker.tick()
-    assert not calls and not alerts
-    clock[0] += 2
-    worker.tick()
-    worker.tick()
+    holder = _hold_custody(tmp_path)
+    try:
+        worker.tick()
+        clock[0] += 899
+        worker.tick()
+        assert not calls and not alerts
+        clock[0] += 2
+        worker.tick()
+        worker.tick()
+    finally:
+        holder.close()
     update_alerts = [a for a in alerts if a[0] == "brainbar-activation-update"]
     assert len(update_alerts) == 1 and ">15 minutes" in update_alerts[0][1]
-    command["value"] = ""  # The updater exited without releasing its lock.
     worker.tick()
-    assert alerts[-2] == ("brainbar-activation-update", None)
+    assert ("brainbar-activation-update", None) in alerts
     assert len(calls) == 1
-
-
-def test_custody_taken_during_preflight_defers_before_launch(monitor, monkeypatch, tmp_path):
-    worker, _, calls, _ = monitor
-    answers = iter([False, True])
-    monkeypatch.setattr(auto, "update_in_progress", lambda root: next(answers))
-    worker.tick()
-    assert not calls and not worker.state.exists()

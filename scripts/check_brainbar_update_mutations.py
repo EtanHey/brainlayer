@@ -68,6 +68,21 @@ def main():
             source.replace('  exec /bin/bash "$NEXT" --custody-held --handoff "$V" "$OP"\n', "  :\n"),
             "test_hands_over_to_the_new_kegs_script_with_custody",
         ),
+        (
+            "argv-anywhere",
+            source.replace("index(c, p) == 1 {print $1}", 'index(c, p) == 1 || index(c, " " p) {print $1}'),
+            "test_process_that_only_names_the_bundle_is_left_alone",
+        ),
+        (
+            "unchecked-scan",
+            source.replace("scan() { pids=$(app_pids) || {", "scan() { pids=$(app_pids || true) || {"),
+            "test_failed_process_scan_is_recovery_required_and_moves_nothing[2]",
+        ),
+        (
+            "restore-ignored",
+            source.replace("  restore_agents && return 0\n", "  restore_agents || true; return 0\n"),
+            "test_failed_plist_restore_is_recovery_required_with_exact_commands",
+        ),
         ("nonexecutable", source, "test_update_script_is_executable"),
     ]
     rows = []
