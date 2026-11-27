@@ -953,6 +953,70 @@ def _apply_heals(
     config: HealthCheckConfig,
     command_runner: CommandRunner,
 ) -> tuple[dict[str, int], set[str]]:
+    brainbar_labels = {"com.brainlayer.brainbar", config.brainbar_daemon_label}
+    held_keys = {
+        _heal_key(label, code)
+        for code, (label, _) in issue_labels.items()
+        if label in brainbar_labels and any(issue.code == code for issue in result.issues)
+    }
+    with _brainbar_heal_custody(config.heal and bool(held_keys)) as acquired:
+        failures, tripped = _apply_heals_with_custody(
+            result=result,
+            issue_labels={
+                code: value
+                for code, value in issue_labels.items()
+                if acquired or _heal_key(value[0], code) not in held_keys
+            },
+            issue_details=issue_details,
+            previous_failures=previous_failures,
+            previous_tripped=previous_tripped,
+            config=config,
+            command_runner=command_runner,
+        )
+        if not acquired:
+            # A deliberate update hold is not a failed heal and never consumes the breaker.
+            failures.update({key: previous_failures[key] for key in held_keys if key in previous_failures})
+        return failures, tripped
+
+
+@contextmanager
+def _brainbar_heal_custody(required: bool) -> Iterator[bool]:
+    if not required:
+        yield True
+        return
+    root = Path(os.environ.get("BRAINBAR_UPDATE_ROOT") or Path.home() / "Library/Application Support/BrainBar")
+    try:
+        root.mkdir(parents=True, exist_ok=True, mode=0o700)
+        custody = (root / "update-custody.lock").open("a")
+    except OSError as exc:
+        logger.warning("BrainBar heal deferred: update custody unavailable (%s)", type(exc).__name__)
+        yield False
+        return
+    with custody:
+        try:
+            # Hold through launchctl completion; never unlink this shared updater lock.
+            fcntl.flock(custody, fcntl.LOCK_SH | fcntl.LOCK_NB)
+        except BlockingIOError:
+            logger.info("BrainBar heal deferred: update custody held")
+            yield False
+            return
+        except OSError as exc:
+            logger.warning("BrainBar heal deferred: update custody unavailable (%s)", type(exc).__name__)
+            yield False
+            return
+        yield True
+
+
+def _apply_heals_with_custody(
+    *,
+    result: HealthCheckResult,
+    issue_labels: dict[str, tuple[str, Path]],
+    issue_details: dict[str, dict[str, Any]] | None = None,
+    previous_failures: dict[str, int],
+    previous_tripped: set[str],
+    config: HealthCheckConfig,
+    command_runner: CommandRunner,
+) -> tuple[dict[str, int], set[str]]:
     issue_details = issue_details or {}
     current_issue_codes = {issue.code for issue in result.issues}
     heal_failures: dict[str, int] = {}
