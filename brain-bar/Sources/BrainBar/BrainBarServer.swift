@@ -190,6 +190,11 @@ final class BrainBarServer: @unchecked Sendable {
     /// Each retry sleeps 1ms; 50 retries keeps false-positive disconnects
     /// below the UI budget while still bounding serial-queue stalls.
     static let maxWriteRetries = 50
+    /// Sent once, to the expanding connection only, after `expand_palette` widens its
+    /// palette. `initialize` advertises `tools.listChanged`, so clients wait for this.
+    static var toolsListChangedNotification: [String: Any] {
+        ["jsonrpc": "2.0", "method": "notifications/tools/list_changed"]
+    }
     private static let readOnlyBusyTimeoutMillis: Int32 = 250
     /// The router's measured budget (#1725). A separate literal here (0.8s since #416) silently
     /// overrode it: installed 1.5.94 served 0/20 live agent searches through hybrid.
@@ -698,6 +703,10 @@ final class BrainBarServer: @unchecked Sendable {
                 trace("  DEFERRED response for method=\(method) to backup queue")
                 continue
             }
+            let paletteBeforeCall = parseToolCall(msg)?.name == "expand_palette"
+                ? clients[fd]?.paletteSession
+                : nil
+            let paletteWasExpanded = paletteBeforeCall?.isExpanded() ?? true
             let response = handleMessage(fd: fd, request: msg)
             if !response.isEmpty {
                 sendResponse(fd: fd, response: response, useContentLength: state.usesContentLengthFraming)
@@ -707,6 +716,20 @@ final class BrainBarServer: @unchecked Sendable {
             }
             // sendResponse may have called disconnectClient — stop processing
             if clients[fd] == nil { return }
+            // The palette is connection-local, so only this client's tools/list changed.
+            // Without this the client keeps its boot list and never sees gated tools.
+            if !paletteWasExpanded,
+               let paletteBeforeCall,
+               clients[fd]?.paletteSession === paletteBeforeCall,
+               paletteBeforeCall.isExpanded() {
+                sendResponse(
+                    fd: fd,
+                    response: Self.toolsListChangedNotification,
+                    useContentLength: state.usesContentLengthFraming
+                )
+                trace("  SENT notifications/tools/list_changed to fd=\(fd)")
+                if clients[fd] == nil { return }
+            }
         }
 
         if var latest = clients[fd] {

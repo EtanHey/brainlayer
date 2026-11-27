@@ -39,10 +39,7 @@ bridge = subprocess.Popen([sys.executable, '-m', 'brainlayer.mcp_stdio_bridge'],
                           stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
 
 
-def request(method, params=None):
-    payload = json.dumps(dict(jsonrpc='2.0', id=1, method=method, params=params or {})).encode()
-    bridge.stdin.write(b'Content-Length: ' + str(len(payload)).encode() + b'\r\n\r\n' + payload)
-    bridge.stdin.flush()
+def read_frame():
     headers = {}
     while True:
         line = bridge.stdout.readline()
@@ -52,8 +49,19 @@ def request(method, params=None):
             raise RuntimeError('bridge EOF')
         key, value = line.decode().split(':', 1)
         headers[key.lower()] = value.strip()
-    raw = bridge.stdout.read(int(headers['content-length']))
-    response = json.loads(raw)
+    return bridge.stdout.read(int(headers['content-length']))
+
+
+def request(method, params=None):
+    payload = json.dumps(dict(jsonrpc='2.0', id=1, method=method, params=params or {})).encode()
+    bridge.stdin.write(b'Content-Length: ' + str(len(payload)).encode() + b'\r\n\r\n' + payload)
+    bridge.stdin.flush()
+    while True:
+        raw = read_frame()
+        response = json.loads(raw)
+        # Server notifications (expand_palette sends notifications/tools/list_changed) carry no id.
+        if 'id' in response:
+            break
     assert 'error' not in response, response
     assert not response.get('result', {}).get('isError'), response
     return raw, response['result']

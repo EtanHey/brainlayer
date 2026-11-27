@@ -121,7 +121,10 @@ private func blockSQLiteProgress(_ context: UnsafeMutableRawPointer?) -> Int32 {
 }
 
 final class SocketIntegrationTests: XCTestCase {
-    let testSocketPath = "/tmp/brainbar-test-\(ProcessInfo.processInfo.processIdentifier).sock"
+    // sun_path holds 104 bytes, too few for a socket inside a worktree's build folder.
+    // BRAINBAR_TEST_SOCKET_DIR moves it to another short folder; the default stays /tmp.
+    let testSocketPath = (ProcessInfo.processInfo.environment["BRAINBAR_TEST_SOCKET_DIR"] ?? "/tmp")
+        + "/brainbar-test-\(ProcessInfo.processInfo.processIdentifier).sock"
     var server: BrainBarServer!
     var db: BrainDatabase!
     var tempDBPath: String!
@@ -651,11 +654,91 @@ final class SocketIntegrationTests: XCTestCase {
             "jsonrpc": "2.0", "id": 3, "method": "tools/call",
             "params": ["name": "expand_palette", "arguments": [:] as [String: Any]],
         ])
-        let expansion = try readMCPMessage(fd: firstFD)
+        let expansion = try readMCPMessages(fd: firstFD, expectedCount: 2)[0]
         XCTAssertEqual((expansion["result"] as? [String: Any])?["expanded"] as? Bool, true)
 
         XCTAssertEqual(try listedToolNames(on: firstFD, id: 4).count, 16)
         XCTAssertEqual(Set(try listedToolNames(on: secondFD, id: 3)), coreNames)
+    }
+
+    /// `initialize` advertises `tools.listChanged`, and the palette is per connection.
+    /// A client only re-reads tools/list when told, so a successful expand_palette must
+    /// send notifications/tools/list_changed to that connection, after the result, once.
+    func testExpandPaletteSendsToolsListChangedOnlyToTheExpandingConnection() throws {
+        restartServer(profile: "core")
+        let expandingFD = try connectClient()
+        defer { close(expandingFD) }
+        let bystanderFD = try connectClient()
+        defer { close(bystanderFD) }
+        try initializeClient(fd: expandingFD, name: "list-changed-expander")
+        try initializeClient(fd: bystanderFD, name: "list-changed-bystander")
+
+        try sendMCPRequest(on: expandingFD, request: [
+            "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+            "params": ["name": "expand_palette", "arguments": [:] as [String: Any]],
+        ])
+        let frames = try readMCPMessages(fd: expandingFD, expectedCount: 2)
+        XCTAssertEqual(frames[0]["id"] as? Int, 2, "the tool result comes first")
+        XCTAssertEqual((frames[0]["result"] as? [String: Any])?["expanded"] as? Bool, true)
+        XCTAssertEqual(frames[1]["method"] as? String, "notifications/tools/list_changed")
+        XCTAssertNil(frames[1]["id"], "a notification carries no id")
+        XCTAssertEqual(frames[1]["jsonrpc"] as? String, "2.0")
+
+        XCTAssertEqual(
+            try pendingBytes(fd: bystanderFD), 0,
+            "a connection that did not expand must not be told its list changed"
+        )
+
+        // A second expand_palette changes nothing, so it sends no second notification.
+        try sendMCPRequest(on: expandingFD, request: [
+            "jsonrpc": "2.0", "id": 3, "method": "tools/call",
+            "params": ["name": "expand_palette", "arguments": [:] as [String: Any]],
+        ])
+        let repeated = try readMCPMessage(fd: expandingFD)
+        XCTAssertEqual((repeated["result"] as? [String: Any])?["already_expanded"] as? Bool, true)
+        XCTAssertEqual(try pendingBytes(fd: expandingFD), 0, "no notification when the palette did not change")
+    }
+
+    func testExpandPaletteSendsToolsListChangedInNewlineFraming() throws {
+        restartServer(profile: "core")
+        let fd = try connectClient()
+        defer { close(fd) }
+        try sendRawLineJSON(on: fd, object: [
+            "jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": [
+                "protocolVersion": "2024-11-05",
+                "capabilities": [:] as [String: Any],
+                "clientInfo": ["name": "list-changed-newline", "version": "1.0"],
+            ],
+        ])
+        _ = try readRawLineJSONLines(fd: fd, count: 1)
+        try sendRawLineJSON(on: fd, object: [
+            "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+            "params": ["name": "expand_palette", "arguments": [:] as [String: Any]],
+        ])
+        let lines = try readRawLineJSONLines(fd: fd, count: 2).map {
+            try JSONSerialization.jsonObject(with: $0) as? [String: Any] ?? [:]
+        }
+        XCTAssertEqual(lines[0]["id"] as? Int, 2)
+        XCTAssertEqual(lines[1]["method"] as? String, "notifications/tools/list_changed")
+        XCTAssertNil(lines[1]["id"])
+    }
+
+    func testSessionThatNeverExpandsReceivesNoToolsListChanged() throws {
+        restartServer(profile: "core")
+        let fd = try connectClient()
+        defer { close(fd) }
+        try initializeClient(fd: fd, name: "never-expands")
+        XCTAssertEqual(
+            Set(try listedToolNames(on: fd, id: 2)),
+            ["brain_search", "brain_store", "brain_recall", "brain_expand", "expand_palette"]
+        )
+        try sendMCPRequest(on: fd, request: [
+            "jsonrpc": "2.0", "id": 3, "method": "tools/call",
+            "params": ["name": "brain_recall", "arguments": ["mode": "stats"] as [String: Any]],
+        ])
+        _ = try readMCPMessage(fd: fd)
+        XCTAssertEqual(try pendingBytes(fd: fd), 0)
     }
 
     func testCoreProfileRejectsServerHandledToolsUntilExpansion() throws {
@@ -686,7 +769,8 @@ final class SocketIntegrationTests: XCTestCase {
             "jsonrpc": "2.0", "id": 5, "method": "tools/call",
             "params": ["name": "expand_palette", "arguments": [:] as [String: Any]],
         ])
-        _ = try readMCPMessage(fd: fd)
+        // The result, then notifications/tools/list_changed.
+        _ = try readMCPMessages(fd: fd, expectedCount: 2)
 
         try sendMCPRequest(on: fd, request: [
             "jsonrpc": "2.0", "id": 6, "method": "tools/call",
@@ -902,7 +986,8 @@ final class SocketIntegrationTests: XCTestCase {
             "jsonrpc": "2.0", "id": 44, "method": "tools/call",
             "params": ["name": "expand_palette", "arguments": [:] as [String: Any]],
         ])
-        _ = try readMCPMessage(fd: subscriberFD)
+        // The result, then notifications/tools/list_changed.
+        _ = try readMCPMessages(fd: subscriberFD, expectedCount: 2)
         try sendMCPRequest(on: subscriberFD, request: [
             "jsonrpc": "2.0", "id": 45, "method": "tools/call",
             "params": [
@@ -2221,6 +2306,49 @@ final class SocketIntegrationTests: XCTestCase {
         throw NSError(domain: "test", code: 4, userInfo: [NSLocalizedDescriptionKey: "Timeout reading raw line response"])
     }
 
+    /// Reads `count` newline-delimited frames in one pass, so a frame that shares a
+    /// read() with the one before it is not dropped with the local buffer.
+    private func readRawLineJSONLines(fd: Int32, count: Int, timeout: TimeInterval = 5.0) throws -> [Data] {
+        var buffer = Data()
+        var lines: [Data] = []
+        var readBuf = [UInt8](repeating: 0, count: 65536)
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            while let newlineIndex = buffer.firstIndex(of: 0x0A) {
+                lines.append(Data(buffer[buffer.startIndex..<newlineIndex]))
+                buffer.removeSubrange(buffer.startIndex...newlineIndex)
+                if lines.count == count { return lines }
+            }
+            let n = read(fd, &readBuf, readBuf.count)
+            if n > 0 {
+                buffer.append(contentsOf: readBuf[0..<n])
+                continue
+            } else if n == 0 {
+                break
+            } else if errno != EAGAIN && errno != EINTR && errno != EWOULDBLOCK {
+                break
+            }
+            Thread.sleep(forTimeInterval: 0.01)
+        }
+        throw NSError(domain: "test", code: 4, userInfo: [
+            NSLocalizedDescriptionKey: "Timeout reading \(count) raw lines (got \(lines.count))",
+        ])
+    }
+
+    /// Bytes the server sent that nobody has read, after giving it `settle` to send more.
+    private func pendingBytes(fd: Int32, settle: TimeInterval = 0.3) throws -> Int {
+        Thread.sleep(forTimeInterval: settle)
+        var readBuf = [UInt8](repeating: 0, count: 65536)
+        var total = 0
+        while true {
+            let n = read(fd, &readBuf, readBuf.count)
+            if n > 0 { total += n; continue }
+            if n == 0 || errno == EAGAIN || errno == EWOULDBLOCK { return total }
+            if errno == EINTR { continue }
+            throw NSError(domain: "test", code: 7, userInfo: [NSLocalizedDescriptionKey: "read() errno \(errno)"])
+        }
+    }
+
     private func readBrainBusEvent(fd: Int32, matching type: String, timeout: TimeInterval = 5.0) throws -> [String: Any] {
         let deadline = Date().addingTimeInterval(timeout)
         var buffer = Data()
@@ -2350,19 +2478,25 @@ final class SocketIntegrationTests: XCTestCase {
         defer { close(fd) }
 
         var nextID = 1
-        func exchange(_ request: [String: Any]) throws -> (json: [String: Any], byteCount: Int) {
+        // `trailingNotifications` frames follow the answer (expand_palette sends
+        // notifications/tools/list_changed); they are read in the same call because
+        // the read helpers drop whatever is left in their buffer.
+        func exchange(
+            _ request: [String: Any],
+            trailingNotifications: Int = 0
+        ) throws -> (json: [String: Any], byteCount: Int) {
             var payload = request
             payload["id"] = nextID
             nextID += 1
             switch framing {
             case .contentLength:
                 try sendMCPRequest(on: fd, request: payload)
-                let json = try readMCPMessage(fd: fd)
+                let json = try readMCPMessages(fd: fd, expectedCount: 1 + trailingNotifications)[0]
                 let encoded = try MCPFraming.encodeJSONResponse(json)
                 return (json, encoded.count)
             case .newline:
                 try sendRawLineJSON(on: fd, object: payload)
-                let line = try readRawLineJSONData(fd: fd)
+                let line = try readRawLineJSONLines(fd: fd, count: 1 + trailingNotifications)[0]
                 let json = try JSONSerialization.jsonObject(with: line) as? [String: Any] ?? [:]
                 // +1 for the delimiter newline the server appends.
                 return (json, line.count + 1)
@@ -2384,7 +2518,7 @@ final class SocketIntegrationTests: XCTestCase {
                 "jsonrpc": "2.0",
                 "method": "tools/call",
                 "params": ["name": "expand_palette", "arguments": [:] as [String: Any]],
-            ])
+            ], trailingNotifications: 1)
             XCTAssertNil(expansion.json["error"], "expand_palette should succeed on the core profile")
         }
 
