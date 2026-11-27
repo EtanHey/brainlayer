@@ -118,8 +118,8 @@ import XCTest
         let chart = NDPipelineChart(state: store.r1.pipeline, memories: store.model.memories,
                                     items: store.r1.stationItems, backupProgress: inputs.backupProgress)
         let row = NDPipelineChart.progressFrame(store.r1.pipeline)
-        XCTAssertEqual(row.minY, 81)
-        XCTAssertEqual(row.maxY, 114)
+        XCTAssertEqual(row.minY, 93, "3 pt under Drive's status line box")
+        XCTAssertEqual(row.maxY, 96, "5.5 pt above the Kept-safe border")
         XCTAssertTrue(chart.displayedPanelWords[.drive]?.contains(row) == true)
         let panel = chart.panel(.drive, content: AnyView(NDStationPopover(store: store, station: .drive)))
         XCTAssertFalse(panel.outer.intersects(row), "the notch and body must clear the words actually drawn")

@@ -116,26 +116,34 @@ import XCTest
 
     func testStalledProgressNamesTheStallAndMovingProgressDoesNot() throws {
         var progress = try XCTUnwrap(BrainBarBackupProgress.read(BrainBarDesignFixture.backupFacts(.uploadProgress), now: BrainBarDesignFixture.now))
-        XCTAssertFalse(progress.title.contains(BrainBarMenuPresenter.SurfaceSay.notUploadingSince))
+        let at = try XCTUnwrap(progress.checkpointAt)
+        let stalledTitle = BrainBarMenuPresenter.SurfaceSay.driveStalledAt(BrainBarBackupProgress.clock(at))
+        XCTAssertNotEqual(progress.title, stalledTitle)
         progress.isStalled = true
-        XCTAssertTrue(progress.title.contains(BrainBarMenuPresenter.SurfaceSay.notUploadingSince))
+        XCTAssertEqual(progress.title, stalledTitle, "the Backups page and Drive's line name a stall in the same words")
         XCTAssertEqual(progress.accessibilityValue, try XCTUnwrap(progress.checkpointAt).formatted(date: .abbreviated, time: .shortened))
     }
 
-    func testStalledFixtureNamesTheStallAndKeepsLastGoodCaption() throws {
+    /// The Pipeline names the stall on Drive's own line, as a clock time; "Last good" leaves the compact node (its date is
+    /// when the copy was made, not when it was verified) and the Backups page says so in full.
+    func testStalledFixtureNamesTheStallOnDrivesLineAndKeepsTheFullCaptionOnBackups() throws {
+        typealias Say = BrainBarMenuPresenter.SurfaceSay
         let inputs = BrainBarDesignFixture.inputs(.uploadStalled)
         let progress = try XCTUnwrap(inputs.backupProgress)
         XCTAssertTrue(progress.isStalled)
-        XCTAssertTrue(progress.title.contains(BrainBarMenuPresenter.SurfaceSay.notUploadingSince))
-        let compact = BrainBarBackupProgressView(progress: progress, compact: true)
-        let caption = try XCTUnwrap(compact.lastGoodText)
-        XCTAssertTrue(caption.contains(BrainBarMenuPresenter.SurfaceSay.backupLastGoodShort))
+        XCTAssertEqual(progress.title, progress.stationLine(), "one name for the stall on both surfaces")
+        XCTAssertNil(BrainBarBackupProgressView(progress: progress).checkpointText, "no time pushed to the right")
+        XCTAssertNil(BrainBarBackupProgressView(progress: progress, compact: true).lastGoodText)
+        let caption = try XCTUnwrap(BrainBarBackupProgressView(progress: progress).lastGoodText)
+        XCTAssertTrue(caption.hasPrefix(Say.backupLastGood + " "), caption)
         XCTAssertTrue(caption.contains(try XCTUnwrap(progress.lastGoodAt).formatted(date: .abbreviated, time: .shortened)))
-        XCTAssertNotNil(BrainBarBackupProgressView(progress: progress).lastGoodText)
-        XCTAssertNil(BrainBarBackupProgressView(progress: progress, compact: true, barOnly: true).lastGoodText)
+        let zone = try XCTUnwrap(TimeZone(identifier: "Asia/Jerusalem"))
+        let line = progress.stationLine(in: zone)
+        XCTAssertEqual(line, Say.driveStalledAt(BrainBarBackupProgress.clock(try XCTUnwrap(progress.checkpointAt), in: zone)))
         let state = NDR1.make(inputs, NDModel.make(inputs)).pipeline
-        let stallWidth = NDPipelineLayout.textWidth(progress.title, size: 10)
-            + NDPipelineLayout.textWidth(try XCTUnwrap(progress.checkpointAt).formatted(date: .omitted, time: .shortened), size: 10) + 6
-        XCTAssertLessThanOrEqual(stallWidth, NDPipelineChart.progressFrame(state).width)
+        XCTAssertEqual(NDPipelineChart.drawingState(state, progress: progress).status[.drive]?.text, progress.stationLine())
+        // Drive's widest line keeps the Kept-safe rule: 12 pt to the frame on its right.
+        let L = NDPipelineLayout.self
+        XCTAssertLessThanOrEqual(L.textWidth(line, size: 11, weight: .semibold) / 2, L.keptSafe.maxX - 12 - L.point(.drive).x)
     }
 }
