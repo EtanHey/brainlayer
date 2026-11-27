@@ -16,8 +16,8 @@
       "sha256": "df7a391626d3d8a7c2075771e8fc0383b891e739754016e096281b23b29e709c"
     },
     "src/brainlayer/backup_heavy_gate.py": {
-      "sha": "2026-11-27 backup-gate-m1-next: M1 binding next-slot reservation and owned cleanup; M4 admission unchanged. Reservation fairness is outside BackupVerdict/DotTable; existing deferred/admitted/alert transitions and all receipt facts unchanged. No coverage line anchor names backup_heavy_gate.py; mapped modules are unchanged. Production-code fail-first tests prove this protocol; sync_report checks source pins, not fairness.",
-      "sha256": "3c53c5c8bbb8a916a028c9fd7e073ae25bb5139b7a75add1b41f33597da4db84"
+      "sha": "2026-11-27 backup-gate-m1-next R2: stale timer binds content/device/inode/mtime_ns; exclusive hard-link publication; reserve only behind a held lock after resource admission; retain owned slot through post-lock bounce, withdraw on the next failed resource sample. M4 unchanged. Fairness remains outside BackupVerdict/DotTable; deferred/admitted/alert transitions and receipt facts unchanged. No line anchor names this gate; line_refs_at and mapped modules unchanged. Fail-first production-code races prove the protocol, not sync_report. No model change.",
+      "sha256": "c3be8df82fb1657d26725de0320511367798a657df339ef89a126bb5074f4a8a"
     },
     "src/brainlayer/maintenance.py": {
       "sha": "5882de81",

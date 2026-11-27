@@ -36,16 +36,26 @@ Only orc may clear another lane's stale lock after its age/process checks.
 On M1 only, the gate participates in the binding `~/.m1-heavy.next`
 reservation protocol (orc, 26 November 2026). It publishes
 `brainlayer-backup <job_key> <pid> <ISO time>` when the slot is absent or empty,
-including while another lane holds the lock. A foreign reservation blocks
+only after resource probes pass and a held lock blocks admission. A failed
+resource probe on the next retry withdraws its owned reservation. A foreign reservation blocks
 admission even with a free lock. The gate may reclaim it only after observing
 the lock free for **more than ten minutes**; observing a held lock resets that
-timer. An old reservation timestamp alone is insufficient evidence. This may
+timer, as does a change in reservation content, device, inode or nanosecond
+modification time. Reclamation rechecks that same identity immediately before
+unlinking. An old reservation timestamp alone is insufficient evidence. This may
 conservatively add ten minutes after a gate restart.
-Publication uses a temporary file in the same directory and atomic replacement,
-with an identity/content recheck. Symlinks and non-regular reservation files
-defer admission and are never followed. Acquisition removes the backup's own
-reservation; deadline, signal and exception unwinding also remove it if its
+Publication uses a temporary file in the same directory and an exclusive hard
+link, so a foreign reservation published concurrently cannot be overwritten.
+Empty slots are removed with the same identity check before exclusive publication.
+Symlinks and non-regular reservation files
+defer admission and are never followed. Real admission, after the post-lock probes,
+removes the backup's own reservation. A post-lock probe bounce retains an existing
+reservation through release and retry sleep; the next resource sample withdraws it
+if resources still defer admission. Deadline, signal and exception unwinding also remove it if its
 content still matches. A replacement belonging to another lane is retained.
+Cleanup checks content and file identity, then checks identity again with lstat
+immediately before unlink. POSIX path-based unlink still has a final scheduling
+window after that check; it does not provide atomic compare-and-delete.
 SIGKILL/power loss can leave a reservation for the stale-slot rule to handle.
 M4 neither reads nor writes `.next`.
 

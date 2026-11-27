@@ -735,3 +735,110 @@ def test_m1_rechecks_foreign_reservation_after_resource_probe(admission, monkeyp
             pytest.fail("backup stole a slot published during its probe")
     assert next_slot.read_text() == "new-lane"
     assert not (path / "lock").exists()
+
+
+@pytest.mark.parametrize("replacement", ["content", "inode", "mtime"])
+def test_m1_stale_timer_restarts_for_fresh_reservation(admission, monkeypatch, replacement):
+    path, clock = admission
+    monkeypatch.setenv("BRAINLAYER_BACKUP_HEAVY_HOST", "m1")
+    next_slot = path / ".m1-heavy.next"
+    next_slot.write_text("lane-x")
+
+    def sleep(seconds):
+        clock[0] += seconds
+        if clock[0] == 600:
+            lock = path / "lock"
+            lock.mkdir()  # X takes/releases between the backup's samples.
+            if replacement == "inode":
+                fresh = path / "fresh"
+                fresh.write_text("lane-x")
+                fresh.replace(next_slot)
+            elif replacement == "content":
+                next_slot.write_text("lane-y fresh")
+            else:
+                info = next_slot.stat()
+                os.utime(next_slot, ns=(info.st_atime_ns, info.st_mtime_ns + 1))
+            lock.rmdir()
+
+    monkeypatch.setattr(gate.time, "sleep", sleep)
+    with pytest.raises(gate.BackupGateDeferred):
+        with gate.backup_heavy_gate(deadline=650):
+            pytest.fail("fresh reservation was reclaimed using X's old timer")
+    assert next_slot.read_text() == ("lane-y fresh" if replacement == "content" else "lane-x")
+
+
+@pytest.mark.parametrize("probe", ["pressure", "disk"])
+def test_m1_resource_deferral_withdraws_reservation(admission, monkeypatch, probe):
+    path, clock = admission
+    monkeypatch.setenv("BRAINLAYER_BACKUP_HEAVY_HOST", "m1")
+    lock, next_slot = path / "lock", path / ".m1-heavy.next"
+    lock.mkdir()
+    monkeypatch.setattr(gate, f"_{probe}_reason", lambda *args: "resource unavailable" if clock[0] else None)
+
+    def sleep(seconds):
+        if clock[0] == 0:
+            assert next_slot.exists()
+            lock.rmdir()
+        else:
+            assert not next_slot.exists()
+            lock.mkdir()  # Another cooperative lane can take the free lock.
+            lock.rmdir()
+        clock[0] += seconds
+
+    monkeypatch.setattr(gate.time, "sleep", sleep)
+    with pytest.raises(gate.BackupGateDeferred):
+        with gate.backup_heavy_gate(deadline=20):
+            pytest.fail("resource deferral admitted")
+    assert not next_slot.exists()
+
+
+def test_m1_exclusive_publication_preserves_concurrent_foreign_slot(admission, monkeypatch):
+    path, _ = admission
+    monkeypatch.setenv("BRAINLAYER_BACKUP_HEAVY_HOST", "m1")
+    (path / "lock").mkdir()
+    next_slot = path / ".m1-heavy.next"
+    # Exercise both the old replace publisher and the exclusive link publisher.
+    for name in ("link", "replace"):
+        original = getattr(gate.os, name)
+
+        def publish(source, target, *args, _original=original, **kwargs):
+            if Path(target) == next_slot:
+                next_slot.write_text("concurrent-lane")
+            return _original(source, target, *args, **kwargs)
+
+        monkeypatch.setattr(gate.os, name, publish)
+
+    def sleep(seconds):
+        assert next_slot.read_text() == "concurrent-lane"
+        raise RuntimeError("publication inspected")
+
+    monkeypatch.setattr(gate.time, "sleep", sleep)
+    with pytest.raises(RuntimeError, match="publication inspected"):
+        with gate.backup_heavy_gate():
+            pytest.fail("held lock admitted")
+    assert next_slot.read_text() == "concurrent-lane"
+
+
+def test_m1_post_lock_bounce_keeps_waiting_slot(admission, monkeypatch):
+    path, clock = admission
+    monkeypatch.setenv("BRAINLAYER_BACKUP_HEAVY_HOST", "m1")
+    lock, next_slot = path / "lock", path / ".m1-heavy.next"
+    lock.mkdir()
+
+    def pressure(*args):
+        return "transient pressure" if clock[0] == 10 and lock.exists() else None
+
+    def sleep(seconds):
+        assert next_slot.read_text().startswith("brainlayer-backup ")
+        if clock[0] == 0:
+            lock.rmdir()
+        else:
+            assert not lock.exists()  # Failed post-lock probe released custody.
+        clock[0] += seconds
+
+    monkeypatch.setattr(gate, "_pressure_reason", pressure)
+    monkeypatch.setattr(gate.time, "sleep", sleep)
+    with gate.backup_heavy_gate(deadline=40):
+        assert clock[0] == 20
+        assert lock.is_dir()
+        assert not next_slot.exists()

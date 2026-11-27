@@ -186,8 +186,9 @@ class _M1Reservation:
         self.path = Path.home() / ".m1-heavy.next"
         self.content = f"brainlayer-backup {job_key} {os.getpid()} {datetime.now().astimezone().isoformat()}\n".encode()
         self.free_since: float | None = None
+        self.observed: tuple[bytes, tuple[int, int, int]] | None = None
 
-    def _read(self) -> tuple[bytes, tuple[int, int]] | None:
+    def _read(self) -> tuple[bytes, tuple[int, int, int]] | None:
         try:
             fd = os.open(self.path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
         except FileNotFoundError:
@@ -199,28 +200,38 @@ class _M1Reservation:
             content = stream.read(4097)
             if len(content) > 4096:
                 raise OSError("reservation is oversized")
-            return content, (info.st_dev, info.st_ino)
+            return content, (info.st_dev, info.st_ino, info.st_mtime_ns)
 
-    def _remove(self, observed: tuple[bytes, tuple[int, int]]) -> None:
+    def _remove(self, observed: tuple[bytes, tuple[int, int, int]]) -> None:
         if self._read() == observed:
-            self.path.unlink(missing_ok=True)
+            try:
+                info = self.path.lstat()
+            except FileNotFoundError:
+                return
+            if (info.st_dev, info.st_ino, info.st_mtime_ns) == observed[1]:
+                self.path.unlink(missing_ok=True)
 
-    def check(self) -> str | None:
+    def check(self, *, publish: bool = False) -> str | None:
         now = time.monotonic()
-        if self.lock.exists():
-            self.free_since = None
-        elif self.free_since is None:
-            self.free_since = now
         try:
             observed = self._read()
+            held = self.lock.exists()
+            if held or observed != self.observed:
+                self.free_since = None
+            self.observed = observed
+            if not held and self.free_since is None:
+                self.free_since = now
             if observed is not None and observed[0].strip() and observed[0] != self.content:
                 if self.free_since is None or now - self.free_since <= 600:
                     return "M1 next slot reserved by another lane"
                 self._remove(observed)
                 observed = self._read()
             if observed is None or not observed[0].strip():
-                # Publish a complete file in the same directory. Recheck identity/content
-                # before replacement so a newly observed foreign reservation wins.
+                if observed is not None:
+                    self._remove(observed)
+                if not publish or not held:
+                    return None
+                # Link a complete file exclusively: a competing publisher always wins.
                 with tempfile.NamedTemporaryFile(
                     dir=self.path.parent, prefix=".m1-heavy.next-", delete=False
                 ) as stream:
@@ -228,9 +239,7 @@ class _M1Reservation:
                     try:
                         stream.write(self.content)
                         stream.flush()
-                        if self._read() != observed:
-                            return "M1 next slot changed while reserving"
-                        os.replace(temporary, self.path)
+                        os.link(temporary, self.path, follow_symlinks=False)
                     finally:
                         temporary.unlink(missing_ok=True)
             elif observed[0] != self.content:
@@ -302,6 +311,8 @@ def backup_heavy_gate(*, deadline: float | None = None, job_key: str = "backup-d
                 or (None if past_window else _pressure_reason(swap_limit, load_limit))
                 or _disk_reason(host, failed_proofs)
             )
+            if reason is not None and reservation is not None:
+                reservation.release()
             if reason is None and reservation is not None:
                 reason = reservation.check()  # A foreign slot may have appeared during a probe.
             if reason is None:
@@ -309,17 +320,19 @@ def backup_heavy_gate(*, deadline: float | None = None, job_key: str = "backup-d
                     lock.mkdir()
                 except FileExistsError:
                     reason = "heavy lock held by another lane (never cleared by backup)"
+                    if reservation is not None:
+                        reason = reservation.check(publish=True) or reason
                 else:
                     owned = True
                     reason = reservation.check() if reservation is not None else None
-                    if reservation is not None and reason is None:
-                        reservation.release()
                     reason = (
                         reason
                         or (None if past_window else _pressure_reason(swap_limit, load_limit))
                         or _disk_reason(host, failed_proofs)
                     )
                     if reason is None and time.monotonic() < expires:
+                        if reservation is not None:
+                            reservation.release()
                         admitted = True
                         _log(log, "took")
                         if past_window:
