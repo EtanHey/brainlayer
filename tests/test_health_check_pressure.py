@@ -1,3 +1,5 @@
+import fcntl
+import json
 import subprocess
 from pathlib import Path
 
@@ -417,6 +419,35 @@ def test_cleared_hold_allows_next_failing_tick_to_heal(heal_episode, hold):
     result = tick()
     assert f"kickstart:{DAEMON}" in result.actions
     assert len(_daemon_kickstarts(commands)) == 1
+
+
+def test_update_custody_and_pressure_holds_preserve_breaker_until_heal(heal_episode, tmp_path, monkeypatch):
+    tick, commands, events = heal_episode
+    monkeypatch.setenv("BRAINBAR_UPDATE_ROOT", str(tmp_path))
+    key = health._heal_key(DAEMON, "brain_search_canary_failed")
+    tick()
+
+    def assert_deferred(result):
+        saved = json.loads((tmp_path / "state").read_text())
+        assert saved["heal_failures"][key] == 1
+        assert key not in saved["heal_tripped"]
+        assert not any(action.startswith(f"heal_escalation:{DAEMON}:") for action in result.actions)
+        assert not _daemon_kickstarts(commands)
+
+    with (tmp_path / "update-custody.lock").open("a") as updater:
+        fcntl.flock(updater, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        for _ in range(5):
+            assert_deferred(tick(pressure=2))
+    for _ in range(5):
+        result = tick(pressure=2)
+        assert f"heal_backoff:{DAEMON}:brain_search_canary_failed:pressure=2" in result.actions
+        assert_deferred(result)
+
+    result = tick()
+    assert f"kickstart:{DAEMON}" in result.actions
+    assert len(_daemon_kickstarts(commands)) == 1
+    assert json.loads((tmp_path / "state").read_text())["heal_failures"][key] == 2
+    assert not any(event["_type"] == "heal_escalation" and event["label"] == DAEMON for event in events)
 
 
 def test_real_heals_still_escalate_once_per_episode(heal_episode):
