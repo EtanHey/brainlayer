@@ -1044,6 +1044,40 @@ def _apply_heals_with_custody(
         key = _heal_key(label, issue_code)
         consecutive_failures = heal_failures.get(key, 0)
         details = issue_details.get(issue_code, {})
+        heal_context: dict[str, Any] = {}
+        recycle_helper = False
+        if consecutive_failures >= threshold and key not in tripped:
+            hold = {"label": label, "issue_code": issue_code, "consecutive_failures": consecutive_failures}
+            canary_failed = issue_code == "brain_search_canary_failed"
+            daemon_answers = canary_failed and _brainbar_answers_ping(config.socket_path, config.socket_timeout_seconds)
+            recycle_helper = daemon_answers and bool(details.get("timeout"))
+            if issue_code not in bootstrap_issue_codes and not recycle_helper:
+                process = _launchd_process_state(label, command_runner)
+                if process is not None and _state_is_uninterruptible(process[1]):
+                    pid, process_state = process
+                    action = f"heal_backoff:{label}:{issue_code}:pid={pid}:state={process_state}"
+                    _record_heal_hold(
+                        result,
+                        action,
+                        {"_type": "heal_backoff", **hold, "pid": pid, "process_state": process_state, **details},
+                    )
+                    # A deliberate hold is not a failed heal; retain the pre-tick budget.
+                    heal_failures[key] = previous_failures.get(key, 0)
+                    continue
+                if canary_failed:
+                    # Under memory pressure a restart drops every in-flight request and forces a cold
+                    # ~2.7 GB helper reload, live daemon or not. An unreadable level keeps the restart.
+                    level, unreadable = _memory_pressure_level(command_runner)
+                    heal_context = {"memory_pressure_level": level, "ping_ok": daemon_answers}
+                    if level is not None and level >= HEAL_BACKOFF_MEMORY_PRESSURE_LEVEL:
+                        action = f"heal_backoff:{label}:{issue_code}:pressure={level}"
+                        _record_heal_hold(result, action, {"_type": "heal_backoff", **hold, **heal_context, **details})
+                        heal_failures[key] = previous_failures.get(key, 0)
+                        continue
+                    if level is None:
+                        unavailable = f"heal_pressure_unavailable:{label}:{issue_code}:{unreadable}"
+                        if unavailable not in result.actions:
+                            result.actions.append(unavailable)
         if consecutive_failures >= breaker_limit:
             if issue_code in bootstrap_issue_codes:
                 action = _bootstrap_if_absent(label, plist_path, command_runner)
@@ -1073,38 +1107,11 @@ def _apply_heals_with_custody(
                 _log_health_event(f"heal:{issue_code}", message, timestamp=result.checked_at)
             continue
         if consecutive_failures >= threshold:
-            hold = {"label": label, "issue_code": issue_code, "consecutive_failures": consecutive_failures}
-            heal_context: dict[str, Any] = {}
-            canary_failed = issue_code == "brain_search_canary_failed"
-            daemon_answers = canary_failed and _brainbar_answers_ping(config.socket_path, config.socket_timeout_seconds)
             if issue_code in bootstrap_issue_codes:
                 action = _bootstrap_if_absent(label, plist_path, command_runner)
-            elif daemon_answers and details.get("timeout"):
+            elif recycle_helper:
                 action = _recycle_hybrid_helper(label, command_runner)
             else:
-                process = _launchd_process_state(label, command_runner)
-                if process is not None and _state_is_uninterruptible(process[1]):
-                    pid, process_state = process
-                    action = f"heal_backoff:{label}:{issue_code}:pid={pid}:state={process_state}"
-                    _record_heal_hold(
-                        result,
-                        action,
-                        {"_type": "heal_backoff", **hold, "pid": pid, "process_state": process_state, **details},
-                    )
-                    continue
-                if canary_failed:
-                    # Under memory pressure a restart drops every in-flight request and forces a cold
-                    # ~2.7 GB helper reload, live daemon or not. An unreadable level keeps the restart.
-                    level, unreadable = _memory_pressure_level(command_runner)
-                    heal_context = {"memory_pressure_level": level, "ping_ok": daemon_answers}
-                    if level is not None and level >= HEAL_BACKOFF_MEMORY_PRESSURE_LEVEL:
-                        action = f"heal_backoff:{label}:{issue_code}:pressure={level}"
-                        _record_heal_hold(result, action, {"_type": "heal_backoff", **hold, **heal_context, **details})
-                        continue
-                    if level is None:
-                        unavailable = f"heal_pressure_unavailable:{label}:{issue_code}:{unreadable}"
-                        if unavailable not in result.actions:
-                            result.actions.append(unavailable)
                 action = _kickstart(label, command_runner)
             if action.startswith("bootstrap:"):
                 tripped.discard(key)
