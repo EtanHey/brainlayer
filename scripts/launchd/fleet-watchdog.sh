@@ -34,6 +34,8 @@
 # not parse, means nothing is revived this tick. With no readable stop-signal an operator or
 # maintenance pause is indistinguishable from a crash, and reviving a deliberately stopped
 # service is the worse error. The sentinel is parsed with plutil, not a regex.
+# BrainBar's two labels additionally share update-custody.lock with the in-app updater;
+# exclusive update custody defers their revival until the next watchdog pass.
 
 UID_="$(id -u)"
 LOG_DIR="$HOME/Library/Logs/brainlayer"
@@ -53,6 +55,29 @@ mkdir -p "$LOG_DIR" 2>/dev/null
 
 log() {
     printf '%s  %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$1" >> "$LOG"
+}
+
+# macOS ships Ruby but no flock CLI. Keep a SHARED flock alive across BOTH launchctl
+# children, matching brainbar_auto_activation.py:_tick. Never unlink the custody file.
+# The updater owns it exclusively from before stop until its own final activation.
+revive_brainbar() {
+    /usr/bin/ruby - "$UID_" "$label" "$plist" <<'RUBY'
+require "fileutils"
+root = ENV["BRAINBAR_UPDATE_ROOT"]
+root = File.join(ENV.fetch("HOME"), "Library/Application Support/BrainBar") if root.nil? || root.empty?
+begin
+  FileUtils.mkdir_p(root, mode: 0700)
+  File.open(File.join(root, "update-custody.lock"), "a") do |custody|
+    exit 75 unless custody.flock(File::LOCK_SH | File::LOCK_NB)
+    uid, label, plist = ARGV
+    system("launchctl", "enable", "gui/#{uid}/#{label}", err: File::NULL)
+    exit(system("launchctl", "bootstrap", "gui/#{uid}", plist, err: File::NULL) ? 0 : 1)
+  end
+rescue SystemCallError => error
+  warn "BrainBar revival custody unavailable: #{error.class}"
+  exit 1
+end
+RUBY
 }
 
 # Fail closed: with no readable disable state we cannot tell an operator disable from a
@@ -124,6 +149,7 @@ if [ -f "$SKIP_STATE" ]; then
     prev_skipped="$NL$(cat "$SKIP_STATE" 2>/dev/null)$NL"
 fi
 new_skipped=""
+custody_deferred=0
 
 for plist in "$HOME"/Library/LaunchAgents/com.brainlayer.*.plist; do
     [ -f "$plist" ] || continue
@@ -153,6 +179,23 @@ for plist in "$HOME"/Library/LaunchAgents/com.brainlayer.*.plist; do
         continue
     fi
 
+    case "$label" in
+        com.brainlayer.brainbar|com.brainlayer.brainbar-daemon)
+            revive_brainbar
+            status=$?
+            case "$status" in
+                0) log "re-bootstrapped $label" ;;
+                75)
+                    if [ "$custody_deferred" -eq 0 ]; then
+                        log "skipped BrainBar jobs (update custody held)"
+                        custody_deferred=1
+                    fi
+                    ;;
+                *) log "FAILED to re-bootstrap $label (custody or activation failed)" ;;
+            esac
+            continue
+            ;;
+    esac
     launchctl enable "gui/$UID_/$label" 2>/dev/null
     if launchctl bootstrap "gui/$UID_" "$plist" 2>/dev/null; then
         log "re-bootstrapped $label"
