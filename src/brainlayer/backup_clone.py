@@ -26,6 +26,10 @@ class CloneUnavailable(RuntimeError):
     """Stop this clone attempt; clean owned files before a capacity-checked fallback."""
 
 
+class CloneIntegrityError(CloneUnavailable):
+    """Private SQLite recovery found corruption; the caller owns its diagnostic alert."""
+
+
 def divergence_allowance_bytes() -> int:
     from .backup_heavy_gate import _number
 
@@ -175,6 +179,11 @@ def snapshot(source: Path, target: Path, *, validate=None, max_recovery_bytes: i
                     raise CloneUnavailable(f"private WAL recovery incomplete: {result}")
                 if recovered.execute("PRAGMA journal_mode=DELETE").fetchone()[0] != "delete":
                     raise CloneUnavailable("private clone did not become standalone")
+            except sqlite3.OperationalError:
+                # Busy/locked/interrupted recovery is unavailable, not evidence of corruption.
+                raise
+            except sqlite3.DatabaseError as exc:
+                raise CloneIntegrityError(f"private clone recovery failed: {type(exc).__name__}: {exc}") from exc
             finally:
                 recovered.close()
             if validate is not None:
