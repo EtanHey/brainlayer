@@ -1,7 +1,6 @@
 """Exercise the shipped shell with an invented keg and command recorder, never brew."""
 
 import os
-import shutil
 import signal
 import subprocess
 import sys
@@ -15,15 +14,15 @@ SCRIPT = Path(os.environ.get("BRAINBAR_UPDATE_SCRIPT", Path(__file__).parents[1]
 
 
 # Shared by the fakes. A BrainBar process is one whose argv[0] is an executable inside the bundle,
-# as launchd starts it. The fake app ignores SIGTERM (SIG_IGN survives exec), like an app that
-# Homebrew's AppleScript quit cannot stop. Execute a copied binary at its real bundle path
-# instead of spoofing argv[0], so both Linux and macOS process scans see that path.
+# as launchd starts it. Use a symlink to Python: unlike a renamed coreutils multi-call
+# binary, it runs under the bundle name and finds its stdlib through the symlink target.
+# Ignore SIGTERM like an app that Homebrew's AppleScript quit cannot stop.
 APP_ALIVE = """
 app_alive() {
   /bin/ps -axo command= | P="$BRAINBAR_UPDATE_APP/Contents/MacOS/" /usr/bin/awk 'index($0, ENVIRON["P"]) == 1 {f = 1} END {exit !f}'
 }
 start_app() {
-  nohup /bin/bash -c 'trap "" TERM; exec "$0" 300' "$1/Contents/MacOS/BrainBar" >/dev/null 2>&1 &
+  nohup /bin/bash -c 'trap "" TERM; exec "$0" -c "import time; time.sleep(300)"' "$1/Contents/MacOS/BrainBar" >/dev/null 2>&1 &
   echo $!
 }
 """
@@ -62,7 +61,7 @@ def _start_stubborn_app(app: Path) -> subprocess.Popen:
     exe = str(app / "Contents/MacOS/BrainBar")
     # Its own session, so cleanup can reap the whole process group.
     return subprocess.Popen(
-        [exe, "300"],
+        [exe, "-c", "import time; time.sleep(300)"],
         start_new_session=True,
         preexec_fn=lambda: signal.signal(signal.SIGTERM, signal.SIG_IGN),
     )
@@ -95,15 +94,7 @@ def install(tmp_path):
     app.mkdir(parents=True)
     executable = app / "Contents/MacOS/BrainBar"
     executable.parent.mkdir(parents=True)
-    sleep = shutil.which("sleep")
-    assert sleep is not None, "the fixture needs the system sleep executable"
-    # copy2 also copies macOS protected system flags, which unprivileged fixtures cannot set.
-    fixture_sleep = tmp_path / "fixture-sleep"
-    shutil.copy(sleep, fixture_sleep)
-    if sys.platform == "darwin":
-        # A relocated Apple system binary needs a fresh signature before it can execute.
-        subprocess.run(["/usr/bin/codesign", "--force", "--sign", "-", str(fixture_sleep)], check=True)
-    shutil.copy(fixture_sleep, executable)
+    executable.symlink_to(os.path.realpath(sys.executable))
     (app / "identity").write_text("old")
     root = tmp_path / "state"
     keg = tmp_path / "Cellar/brainlayer/2.0.0/lib/brainlayer/launchd"
@@ -141,7 +132,7 @@ elif [ "$2" = --cask ]; then
   if app_alive; then echo ALIVE_AT_CASK >> "$TEST_LOG"; echo "Application did not quit" >&2; fi
   rm -f "${BRAINBAR_UPDATE_AGENTS:?}"/com.brainlayer.brainbar*.plist
   mkdir -p "$BRAINBAR_UPDATE_APP/Contents/MacOS"
-  /bin/cp "$TEST_SLEEP" "$BRAINBAR_UPDATE_APP/Contents/MacOS/BrainBar"
+  /bin/ln -s "$TEST_PYTHON" "$BRAINBAR_UPDATE_APP/Contents/MacOS/BrainBar"
   echo new > "$BRAINBAR_UPDATE_APP/identity"
   [ "$FAIL_STEP" != cask ]
   if [ "$FAIL_STEP" != no-plists ] && [ "$FAIL_STEP" != restore-copy ]; then
@@ -243,7 +234,7 @@ fi
         BRAINBAR_UPDATE_PLIST=str(commands / "plist"),
         BRAINBAR_UPDATE_AGENTS=str(agents),
         BRAINBAR_UPDATE_STOP_TIMEOUT="2",
-        TEST_SLEEP=str(fixture_sleep),
+        TEST_PYTHON=os.path.realpath(sys.executable),
         TEST_LOG=str(log),
         TEST_PREFIX=str(tmp_path),
         FAIL_STEP="",
@@ -546,7 +537,7 @@ def test_custody_survives_supervisor_death_until_installer_exits(install):
         BRAINBAR_UPDATE_PLIST=str(commands / "plist"),
         BRAINBAR_UPDATE_AGENTS=str(app.parents[1] / "LaunchAgents"),
         BRAINBAR_UPDATE_STOP_TIMEOUT="2",
-        TEST_SLEEP=str(app.parents[1] / "fixture-sleep"),
+        TEST_PYTHON=os.path.realpath(sys.executable),
         TEST_LOG=str(app.parents[1] / "commands"),
         TEST_PREFIX=str(app.parents[1]),
         FAIL_STEP="",
@@ -628,6 +619,7 @@ def test_process_that_only_names_the_bundle_is_left_alone(install, tmp_path):
     """Only a process whose executable is in the bundle is BrainBar; `tail <bundle file>` is not."""
     exe = tmp_path / "Applications/BrainBar.app/Contents/MacOS/BrainBar"
     exe.parent.mkdir(parents=True, exist_ok=True)
+    exe.unlink()  # Replace the fixture symlink without writing through to the real interpreter.
     exe.write_text("")
     proc = subprocess.Popen(["/usr/bin/tail", "-f", str(exe)], start_new_session=True)
     try:
