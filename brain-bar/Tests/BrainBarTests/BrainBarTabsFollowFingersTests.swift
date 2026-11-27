@@ -615,6 +615,65 @@ final class BrainBarTabsFollowFingersTests: XCTestCase {
                      clickTimes.first ?? 0, clickTimes.max() ?? 0, frameTimes.first ?? 0, frameTimes.max() ?? 0, restFrames.max() ?? 0))
     }
 
+    // MARK: CodeRabbit (after the ready flip)
+
+    /// C1: Overview → click Backups → an outside request for Backups (a menu item) during that settle → click Overview.
+    /// The store must end on Overview with the tabs. On 13bb20c8 `follow` returned before recording Backups as the
+    /// app's selection, so the rest on Overview looked like no change and the store stayed on Backups.
+    func testAnOutsideSelectionDuringASettleIsNeverLost() {
+        let store = NDStore(fixture: BrainBarDesignFixture.inputs(.calm), page: .overview)
+        store.tabs.isLive = { true }
+        var time = 0.0
+        store.tabs.select(1, at: time)
+        for _ in 0..<6 {
+            time += frame
+            store.tabs.tick(at: time)
+        }
+        let (progress, velocity) = (store.tabs.progress, store.tabs.velocity)
+        store.page = .backups
+        XCTAssertEqual(store.tabs.phase, .settling)
+        XCTAssertEqual(store.tabs.progress, progress, "an outside request for the current target does not restart the spring")
+        XCTAssertEqual(store.tabs.velocity, velocity)
+        store.tabs.select(0, at: time)
+        for _ in 0..<120 where store.tabs.phase != .resting {
+            time += frame
+            store.tabs.tick(at: time)
+        }
+        XCTAssertEqual(store.tabs.selection, 0)
+        XCTAssertEqual(store.page, .overview, "the store follows the tabs back to Overview")
+    }
+
+    /// C2: SwiftUI ends a gesture without `onEnded` when it cancels it. A pill press (or drag) cancelled that way used
+    /// to leave the pager held in `.tracking` with no clock running, and the next drag reused the old pill centre. The
+    /// bar's gesture-state reset now cancels the press: the held pill settles on the nearest tab, and a new press
+    /// starts from where the pill is drawn.
+    func testACancelledPillDragLetsThePillGo() {
+        let pager = GlassTabPager(count: 3, selection: 0)
+        pager.isLive = { true }
+        let pill = metrics.pillFrame(tabs, progress: 0)
+        var press = GlassTabPress.begin(at: CGPoint(x: pill.midX, y: pill.midY), pager: pager, tabs: tabs, metrics: metrics, time: 0)
+        press.move(translation: 30, pager: pager, tabs: tabs, metrics: metrics, time: 0.05)
+        XCTAssertEqual(pager.phase, .tracking, "a pill drag holds the pager")
+        var live: GlassTabPress? = press
+        GlassTabPress.gestureDidReset(&live, pager: pager, time: 0.1) // no onEnded: cancelled
+        XCTAssertNil(live, "the press is cleared")
+        XCTAssertNotEqual(pager.phase, .tracking, "the hold is let go")
+        var time = 0.1
+        for _ in 0..<120 where pager.phase != .resting {
+            time += frame
+            pager.tick(at: time)
+        }
+        XCTAssertEqual(pager.progress, Double(pager.selection), "it settles on a tab")
+        // After a normal mouse-up (`onEnded` cleared the press), the reset changes nothing.
+        var ended: GlassTabPress? = nil
+        GlassTabPress.gestureDidReset(&ended, pager: pager, time: time)
+        XCTAssertEqual(pager.phase, .resting)
+        // A new press starts from where the pill is drawn now, not from the cancelled press's centre.
+        let now = metrics.pillFrame(tabs, progress: pager.progress)
+        let next = GlassTabPress.begin(at: CGPoint(x: now.midX, y: now.midY), pager: pager, tabs: tabs, metrics: metrics, time: time)
+        XCTAssertEqual(next.pillCentre, now.midX)
+    }
+
     // MARK: Review r1: the pressed pill, one weight, the ends
 
     /// B2: a press on the pill during a settle holds the pill where it is drawn; a drag that starts after a pause moves
@@ -760,6 +819,9 @@ final class BrainBarTabsFollowFingersTests: XCTestCase {
                 try NDRenderHarness.write(try NDRenderHarness.host(view, size: size, appearance: appearance),
                                           name: "after-header-\(name)-solid-\(suffix)", in: url)
             }
+            // The harness's click slide (the default fixed-height capture): the pager's spring sampled at 0-200 ms.
+            _ = try NDRenderHarness.pageSwitch(from: .overview, to: .jobs, name: "after-switch-overview-to-jobs-\(suffix)",
+                                               appearance: appearance, in: url)
             // The window at each page and mid-swipe, at the one fixed height (the tallest page's).
             for page in NDPage.allCases {
                 let store = NDStore(fixture: BrainBarDesignFixture.inputs(.twoFaults), page: page)

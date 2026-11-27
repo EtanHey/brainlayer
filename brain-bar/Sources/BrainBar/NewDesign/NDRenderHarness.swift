@@ -144,9 +144,11 @@ import SwiftUI
         return name
     }
 
-    /// R1.6 item 3 / R1.8 item 1: five frames of a page switch side by side (0, 50, 100, 150, 200 ms): the window's height
-    /// on the controller's curve, its top edge fixed, and the page it draws (the new one from the first frame).
+    /// R1.6 item 3 / R1.8 item 1 (per-page heights, `NDWindowSizing.perPageHeights`): five frames of a page switch side
+    /// by side (0, 50, 100, 150, 200 ms): the window's height on the controller's curve, its top edge fixed, and the page
+    /// it draws (the new one from the first frame). With one fixed height, `pageSlide` instead.
     static func pageSwitch(from: NDPage, to: NDPage, name: String, appearance: NSAppearance.Name, in directory: URL) throws -> String {
+        guard NDWindowSizing.perPageHeights else { return try pageSlide(from: from, to: to, name: name, appearance: appearance, in: directory) }
         let store = NDStore(fixture: BrainBarDesignFixture.inputs(.calm), page: from)
         let start = NDPageHeight.window(store, page: from, screen: nil)
         let end = NDPageHeight.window(store, page: to, screen: nil)
@@ -162,6 +164,39 @@ import SwiftUI
             return AnyView(NDWindowRoot(store: frameStore, drawsTrafficLights: true)
                 .frame(width: NDGrid.windowWidth, height: NDPageHeight.window(frameStore, page: page, screen: nil), alignment: .top)
                 .frame(width: NDGrid.windowWidth, height: height, alignment: .top)
+                .background(ND.bg)
+                .clipped()
+                .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color.gray, lineWidth: 1)))
+        }
+        let view = ZStack(alignment: .topLeading) {
+            Color.gray.opacity(0.35)
+            HStack(alignment: .top, spacing: gap) { ForEach(0..<frames.count, id: \.self) { frames[$0] } }
+                .padding(gap)
+        }
+        .frame(width: size.width, height: size.height)
+        try write(host(view, size: size, appearance: appearance), name: name, in: directory)
+        return name
+    }
+
+    /// The default (one fixed height): five frames of a click's slide side by side (0, 50, 100, 150, 200 ms), the pager's
+    /// own spring sampled at 120 Hz, at the window's fitted height; the window never resizes.
+    static func pageSlide(from: NDPage, to: NDPage, name: String, appearance: NSAppearance.Name, in directory: URL) throws -> String {
+        let pager = GlassTabPager(count: NDPage.allCases.count, selection: NDPage.allCases.firstIndex(of: from) ?? 0)
+        pager.isLive = { true }
+        pager.select(NDPage.allCases.firstIndex(of: to) ?? 0, at: 0)
+        var samples: [Double] = [pager.progress]
+        for frame in 1...24 {
+            pager.tick(at: Double(frame) / 120)
+            if frame % 6 == 0 { samples.append(pager.progress) }
+        }
+        let gap: CGFloat = 24
+        let height = NDPageHeight.fitted(NDStore(fixture: BrainBarDesignFixture.inputs(.calm), page: from), page: from, screen: nil)
+        let size = NSSize(width: CGFloat(samples.count) * (NDGrid.windowWidth + gap) + gap, height: height + 2 * gap)
+        let frames: [AnyView] = samples.map { progress in
+            let frameStore = NDStore(fixture: BrainBarDesignFixture.inputs(.calm), page: from)
+            frameStore.tabs.present(progress)
+            return AnyView(NDWindowRoot(store: frameStore, drawsTrafficLights: true).environment(\.glassTabSolidPill, true)
+                .frame(width: NDGrid.windowWidth, height: height)
                 .background(ND.bg)
                 .clipped()
                 .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color.gray, lineWidth: 1)))

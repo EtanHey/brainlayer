@@ -169,7 +169,7 @@ final class BrainBarTabSwipeTests: XCTestCase {
             let host = NSHostingView(rootView: NDWindowRoot(store: store, drawsTrafficLights: true))
             host.appearance = NSAppearance(named: appearance)
             func draw(_ name: String) throws {
-                let size = NSSize(width: NDGrid.windowWidth, height: NDPageHeight.window(store, page: store.page, screen: nil))
+                let size = NSSize(width: NDGrid.windowWidth, height: NDPageHeight.fitted(store, page: store.page, screen: nil))
                 host.frame = NSRect(origin: .zero, size: size)
                 host.layoutSubtreeIfNeeded()
                 RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))

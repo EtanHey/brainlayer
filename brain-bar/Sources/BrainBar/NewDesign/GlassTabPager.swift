@@ -153,8 +153,10 @@ struct GlassTabSpring: Equatable {
     /// Something else changed the selection (a menu item, the app's state). Animated only while frames are drawn.
     func follow(_ index: Int, at time: Double = CACurrentMediaTime()) {
         let index = min(max(index, 0), lastIndex)
-        guard index != selection else { return }
+        // The app has this selection now, whatever happens next: recorded before the guard, so a request for the tab
+        // already being settled to (which must not restart the spring) still counts (CodeRabbit C1).
         committed = index
+        guard index != selection else { return }
         if isLive() {
             settle(to: index, velocity: velocity, at: time)
         } else {
@@ -393,6 +395,9 @@ struct GlassTabBar: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.glassTabSolidPill) private var solidPill
     @State private var livePress: GlassTabPress?
+    /// True while the press gesture runs; SwiftUI resets it on the gesture's end AND on its cancellation (which never
+    /// calls `onEnded`).
+    @GestureState private var gestureActive = false
     @Environment(\.glassTabPreviewPress) private var previewPress
     /// The press drawn: the pointer's, or a render's stand-in.
     private var press: GlassTabPress? { livePress ?? previewPress }
@@ -414,6 +419,11 @@ struct GlassTabBar: View {
         .frame(width: width, height: metrics.height)
         .contentShape(Capsule())
         .gesture(pressGesture(frames: frames))
+        .onChange(of: gestureActive) { _, active in
+            guard !active else { return }
+            // On the next turn, after any `onEnded`: a press still held then was cancelled.
+            Task { @MainActor in GlassTabPress.gestureDidReset(&livePress, pager: pager, time: now()) }
+        }
         .focusable(interactions: .activate)  // keyboard focus only with keyboard navigation on, like the system control
         .onMoveCommand { direction in
             switch direction {
@@ -498,6 +508,7 @@ struct GlassTabBar: View {
     /// pointer, and the release settles it like a trackpad release (any tab may be the target).
     private func pressGesture(frames: [CGRect]) -> some Gesture {
         DragGesture(minimumDistance: 0, coordinateSpace: .local)
+            .updating($gestureActive) { _, active, _ in active = true }
             .onChanged { value in
                 if livePress == nil {
                     livePress = GlassTabPress.begin(at: value.startLocation, pager: pager, tabs: tabs, metrics: metrics, time: now())
@@ -541,6 +552,14 @@ struct GlassTabPress: Equatable {
         guard onPill, dragging || abs(translation) >= Self.dragThreshold else { return }
         dragging = true
         pager.drag(to: metrics.progress(forPillCentre: pillCentre + translation, tabs), at: time)
+    }
+
+    /// The press ended without a mouse-up (SwiftUI cancelled the gesture, so `end` never ran): let go of a held pill,
+    /// which settles on the nearest tab, and select nothing. After a normal mouse-up `end` has already cleared `live`.
+    @MainActor static func gestureDidReset(_ live: inout GlassTabPress?, pager: GlassTabPager, time: Double) {
+        guard let press = live else { return }
+        live = nil
+        if press.onPill { pager.release(at: time, oneStep: false) }
     }
 
     @MainActor func end(at location: CGPoint, pager: GlassTabPager, tabs: [GlassTab], metrics: GlassTabMetrics, time: Double) {
