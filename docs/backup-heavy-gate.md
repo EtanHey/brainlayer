@@ -33,6 +33,22 @@ then rechecked under it; only admitted work logs took/released. A held lock is
 never removed, including a stale one.
 Only orc may clear another lane's stale lock after its age/process checks.
 
+On M1 only, the gate participates in the binding `~/.m1-heavy.next`
+reservation protocol (orc, 26 November 2026). It publishes
+`brainlayer-backup <job_key> <pid> <ISO time>` when the slot is absent or empty,
+including while another lane holds the lock. A foreign reservation blocks
+admission even with a free lock. The gate may reclaim it only after observing
+the lock free for **more than ten minutes**; observing a held lock resets that
+timer. An old reservation timestamp alone is insufficient evidence. This may
+conservatively add ten minutes after a gate restart.
+Publication uses a temporary file in the same directory and atomic replacement,
+with an identity/content recheck. Symlinks and non-regular reservation files
+defer admission and are never followed. Acquisition removes the backup's own
+reservation; deadline, signal and exception unwinding also remove it if its
+content still matches. A replacement belonging to another lane is retained.
+SIGKILL/power loss can leave a reservation for the stale-slot rule to handle.
+M4 neither reads nor writes `.next`.
+
 The parent retries every ten minutes within a six-hour pressure window, logging
 each reason. At the end of that window it runs despite swap/load pressure, but
 still waits for and takes the host lock. It logs that it is running past the

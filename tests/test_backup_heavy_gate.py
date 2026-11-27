@@ -23,10 +23,12 @@ REAL_EXPECTED_PHASE_SECONDS = gate.expected_phase_seconds
 
 @pytest.fixture
 def admission(monkeypatch):
+    assert Path(gate.__file__).is_relative_to(Path.cwd())
     root = Path.cwd() / ".build.noindex" / "pytest"
     root.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(dir=root) as directory:
         path = Path(directory)
+        monkeypatch.setenv("HOME", str(path))
         monkeypatch.setenv("BRAINLAYER_BACKUP_HEAVY_HOST", "m4")
         monkeypatch.setenv("BRAINLAYER_BACKUP_HEAVY_LOCK_PATH", str(path / "lock"))
         monkeypatch.setenv("BRAINLAYER_BACKUP_HEAVY_LOG_PATH", str(path / "heavy.log"))
@@ -597,3 +599,139 @@ backup.main()
             child.kill()
             child.wait(timeout=5)
         os.close(read_fd)
+
+
+def test_m1_reserves_next_slot_while_another_lane_holds_lock(admission, monkeypatch):
+    path, clock = admission
+    monkeypatch.setenv("BRAINLAYER_BACKUP_HEAVY_HOST", "m1")
+    lock, next_slot = path / "lock", path / ".m1-heavy.next"
+    lock.mkdir()
+
+    def sleep(seconds):
+        reservation = next_slot.read_text()
+        assert reservation.startswith("brainlayer-backup backup-daily ")
+        clock[0] += seconds
+        lock.rmdir()  # Its owner releases; a competing cooperative lane backs off.
+        competitor_took_lock = not next_slot.read_text().strip()
+        if competitor_took_lock:
+            lock.mkdir()
+        assert not competitor_took_lock
+        assert next_slot.read_text() == reservation
+
+    monkeypatch.setattr(gate.time, "sleep", sleep)
+    with gate.backup_heavy_gate(deadline=30):
+        assert lock.is_dir()
+        assert not next_slot.exists()  # Remove, never empty, on acquisition.
+    assert clock[0] == 10
+
+
+def test_m1_respects_foreign_next_even_when_lock_is_free(admission, monkeypatch):
+    path, _ = admission
+    monkeypatch.setenv("BRAINLAYER_BACKUP_HEAVY_HOST", "m1")
+    next_slot = path / ".m1-heavy.next"
+    next_slot.write_text("another-lane\n")
+    with pytest.raises(gate.BackupGateDeferred):
+        with gate.backup_heavy_gate(deadline=30):
+            pytest.fail("backup stole another lane's slot")
+    assert next_slot.read_text() == "another-lane\n"
+    assert not (path / "lock").exists()
+
+
+@pytest.mark.parametrize("ending", ["deadline", "signal", "exception"])
+def test_m1_cleans_own_waiting_reservation(admission, monkeypatch, ending):
+    path, clock = admission
+    monkeypatch.setenv("BRAINLAYER_BACKUP_HEAVY_HOST", "m1")
+    (path / "lock").mkdir()
+    next_slot = path / ".m1-heavy.next"
+
+    def sleep(seconds):
+        assert next_slot.read_text().startswith("brainlayer-backup ")
+        if ending == "signal":
+            signal.raise_signal(signal.SIGTERM)
+        if ending == "exception":
+            raise RuntimeError("synthetic failure")
+        clock[0] += seconds
+
+    monkeypatch.setattr(gate.time, "sleep", sleep)
+    expected = {"deadline": gate.BackupGateDeferred, "signal": SystemExit, "exception": RuntimeError}[ending]
+    with pytest.raises(expected):
+        with gate.backup_heavy_gate(deadline=10):
+            pytest.fail("held lock admitted")
+    assert not next_slot.exists()
+    assert (path / "lock").is_dir()
+
+
+def test_m1_never_cleans_a_replacement_reservation(admission, monkeypatch):
+    path, clock = admission
+    monkeypatch.setenv("BRAINLAYER_BACKUP_HEAVY_HOST", "m1")
+    (path / "lock").mkdir()
+    next_slot = path / ".m1-heavy.next"
+
+    def sleep(seconds):
+        assert next_slot.read_text().startswith("brainlayer-backup ")
+        next_slot.write_text("replacement-lane")
+        clock[0] += seconds
+
+    monkeypatch.setattr(gate.time, "sleep", sleep)
+    with pytest.raises(gate.BackupGateDeferred):
+        with gate.backup_heavy_gate(deadline=10):
+            pytest.fail("held lock admitted")
+    assert next_slot.read_text() == "replacement-lane"
+
+
+def test_m1_reclaims_foreign_next_only_after_lock_observed_free_over_ten_minutes(admission, monkeypatch):
+    path, clock = admission
+    monkeypatch.setenv("BRAINLAYER_BACKUP_HEAVY_HOST", "m1")
+    next_slot = path / ".m1-heavy.next"
+    next_slot.write_text("another-lane")
+    os.utime(next_slot, (1, 1))  # Old file age alone cannot establish a free lock.
+
+    def sleep(seconds):
+        assert next_slot.read_text() == "another-lane"
+        clock[0] += seconds
+
+    monkeypatch.setattr(gate.time, "sleep", sleep)
+    with gate.backup_heavy_gate(deadline=650):
+        assert clock[0] == 610
+        assert not next_slot.exists()
+
+
+def test_m1_does_not_follow_next_symlink(admission, monkeypatch):
+    path, _ = admission
+    monkeypatch.setenv("BRAINLAYER_BACKUP_HEAVY_HOST", "m1")
+    target = path / "foreign"
+    target.write_text("")
+    next_slot = path / ".m1-heavy.next"
+    next_slot.symlink_to(target)
+    with pytest.raises(gate.BackupGateDeferred):
+        with gate.backup_heavy_gate(deadline=10):
+            pytest.fail("unsafe reservation admitted")
+    assert next_slot.is_symlink()
+    assert target.read_text() == ""
+
+
+def test_m4_never_reads_or_writes_next(admission, monkeypatch):
+    path, _ = admission
+    next_slot = path / ".m1-heavy.next"
+    next_slot.symlink_to(path / "absent")
+    with gate.backup_heavy_gate():
+        assert next_slot.is_symlink()
+    assert next_slot.is_symlink()
+    assert not (path / ".m4-heavy.next").exists()
+
+
+def test_m1_rechecks_foreign_reservation_after_resource_probe(admission, monkeypatch):
+    path, _ = admission
+    monkeypatch.setenv("BRAINLAYER_BACKUP_HEAVY_HOST", "m1")
+    next_slot = path / ".m1-heavy.next"
+
+    def pressure(*args):
+        next_slot.write_text("new-lane")
+        return None
+
+    monkeypatch.setattr(gate, "_pressure_reason", pressure)
+    with pytest.raises(gate.BackupGateDeferred):
+        with gate.backup_heavy_gate(deadline=10):
+            pytest.fail("backup stole a slot published during its probe")
+    assert next_slot.read_text() == "new-lane"
+    assert not (path / "lock").exists()

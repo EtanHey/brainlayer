@@ -6,8 +6,10 @@ import math
 import os
 import re
 import signal
+import stat
 import subprocess
 import sys
+import tempfile
 import time
 from contextlib import contextmanager
 from datetime import datetime
@@ -176,6 +178,77 @@ def _log(path: Path, action: str) -> None:
         stream.write(f"brainlayer backup_daily {action} {datetime.now():%H:%M}\n")
 
 
+class _M1Reservation:
+    """Cooperate with the fleet's binding .next slot; never reclaim a lock."""
+
+    def __init__(self, lock: Path, job_key: str):
+        self.lock = lock
+        self.path = Path.home() / ".m1-heavy.next"
+        self.content = f"brainlayer-backup {job_key} {os.getpid()} {datetime.now().astimezone().isoformat()}\n".encode()
+        self.free_since: float | None = None
+
+    def _read(self) -> tuple[bytes, tuple[int, int]] | None:
+        try:
+            fd = os.open(self.path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        except FileNotFoundError:
+            return None
+        with os.fdopen(fd, "rb") as stream:
+            info = os.fstat(stream.fileno())
+            if not stat.S_ISREG(info.st_mode):
+                raise OSError("reservation is not a regular file")
+            content = stream.read(4097)
+            if len(content) > 4096:
+                raise OSError("reservation is oversized")
+            return content, (info.st_dev, info.st_ino)
+
+    def _remove(self, observed: tuple[bytes, tuple[int, int]]) -> None:
+        if self._read() == observed:
+            self.path.unlink(missing_ok=True)
+
+    def check(self) -> str | None:
+        now = time.monotonic()
+        if self.lock.exists():
+            self.free_since = None
+        elif self.free_since is None:
+            self.free_since = now
+        try:
+            observed = self._read()
+            if observed is not None and observed[0].strip() and observed[0] != self.content:
+                if self.free_since is None or now - self.free_since <= 600:
+                    return "M1 next slot reserved by another lane"
+                self._remove(observed)
+                observed = self._read()
+            if observed is None or not observed[0].strip():
+                # Publish a complete file in the same directory. Recheck identity/content
+                # before replacement so a newly observed foreign reservation wins.
+                with tempfile.NamedTemporaryFile(
+                    dir=self.path.parent, prefix=".m1-heavy.next-", delete=False
+                ) as stream:
+                    temporary = Path(stream.name)
+                    try:
+                        stream.write(self.content)
+                        stream.flush()
+                        if self._read() != observed:
+                            return "M1 next slot changed while reserving"
+                        os.replace(temporary, self.path)
+                    finally:
+                        temporary.unlink(missing_ok=True)
+            elif observed[0] != self.content:
+                return "M1 next slot changed while reserving"
+        except OSError as exc:
+            return f"M1 next slot unavailable: {type(exc).__name__}"
+        return None
+
+    def release(self) -> None:
+        try:
+            observed = self._read()
+            if observed is not None and observed[0] == self.content:
+                self._remove(observed)
+        except OSError:
+            # An unsafe/replaced path belongs to somebody else; never follow it.
+            pass
+
+
 @contextmanager
 def backup_heavy_gate(*, deadline: float | None = None, job_key: str = "backup-daily"):
     """Wait before spawning the heavy child, retaining custody until it is reaped.
@@ -206,6 +279,7 @@ def backup_heavy_gate(*, deadline: float | None = None, job_key: str = "backup-d
     waited = False
     previous = {}
     failed_proofs: set[tuple] = set()  # Raw/archive identities whose reclaim proof failed this gate run.
+    reservation = _M1Reservation(lock, job_key) if host == "m1" else None
 
     def stopped(signum, _frame):
         raise SystemExit(128 + signum)
@@ -222,9 +296,14 @@ def backup_heavy_gate(*, deadline: float | None = None, job_key: str = "backup-d
                 )
             past_window = time.monotonic() >= pressure_window_end
             # Pressure first: the disk check may prove and reclaim raws, which is heavy I/O.
-            reason = (None if past_window else _pressure_reason(swap_limit, load_limit)) or _disk_reason(
-                host, failed_proofs
+            reason = reservation.check() if reservation is not None else None
+            reason = (
+                reason
+                or (None if past_window else _pressure_reason(swap_limit, load_limit))
+                or _disk_reason(host, failed_proofs)
             )
+            if reason is None and reservation is not None:
+                reason = reservation.check()  # A foreign slot may have appeared during a probe.
             if reason is None:
                 try:
                     lock.mkdir()
@@ -232,8 +311,13 @@ def backup_heavy_gate(*, deadline: float | None = None, job_key: str = "backup-d
                     reason = "heavy lock held by another lane (never cleared by backup)"
                 else:
                     owned = True
-                    reason = (None if past_window else _pressure_reason(swap_limit, load_limit)) or _disk_reason(
-                        host, failed_proofs
+                    reason = reservation.check() if reservation is not None else None
+                    if reservation is not None and reason is None:
+                        reservation.release()
+                    reason = (
+                        reason
+                        or (None if past_window else _pressure_reason(swap_limit, load_limit))
+                        or _disk_reason(host, failed_proofs)
                     )
                     if reason is None and time.monotonic() < expires:
                         admitted = True
@@ -269,5 +353,9 @@ def backup_heavy_gate(*, deadline: float | None = None, job_key: str = "backup-d
                 finally:
                     lock.rmdir()
         finally:
-            for signum, handler in previous.items():
-                signal.signal(signum, handler)
+            try:
+                if reservation is not None:
+                    reservation.release()
+            finally:
+                for signum, handler in previous.items():
+                    signal.signal(signum, handler)
