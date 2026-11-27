@@ -64,7 +64,7 @@ revive_brainbar() {
     /usr/bin/ruby - "$UID_" "$label" "$plist" <<'RUBY'
 require "fileutils"
 root = ENV["BRAINBAR_UPDATE_ROOT"]
-root = File.join(ENV.fetch("HOME"), "Library/Application Support/BrainBar") if root.nil? || root.empty?
+root = File.join(Dir.home, "Library/Application Support/BrainBar") if root.nil? || root.empty?
 begin
   FileUtils.mkdir_p(root, mode: 0700)
   File.open(File.join(root, "update-custody.lock"), "a") do |custody|
