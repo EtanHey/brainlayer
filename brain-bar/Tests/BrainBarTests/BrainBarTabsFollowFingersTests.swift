@@ -225,8 +225,14 @@ final class BrainBarTabsFollowFingersTests: XCTestCase {
         NDWindowSizing.perPageHeights = perPageHeights
         addTeardownBlock { @MainActor in NDWindowSizing.perPageHeights = false }
         let controller = BrainBarDashboardPanelController(workspace: BrainBarRecordingWorkspace(), runtime: BrainBarRuntime())
+        // The controller fits at init against this machine's own screen. CI's macos-15 runner has a small one (the window
+        // came out 681 pt there), so the test replays that first: a first fit capped by a short screen.
+        controller.visibleHeightOverride = 600
+        controller.fitPage(controller.newDesignStore.page)
         controller.visibleHeightOverride = 2000
         controller.reduceMotionForTesting = false
+        // Every input is now the test's own; refit to them (at once: not yet animating), so no machine's screen leaks in.
+        controller.fitPage(controller.newDesignStore.page)
         controller.animatesPageSwitchForTesting = true
         controller.newDesignStore.tabs.isLive = { true }
         return controller
