@@ -44,18 +44,19 @@ enum AgentHarness: String, CaseIterable, Sendable {
     case geminiCLI
 }
 
-/// #1899 R1: running agents per harness, from live session state only. A session is running while its own process lives
-/// (each Claude, Cursor, Gemini CLI and `agy` CLI session has one, and nested CLIs fold into the outer session), or, for a
-/// Codex thread hosted by an app server, while its own rollout says a turn is under way (`task_started` with no later
-/// `task_complete` or `turn_aborted`). A transcript written recently is NOT running: that is `presences`, which counts
-/// finished sessions for 10 minutes. Where liveness cannot be established the count is nil (unknown): no measurement, an
-/// Antigravity ACP server whose conversations BrainBar cannot see into, or a Codex app server whose rollouts were not read.
+/// #1899 R1/R2: running agents per harness, from live session state only. A session is running while its own process
+/// lives (each Claude, Cursor, Gemini CLI and `agy` CLI session has one, and nested CLIs fold into the outer session), or,
+/// for a Codex thread hosted by an app server, while a live app server holds its rollout open and that rollout says a turn
+/// is under way (`AgentTranscriptActivity.CodexTurnTracker`). A transcript written recently is NOT running: that is
+/// `presences`, which counts finished sessions for 10 minutes. Where liveness cannot be proven the count is nil (unknown):
+/// no measurement, an Antigravity ACP server whose conversations BrainBar cannot see into, or hosted threads not measured.
 struct AgentRunning: Sendable, Equatable {
     /// Top-level live session processes per harness.
     var processes: [AgentHarness: Int] = [:]
-    /// A `codex app-server` is alive: its threads have no process of their own.
-    var codexHostAlive = false
-    /// Its threads that are mid-turn, from their rollouts; nil when not read.
+    /// The live `codex app-server` processes: their threads have no process of their own.
+    var codexHosts: [Int32] = []
+    var codexHostAlive: Bool { !codexHosts.isEmpty }
+    /// Their threads that are mid-turn, proven by the host holding the rollout; nil when not measured.
     var hostedCodexThreads: Int? = nil
     /// An Antigravity ACP server (`agy_acp_server`) is alive: its conversations' liveness is not readable.
     var antigravityHostAlive = false
@@ -187,7 +188,7 @@ final class AgentActivityMonitor: Sendable {
     private let executablePathResolver: @Sendable (Int32) -> String?
     private let argv0Resolver: @Sendable (Int32) -> String?
     private let transcriptSessions: @Sendable () -> [AgentFamily: Int]
-    private let hostedCodexThreads: @Sendable () -> Int?
+    private let hostedCodexThreads: @Sendable ([Int32]) -> Int?
 
     /// The live process probes are named explicitly (`.live`) where production builds a
     /// monitor; tests inject synthetic process rows, path/argv resolvers and transcript counts.
@@ -196,7 +197,7 @@ final class AgentActivityMonitor: Sendable {
         executablePathResolver: @escaping @Sendable (Int32) -> String?,
         argv0Resolver: @escaping @Sendable (Int32) -> String? = { _ in nil },
         transcriptSessions: @escaping @Sendable () -> [AgentFamily: Int] = { [:] },
-        hostedCodexThreads: @escaping @Sendable () -> Int? = { nil }
+        hostedCodexThreads: @escaping @Sendable ([Int32]) -> Int? = { _ in nil }
     ) {
         self.snapshotProvider = snapshotProvider
         self.executablePathResolver = executablePathResolver
@@ -212,24 +213,22 @@ final class AgentActivityMonitor: Sendable {
         executablePathResolver: AgentActivityMonitor.kernelExecutablePath,
         argv0Resolver: AgentActivityMonitor.kernelArgv0,
         transcriptSessions: { liveTranscriptSessions.counts() },
-        hostedCodexThreads: { liveHostedCodexThreads.counts()[.codex] }
+        hostedCodexThreads: { liveCodexTurns.runningThreads(hosts: $0) }
     )
 
     private static let liveTranscriptSessions = AgentTranscriptActivity.Cache { now in
         AgentTranscriptActivity.count(home: FileManager.default.homeDirectoryForCurrentUser, now: now)
     }
 
-    /// #1899 R1: running state must be fresh, so this scan keeps its answer 10 s (the session scan above keeps 60 s).
-    private static let liveHostedCodexThreads = AgentTranscriptActivity.Cache(ttl: 10) { now in
-        [.codex: AgentTranscriptActivity.runningHostedCodexThreads(home: FileManager.default.homeDirectoryForCurrentUser, now: now)]
-    }
+    /// #1899 R2: read on every sample (no cache): the hosts' open files, then only what each held rollout appended since.
+    private static let liveCodexTurns = AgentTranscriptActivity.CodexTurnTracker(openFiles: AgentTranscriptActivity.openFilePaths)
 
     func sample() -> AgentActivitySnapshot {
         guard let snapshot = snapshotProvider() else { return .unavailable("ps capture failed") }
         let parsed = Self.parse(snapshot, executablePath: executablePathResolver, argv0: argv0Resolver)
             .merging(transcriptSessions: transcriptSessions())
         // Hosted threads are read only while a server hosts them: with none alive, a rollout left mid-turn is not running.
-        return parsed.running.codexHostAlive ? parsed.withHostedCodexThreads(hostedCodexThreads()) : parsed
+        return parsed.running.codexHostAlive ? parsed.withHostedCodexThreads(hostedCodexThreads(parsed.running.codexHosts)) : parsed
     }
 
     struct ProcessRow: Equatable {
@@ -273,7 +272,7 @@ final class AgentActivityMonitor: Sendable {
             row.executablePath = executablePath(row.pid)
             let invocation = Invocation(command: row.command, kernelPath: row.executablePath, actualArgv0: argv0(row.pid))
             // A Codex app server (T3 Code's, or the Codex app's own bundled one) hosts threads without processes.
-            if invocation.binary == "codex", codexRole(invocation) == "app-server" { running.codexHostAlive = true }
+            if invocation.binary == "codex", codexRole(invocation) == "app-server" { running.codexHosts.append(row.pid) }
             guard !isAppOrSystemExecutable(row.executablePath) else { continue }
             if isAntigravityHost(row, invocation) {
                 running.antigravityHostAlive = true

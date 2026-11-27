@@ -24,7 +24,7 @@ enum AgentTranscriptActivity {
     /// `session_meta` names the origin (`"source":{"subagent":…}`), so the whole first line is
     /// read, up to this cap. It runs only on rollouts already inside the window.
     static let codexFirstLineCap = 256 * 1024
-    private static let codexSubagentMarker = Data(#""source":{"subagent""#.utf8)
+    static let codexSubagentMarker = Data(#""source":{"subagent""#.utf8)
 
     static func count(
         home: URL,
@@ -121,7 +121,7 @@ enum AgentTranscriptActivity {
     }
 
     /// A rollout's first line (its `session_meta`), up to `codexFirstLineCap`.
-    private static func codexFirstLine(_ url: URL) -> Data {
+    static func codexFirstLine(_ url: URL) -> Data {
         guard let handle = try? FileHandle(forReadingFrom: url) else { return Data() }
         defer { try? handle.close() }
         var line = Data()
@@ -137,35 +137,11 @@ enum AgentTranscriptActivity {
         return line
     }
 
-    // MARK: running hosted Codex threads (#1899 R1)
+    // MARK: running hosted Codex threads (#1899 R1, R2)
 
     /// Originators whose sessions have a process of their own, counted from `ps`: the interactive CLI and `codex exec`.
     /// Every other originator (T3 Code, the Codex app, the SDK) is a thread hosted by an app server.
     static let codexOwnProcessOriginators: Set<String> = ["codex_cli_rs", "codex_exec"]
-    /// How much of a rollout's end is read for its last turn marker.
-    static let codexTailCap = 1 << 20
-    private static let codexTurnMarkers: Set<String> = ["task_started", "task_complete", "turn_aborted"]
-
-    /// Hosted Codex threads that are mid-turn now: a top-level rollout written in the last `window`, from a hosted
-    /// originator, whose last turn marker is `task_started`. A finished turn (`task_complete`, `turn_aborted`) is not
-    /// running however recently it was written. A thread silent for longer than `window` mid-turn is missed (a lower bound).
-    static func runningHostedCodexThreads(
-        home: URL,
-        now: Date,
-        window: TimeInterval = window,
-        fileManager: FileManager = .default
-    ) -> Int {
-        let rollouts = recentTranscripts(under: home.appendingPathComponent(".codex/sessions"), maxDepth: 4,
-                                         cutoff: now.addingTimeInterval(-window), fileManager: fileManager)
-        var threads: Set<String> = []
-        for url in rollouts {
-            let first = codexFirstLine(url)
-            guard first.range(of: codexSubagentMarker) == nil else { continue }
-            if let originator = codexOriginator(first), codexOwnProcessOriginators.contains(originator) { continue }
-            if codexTurnInProgress(url) { threads.insert(sessionID(url)) }
-        }
-        return threads.count
-    }
 
     static func codexOriginator(_ firstLine: Data) -> String? {
         guard let object = try? JSONSerialization.jsonObject(with: firstLine) as? [String: Any],
@@ -173,22 +149,142 @@ enum AgentTranscriptActivity {
         return payload["originator"] as? String
     }
 
-    /// The rollout's last turn marker is `task_started`. Read from the end, at most `codexTailCap`: a turn's completion is
-    /// its last record, so a tail longer than the cap with no marker in it is the middle of a started turn.
-    static func codexTurnInProgress(_ url: URL) -> Bool {
-        guard let handle = try? FileHandle(forReadingFrom: url) else { return false }
-        defer { try? handle.close() }
-        guard let size = try? handle.seekToEnd() else { return false }
-        let start = size > UInt64(codexTailCap) ? size - UInt64(codexTailCap) : 0
-        guard (try? handle.seek(toOffset: start)) != nil, let tail = try? handle.readToEnd() else { return false }
-        for line in tail.split(separator: UInt8(ascii: "\n")).reversed() {
-            guard codexTurnMarkers.contains(where: { line.range(of: Data($0.utf8)) != nil }),
-                  let object = try? JSONSerialization.jsonObject(with: Data(line)) as? [String: Any],
-                  object["type"] as? String == "event_msg",
-                  let payload = object["payload"] as? [String: Any],
-                  let type = payload["type"] as? String, codexTurnMarkers.contains(type) else { continue }
-            return type == "task_started"
+    /// #1899 R2: hosted Codex threads that are running now, each PROVEN by its own host. The rule:
+    /// a thread runs while (1) a live `codex app-server` process holds its rollout open, and (2) the rollout's last valid
+    /// turn marker is `task_started` (no later `task_complete` or `turn_aborted`).
+    /// (1) is ownership by a live host, read from that process's own open files. A server that died mid-turn holds
+    /// nothing, so its orphaned thread is not counted while another (or a restarted) server lives. Two live servers each
+    /// own the files they hold; a file held by both counts once. (2) is read incrementally per file, from the file's start,
+    /// so no record is ever cut by a tail window (R3).
+    /// Anything not measured makes the whole count nil (unknown): a host whose open files cannot be listed, a held rollout
+    /// that cannot be opened or read, a session record that cannot be read, or a marker line that does not parse (R1).
+    final class CodexTurnTracker: @unchecked Sendable {
+        enum Turn: Equatable { case none, started, finished, unknown }
+
+        private struct Entry {
+            var file: UInt64   // the file's id: a replaced file starts over
+            var offset: UInt64 // the end of the last complete line read
+            var turn: Turn
+            var hosted: Bool   // a top-level thread from a hosted originator
         }
-        return start > 0
+
+        private let lock = NSLock()
+        private var entries: [String: Entry] = [:]
+        private let openFiles: @Sendable (Int32) -> [String]?
+        /// Bytes read per call: the read is bounded by the size measured first, so appends during it wait for the next.
+        static let chunk = 1 << 20
+
+        init(openFiles: @escaping @Sendable (Int32) -> [String]?) {
+            self.openFiles = openFiles
+        }
+
+        func runningThreads(hosts: [Int32]) -> Int? {
+            lock.lock()
+            defer { lock.unlock() }
+            var held: Set<String> = []
+            for pid in hosts {
+                guard let files = openFiles(pid) else { return nil }
+                held.formUnion(files.filter(Self.isRollout))
+            }
+            var running: Set<String> = []
+            for path in held {
+                guard let entry = advance(path) else { return nil }
+                guard entry.hosted else { continue }
+                switch entry.turn {
+                case .started: running.insert(AgentTranscriptActivity.sessionID(URL(fileURLWithPath: path)))
+                case .none, .finished: continue
+                case .unknown: return nil
+                }
+            }
+            entries = entries.filter { held.contains($0.key) }  // forget files no live host holds
+            return running.count
+        }
+
+        static func isRollout(_ path: String) -> Bool {
+            let name = (path as NSString).lastPathComponent
+            return name.hasPrefix("rollout-") && name.hasSuffix(".jsonl")
+        }
+
+        /// Reads what was appended since the last call (from the start for a new or replaced file); nil when unreadable.
+        private func advance(_ path: String) -> Entry? {
+            guard let attributes = try? FileManager.default.attributesOfItem(atPath: path),
+                  let size = (attributes[.size] as? NSNumber)?.uint64Value,
+                  let file = (attributes[.systemFileNumber] as? NSNumber)?.uint64Value else { return nil }
+            var entry = entries[path].flatMap { $0.file == file && $0.offset <= size ? $0 : nil }
+            if entry == nil {
+                guard let probe = FileHandle(forReadingAtPath: path) else { return nil }
+                try? probe.close()
+                let first = AgentTranscriptActivity.codexFirstLine(URL(fileURLWithPath: path))
+                // Its session record is not written yet: nothing has started (asked again next time).
+                if UInt64(first.count) >= size { return Entry(file: file, offset: 0, turn: .none, hosted: false) }
+                let subagent = first.range(of: AgentTranscriptActivity.codexSubagentMarker) != nil
+                let own = AgentTranscriptActivity.codexOriginator(first).map(codexOwnProcessOriginators.contains) ?? false
+                entry = Entry(file: file, offset: 0, turn: .none, hosted: !subagent && !own)
+            }
+            guard var next = entry else { return nil }
+            if next.offset < size {
+                guard let handle = FileHandle(forReadingAtPath: path) else { return nil }
+                defer { try? handle.close() }
+                guard (try? handle.seek(toOffset: next.offset)) != nil else { return nil }
+                var pending = Data()
+                var position = next.offset
+                while position < size {
+                    guard let data = try? handle.read(upToCount: Int(min(UInt64(Self.chunk), size - position))),
+                          !data.isEmpty else { return nil }
+                    position += UInt64(data.count)
+                    pending.append(data)
+                    // Complete lines only; a partial last line waits for its newline.
+                    guard let lastNewline = pending.lastIndex(of: UInt8(ascii: "\n")) else { continue }
+                    let complete = pending[pending.startIndex..<lastNewline]
+                    for line in complete.split(separator: UInt8(ascii: "\n")) { next.turn = Self.turn(after: next.turn, line: line) }
+                    let consumed = UInt64(lastNewline - pending.startIndex + 1)
+                    next.offset += consumed
+                    pending = Data(pending[(lastNewline + 1)...])
+                }
+            }
+            entries[path] = next
+            return next
+        }
+
+        private static let markers = ["task_started", "task_complete", "turn_aborted"].map { Data("\"type\":\"\($0)\"".utf8) }
+
+        /// A line that carries a turn marker moves the state; one that names a marker but does not parse is unknown.
+        static func turn(after current: Turn, line: Data.SubSequence) -> Turn {
+            guard markers.contains(where: { line.range(of: $0) != nil }) else { return current }
+            guard let object = try? JSONSerialization.jsonObject(with: Data(line)) as? [String: Any] else { return .unknown }
+            guard object["type"] as? String == "event_msg", let payload = object["payload"] as? [String: Any],
+                  let type = payload["type"] as? String else { return current }
+            switch type {
+            case "task_started": return .started
+            case "task_complete", "turn_aborted": return .finished
+            default: return current
+            }
+        }
+    }
+
+    /// The paths of the files a live process holds open, from the kernel (`proc_pidinfo` / `proc_pidfdinfo`); nil when the
+    /// list cannot be read. An fd closed between the list and its read is skipped; any other failure is nil.
+    static func openFilePaths(_ pid: Int32) -> [String]? {
+        let needed = proc_pidinfo(pid, PROC_PIDLISTFDS, 0, nil, 0)
+        guard needed > 0 else { return nil }
+        let stride = MemoryLayout<proc_fdinfo>.stride
+        var fds = [proc_fdinfo](repeating: proc_fdinfo(), count: Int(needed) / stride + 32)
+        let used = fds.withUnsafeMutableBytes { proc_pidinfo(pid, PROC_PIDLISTFDS, 0, $0.baseAddress, Int32($0.count)) }
+        guard used > 0 else { return nil }
+        var paths: [String] = []
+        for fd in fds.prefix(Int(used) / stride) where fd.proc_fdtype == UInt32(PROX_FDTYPE_VNODE) {
+            var info = vnode_fdinfowithpath()
+            let size = Int32(MemoryLayout<vnode_fdinfowithpath>.size)
+            let got = proc_pidfdinfo(pid, fd.proc_fd, PROC_PIDFDVNODEPATHINFO, &info, size)
+            if got != size {
+                if errno == EBADF { continue }
+                return nil
+            }
+            let path = withUnsafeBytes(of: &info.pvip.vip_path) { raw in
+                String(cString: raw.bindMemory(to: CChar.self).baseAddress!)
+            }
+            paths.append(path)
+        }
+        return paths
     }
 }
