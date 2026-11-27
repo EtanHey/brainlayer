@@ -69,10 +69,17 @@ therefore also takes a SHARED non-blocking flock on
 `~/Library/Application Support/BrainBar/update-custody.lock` and holds it from its
 first check until the activation child exits. While an update holds its EXCLUSIVE
 custody, the tick defers. While a tick holds the shared lock, an update cannot take
-custody: it exits 75 ("Another update owns custody") before any change, and the
-offer retries at the next check. A flock dies with its holder, so a SIGKILLed or
-panicked updater never blocks activation. A deferral longer than 15 minutes raises
-the `brainbar-activation-update` job alert, cleared when the deferral ends. The fence
+custody: it takes a shared lock long enough to atomically record `waiting` for
+this operation, then exits successfully before mutation. The app retries at its
+next scheduled check without another click, using the same operation and helper.
+A separate `update-wait.lock` serializes shared-lock contenders. A different
+operation's non-terminal state (including `waiting` and `recovery-required`) is
+never overwritten. If another updater holds exclusive custody, the helper exits
+75 without touching its state. The shared lock excludes installer state writes
+throughout the waiting receipt's read and rename. A flock dies with its holder,
+so a SIGKILLed or panicked updater never blocks activation. A deferral longer than
+15 minutes raises the `brainbar-activation-update` job alert, cleared when the
+deferral ends. The fence
 ships in the formula: each tick is a fresh
 `/opt/homebrew/opt/brainlayer/libexec/venv/bin/python -m brainlayer.brainbar_auto_activation`
 process, and the opt link points at the new keg once the helper has upgraded the

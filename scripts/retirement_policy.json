@@ -5514,6 +5514,14 @@
         "target": "import importlib.util"
       }
     },
+    "c2ebc79273fff8791e1cf33f2ced0bbbd982cc2b138e655383e4fe7a624a48d7": {
+      "non_cloud_purpose": "Homebrew release updater: inherited local file-lock custody through supervisor/installer lifetime and the exec handoff to the new keg helper; stops BrainBar locally (launchctl bootout, SIGTERM/SIGKILL by bundle path) before pinned install, local codesign/Gatekeeper checks and recovery; no model transport. Shared auto-activation contention publishes an operation-owned local waiting receipt under shared custody and a serialized writer lock; no network or model transport added.",
+      "site": {
+        "body_sha256": "6dafe3a4e58917f84f6fefe16d203e9b8c711ca4e5fc33ba7cbb80dd0c98da99",
+        "kind": "non_python_source",
+        "path": "scripts/brainbar-update.sh"
+      }
+    },
     "c31de91e6059990d189c7d48d35d4d3162747cdb88977cdc06605b3db5784ff2": {
       "non_cloud_purpose": "Existing local command/type metadata: Git, process inspection, launchctl, backup supervision or installed helper; no cloud model subprocess. Site: src/brainlayer/backup_daily.py <module>._wait_for_stopped_backup subprocess.TimeoutExpired.",
       "site": {
@@ -6432,14 +6440,6 @@
         "owner": "<module>.merged_sha",
         "path": "scripts/golems_approve_release.py",
         "target": "subprocess.run"
-      }
-    },
-    "e94454718235da54d856f13a74ec650cd3b35c90e0de07ead6557fa168da71f2": {
-      "non_cloud_purpose": "Homebrew release updater: inherited local file-lock custody through supervisor/installer lifetime and the exec handoff to the new keg helper; stops BrainBar locally (launchctl bootout, SIGTERM/SIGKILL by bundle path) before pinned install, local codesign/Gatekeeper checks and recovery; no model transport.",
-      "site": {
-        "body_sha256": "49fc41a5f80243075f8897eb20d6deeda5f4bcf90d2240f462243f71bbf56ad5",
-        "kind": "non_python_source",
-        "path": "scripts/brainbar-update.sh"
       }
     },
     "e99e49be5ae8608284a32a6996ca8c6f830a95fc18d4d96051a562828dc9689e": {

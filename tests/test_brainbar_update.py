@@ -264,6 +264,46 @@ def test_busy_never_mutates(install):
     assert not (root / "update.lock").exists()
 
 
+@pytest.mark.parametrize("previous", [None, "waiting", "success", "failed", "cancelled"])
+def test_shared_activation_custody_waits_then_retry_succeeds_without_another_click(install, previous):
+    import fcntl
+
+    _, _, root, app = install("busy")
+    if previous is None:
+        (root / "update-state").unlink()
+    else:
+        owner = "activation-wait" if previous == "waiting" else "finished-operation"
+        (root / "update-state").write_text(f"{owner}\n{previous}\n\n")
+    # Fake auto-activator: the same shared OS lock held across its child activation.
+    with (root / "update-custody.lock").open("r+") as activation:
+        fcntl.flock(activation, fcntl.LOCK_SH)
+        result, log, _, _ = install(operation="activation-wait")
+        assert result.returncode == 0, result.stderr
+        assert (root / "update-state").read_text().splitlines()[:2] == ["activation-wait", "waiting"]
+        assert "upgrade" not in log
+        assert (app / "identity").read_text() == "old"
+    # BrainBarUpdates.tick retries .waiting with the same operation and copied helper.
+    result, _, _, _ = install(operation="activation-wait")
+    assert result.returncode == 0, result.stderr
+    assert (root / "update-state").read_text().splitlines()[:2] == ["activation-wait", "success"]
+    assert (app / "identity").read_text().strip() == "new"
+
+
+@pytest.mark.parametrize("phase", ["preflight", "cask", "recovery-required", "waiting"])
+def test_shared_activation_custody_preserves_other_operations_nonterminal_state(install, phase):
+    import fcntl
+
+    _, _, root, _ = install("busy")
+    previous = f"other-operation\n{phase}\nKeep this receipt\n"
+    (root / "update-state").write_text(previous)
+    with (root / "update-custody.lock").open("r+") as activation:
+        fcntl.flock(activation, fcntl.LOCK_SH)
+        result, log, _, _ = install(operation="contender")
+    assert result.returncode == 75
+    assert (root / "update-state").read_text() == previous
+    assert "upgrade" not in log
+
+
 def test_unsettled_attempt_refuses_retry(install):
     _, _, root, _ = install("busy")
     (root / "update-state").write_text("old-id\ncask\n")
@@ -486,7 +526,9 @@ def test_custody_survives_supervisor_death_until_installer_exits(install):
         supervisor.kill()  # Kill only Ruby; the installer remains blocked in fake brew.
         supervisor.wait(timeout=10)
         os.kill(child, 0)
+        previous = (root / "update-state").read_bytes()
         second, _, _, _ = install(operation="contender")
+        assert (root / "update-state").read_bytes() == previous
         assert second.returncode == 75
         assert "Another update owns custody" in second.stderr
     finally:

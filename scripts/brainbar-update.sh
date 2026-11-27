@@ -11,10 +11,36 @@ export SUDO_ASKPASS=/usr/bin/false NONINTERACTIVE=1
 if [ "${1:-}" != --custody-held ]; then
   custody_root=${BRAINBAR_UPDATE_ROOT:-"$HOME/Library/Application Support/BrainBar"}
   mkdir -p "$custody_root"
-  exec /usr/bin/ruby -e '
+  exec /usr/bin/ruby -rtempfile -e '
     File.open(ARGV.shift, File::RDWR|File::CREAT, 0600) do |lock|
       unless lock.flock(File::LOCK_EX|File::LOCK_NB)
-        warn "Another update owns custody"; exit 75
+        # A shared lock proves no installer can write state while we publish deferral.
+        # An exclusive holder is another updater: leave its receipt entirely alone.
+        unless lock.flock(File::LOCK_SH|File::LOCK_NB)
+          warn "Another update owns custody"; exit 75
+        end
+        version, operation = ARGV[1], ARGV[2]
+        unless version && version.match?(/\A[0-9]+\.[0-9]+\.[0-9]+\z/) &&
+               operation && operation.match?(/\A[A-Za-z0-9-]+\z/)
+          exit 64
+        end
+        root = File.dirname(lock.path)
+        # Serialize shared-lock contenders too; each receipt belongs to one operation.
+        File.open(File.join(root, "update-wait.lock"), File::RDWR|File::CREAT, 0600) do |writer|
+          writer.flock(File::LOCK_EX)
+          path = File.join(root, "update-state")
+          previous = File.exist?(path) ? File.readlines(path, chomp: true) : nil
+          if previous && !%w[success failed cancelled].include?(previous[1]) &&
+             !(previous[0] == operation && previous[1] == "waiting")
+            warn "Another unsettled operation owns update-state"; exit 75
+          end
+          Tempfile.create("update-wait", root) do |state|
+            state.write("#{operation}\nwaiting\nWill update when BrainBar activation finishes\n")
+            state.close
+            File.rename(state.path, path)
+          end
+        end
+        exit 0
       end
       lock.close_on_exec = false
       system("/bin/bash", ARGV.shift, "--custody-held", *ARGV)
