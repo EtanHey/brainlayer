@@ -42,9 +42,15 @@ continues to defer past the pressure window and alerts with "needs N GiB, has
 M GiB". The lock remains held through upload.
 The first deferral raises a durable `backup-daily` (or `backup-snapshot`) job
 alert naming its reason and start time. It survives a stop, SIGKILL or power
-loss; only a later successful backup clears it. Every deferral atomically
+loss while the backup waits. Every deferral atomically
 refreshes the same alert to its current disk, pressure, lock or time-window
-cause without clearing it or sending repeat notices.
+cause without clearing it or sending repeat notices. When the gate admits the
+run, including past the pressure window, it clears the alert only if this
+invocation raised a wait, so a running upload is never reported as waiting; the
+heavy log keeps the last reason. The backup's end then clears it on success or
+records "Database backup failed". An alert this invocation did not raise (for
+example, the previous night's failure when this run never waited) stays until
+that end.
 A calendar admission deadline
 can still return exit 75 while preserving the alert: pressure overrides cannot
 extend the calendar's hard budget or preempt another lane's lock. Admission

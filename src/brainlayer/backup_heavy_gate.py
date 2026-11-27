@@ -203,6 +203,7 @@ def backup_heavy_gate(*, deadline: float | None = None, job_key: str = "backup-d
     last_reason = "pressure admission window elapsed"
     owned = False
     admitted = False
+    waited = False
     previous = {}
     failed_proofs: set[tuple] = set()  # Raw/archive identities whose reclaim proof failed this gate run.
 
@@ -239,6 +240,9 @@ def backup_heavy_gate(*, deadline: float | None = None, job_key: str = "backup-d
                         _log(log, "took")
                         if past_window:
                             _log(log, f"running past window after {window:g}s; ignoring swap/load: {last_reason}")
+                        if waited:
+                            # Clear only the wait alert this gate raised; an older one waits for the backup's end.
+                            report(job_key, None)
                         yield
                         return
                     if reason is None:
@@ -250,6 +254,7 @@ def backup_heavy_gate(*, deadline: float | None = None, job_key: str = "backup-d
                 f"backup waiting behind the heavy-work gate since {since}: {reason}",
                 replace_reason=True,
             )
+            waited = True
             last_reason = reason
             _log(log, f"deferred: {reason}; retry in {retry:g}s")
             print(f"brainlayer backup deferred: {reason}", flush=True)
