@@ -599,6 +599,10 @@ def test_custody_survives_supervisor_death_until_installer_exits(install):
 # --- 24 Nov 2026 regression: the helper must stop BrainBar itself, before touching the bundle ---
 
 
+@pytest.mark.skipif(
+    sys.platform != "darwin",
+    reason="the updater runs only on macOS; Linux ps/argv differ; proven on macOS (M1)",
+)
 def test_running_app_that_ignores_quit_is_stopped_before_bundle_moves(install, tmp_path):
     """The M1 failure: Homebrew's quit cannot stop the app from a launchd job, so the helper must."""
     app_path = tmp_path / "Applications/BrainBar.app"
@@ -615,6 +619,10 @@ def test_running_app_that_ignores_quit_is_stopped_before_bundle_moves(install, t
         _reap(proc)
 
 
+@pytest.mark.skipif(
+    sys.platform != "darwin",
+    reason="the updater runs only on macOS; Linux ps/argv differ; proven on macOS (M1)",
+)
 def test_process_that_only_names_the_bundle_is_left_alone(install, tmp_path):
     """Only a process whose executable is in the bundle is BrainBar; `tail <bundle file>` is not."""
     exe = tmp_path / "Applications/BrainBar.app/Contents/MacOS/BrainBar"
@@ -633,6 +641,10 @@ def test_process_that_only_names_the_bundle_is_left_alone(install, tmp_path):
 
 
 @pytest.mark.parametrize("failing_scan", ["1", "2"])
+@pytest.mark.skipif(
+    sys.platform != "darwin",
+    reason="the updater runs only on macOS; Linux ps/argv differ; proven on macOS (M1)",
+)
 def test_failed_process_scan_is_recovery_required_and_moves_nothing(install, tmp_path, failing_scan):
     """An unknown process state (the first scan, or the wait loop after SIGTERM) never moves the bundle."""
     app_path = tmp_path / "Applications/BrainBar.app"
@@ -707,6 +719,10 @@ def test_gatekeeper_rejection_rolls_back(install):
     assert "failed" in (root / "update-state").read_text()
 
 
+@pytest.mark.skipif(
+    sys.platform != "darwin",
+    reason="the updater runs only on macOS; Linux ps/argv differ; proven on macOS (M1)",
+)
 def test_rollback_stops_the_new_app_before_moving_it(install, tmp_path):
     result, log, root, app = install("activate", TEST_STUBBORN_NEW_APP="1")
     new_pid = int((tmp_path / "new-app.pid").read_text())
