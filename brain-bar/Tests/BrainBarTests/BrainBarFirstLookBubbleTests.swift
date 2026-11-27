@@ -166,7 +166,7 @@ import XCTest
         XCTAssertFalse(providers.contains(".help("))
         XCTAssertFalse(providers.contains("NDStationButton("))
         XCTAssertTrue(providers.contains(".allowsHitTesting(false)"))
-        XCTAssertTrue(providers.contains(".accessibilityLabel(NDProvider.name(family))"))
+        XCTAssertTrue(providers.contains(".accessibilityLabel(Self.providerLabel(family, state: state))"))
         let state = NDPipelineState.make(BrainBarDesignFixture.inputs(.calm))
         let target = NDPipelineChart.stationTarget(.agents, state: state)
         let path = target.shape.path(in: CGRect(origin: .zero, size: target.frame.size))

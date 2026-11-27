@@ -29,6 +29,29 @@ enum NDPipelineLayout {
     static func iconCentre(_ family: AgentFamily) -> CGPoint {
         CGPoint(x: agentsFrame.midX, y: agentRows.first { $0.0 == family }?.1 ?? agentsFrame.midY)
     }
+
+    /// w307: a harness's running-agent count sits beside its icon in 10 pt Semibold monospaced figures, the chart's figure
+    /// style. Its digits start 2.5 pt after the icon and centre 1 pt above the icon's centre; a faulted provider's ring
+    /// (r 12) and badge take that room, so its count starts 16 pt from the centre, clear of both. Nothing else moves.
+    static let countFontSize: CGFloat = 10
+    static var countFont: NSFont { .monospacedDigitSystemFont(ofSize: countFontSize, weight: .semibold) }
+    /// Whole figures, no grouping: the column is narrow and a thousand running agents is not a case to dress up.
+    static func countText(_ count: Int) -> String { String(count) }
+
+    /// The count's ink: its advance width by the figures' cap height.
+    static func countRect(_ family: AgentFamily, count: Int, faulted: Bool) -> CGRect {
+        let c = iconCentre(family)
+        let width = ceil(NSAttributedString(string: countText(count), attributes: [.font: countFont]).size().width)
+        let height = countFont.capHeight
+        let x = faulted ? c.x + 16 : c.x + iconSize / 2 + 2.5
+        return CGRect(x: x, y: c.y - 1 - height / 2, width: width, height: height)
+    }
+
+    /// The card-coloured plate under a count: where a wide count crosses the column's border (or its hover outline), the
+    /// line breaks around the figures, as a caption breaks a frame's border. It never reaches a connector (geometry test).
+    static func countMask(_ family: AgentFamily, count: Int, faulted: Bool) -> CGRect {
+        countRect(family, count: count, faulted: faulted).insetBy(dx: -1.5, dy: -1)
+    }
     /// R14: The lower Memory port sits 3 pt below the box, 8 pt below the Kept-safe frame.
     /// R2 item 8: the diagram sits centred in its card, 32 pt from each side: everything right of the agents moved 26 pt
     /// left (the long first-row lines are shorter).

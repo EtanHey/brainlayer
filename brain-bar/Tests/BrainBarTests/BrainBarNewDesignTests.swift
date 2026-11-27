@@ -1934,7 +1934,7 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
         let providers = try XCTUnwrap(chart.components(separatedBy: "ForEach(NDPipelineLayout.agentRows").last?.components(separatedBy: ".position(c)").first)
         XCTAssertTrue(providers.contains(".allowsHitTesting(false)"))
         XCTAssertFalse(providers.contains(".help(NDProvider.name(family))"))
-        XCTAssertTrue(providers.contains(".accessibilityLabel(NDProvider.name(family))"))
+        XCTAssertTrue(providers.contains(".accessibilityLabel(Self.providerLabel(family, state: state))"))
         for family in AgentFamily.allCases {
             let icon = NDProvider.icon(family)
             let path = NDSVGPath.path(icon.path, viewBox: icon.viewBox, in: CGRect(x: 0, y: 0, width: 16, height: 16))
@@ -1984,7 +1984,9 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
     func testYourAgentsWordsAreInTheGroupHover() {
         XCTAssertEqual(NDPipelineLayout.name(.agents), Say.yourAgents)
         let i = Fixture.inputs(.calm)
-        XCTAssertEqual(NDStationPopover.lines(.agents, i, pipeline(.calm)).first, Say.agentsLine, "the group's panel lists the four providers")
+        // w307: the group's panel lists the four providers as its rows, each with its running count.
+        XCTAssertEqual(NDStationPopover.lines(.agents, i, pipeline(.calm)), [Say.agentsPanelLine])
+        XCTAssertEqual(NDStationPopover.rows(.agents, i, NDModel.make(i)).map(\.label), ["Claude", "Codex", "Cursor", "Antigravity"])
     }
 
     func testSessionsAndSavesWordsAreInTheirStationHovers() {

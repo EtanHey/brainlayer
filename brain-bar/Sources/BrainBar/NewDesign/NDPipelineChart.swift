@@ -146,7 +146,7 @@ struct NDPipelineChart: View {
                 let c = NDPipelineLayout.iconCentre(family)
                 Color.clear.frame(width: 22, height: 22)
                     .accessibilityElement()
-                    .accessibilityLabel(NDProvider.name(family))
+                    .accessibilityLabel(Self.providerLabel(family, state: state))
                     .allowsHitTesting(false)
                     .position(c)
             }
@@ -346,8 +346,48 @@ struct NDPipelineChart: View {
         }
     }
 
+    /// w307: an icon's colour. A fault wins (red or amber); otherwise a harness with running agents takes its own colour,
+    /// and an idle or unmeasured one stays in the label colour.
+    enum AgentTone: Equatable { case fault(NDSeverity), harness, neutral }
+
+    static func agentTone(_ family: AgentFamily, state: NDPipelineState) -> AgentTone {
+        if !state.allUnconfirmed, let sev = state.agentFaults[family] { return .fault(sev) }
+        return (state.agentsRunning[family] ?? 0) > 0 ? .harness : .neutral
+    }
+
+    static func agentIconColor(_ family: AgentFamily, state: NDPipelineState) -> Color {
+        switch agentTone(family, state: state) {
+        case let .fault(sev): sev == .red ? ND.red : ND.orange
+        case .harness: ND.harness(family)
+        case .neutral: ND.t2
+        }
+    }
+
+    /// w307: the count drawn beside an icon: only for a measured harness with running agents.
+    static func agentCount(_ family: AgentFamily, state: NDPipelineState) -> Int? {
+        guard let n = state.agentsRunning[family], n > 0 else { return nil }
+        return n
+    }
+
+    /// w307: what VoiceOver reads for a provider ("Claude, 7 agents running").
+    static func providerLabel(_ family: AgentFamily, state: NDPipelineState) -> String {
+        Say.agentsRunning(NDProvider.name(family), state.agentsRunning[family])
+    }
+
+    /// The figures beside an icon, on their plate, their ink in `rect` (baseline on its bottom edge).
+    static func drawCount(_ ctx: GraphicsContext, _ count: Int, family: AgentFamily, faulted: Bool) {
+        typealias L = NDPipelineLayout
+        let rect = L.countRect(family, count: count, faulted: faulted)
+        ctx.fill(Path(L.countMask(family, count: count, faulted: faulted)), with: .color(ND.card))
+        let resolved = ctx.resolve(text(L.countText(count), size: L.countFontSize, color: ND.harness(family), weight: .semibold, mono: true))
+        let size = resolved.measure(in: CGSize(width: 200, height: 40))
+        let baseline = resolved.firstBaseline(in: size)
+        ctx.draw(resolved, in: CGRect(x: rect.minX, y: rect.maxY - baseline, width: size.width, height: size.height))
+    }
+
     /// The agents (R1.4 changes 1 to 3): four provider icons in one column, in the label colour; a provider a check names
-    /// takes the fault treatment at icon scale (red icon, 1.5 pt ring at r 12, the badge on its top-right).
+    /// takes the fault treatment at icon scale (red icon, 1.5 pt ring at r 12, the badge on its top-right). w307: a harness
+    /// with running agents is drawn in its colour with its count beside it.
     static func drawAgents(_ ctx: GraphicsContext, state: NDPipelineState, hovered: NDStation?) {
         typealias L = NDPipelineLayout
         let unconf = state.allUnconfirmed
@@ -361,10 +401,11 @@ struct NDPipelineChart: View {
         for (family, _) in L.agentRows {
             let c = L.iconCentre(family)
             let sev = unconf ? nil : state.agentFaults[family]
-            let color: Color = sev == .red ? ND.red : sev == .orange ? ND.orange : ND.t2
+            let color = agentIconColor(family, state: state)
             let icon = NDProvider.icon(family)
             let rect = CGRect(x: c.x - L.iconSize / 2, y: c.y - L.iconSize / 2, width: L.iconSize, height: L.iconSize)
             ctx.fill(NDSVGPath.path(icon.path, viewBox: icon.viewBox, in: rect), with: .color(color), style: FillStyle(eoFill: icon.evenOdd))
+            if let count = agentCount(family, state: state) { drawCount(ctx, count, family: family, faulted: sev != nil) }
             if let sev {
                 let ring = sev == .red ? ND.red : ND.orange
                 ctx.stroke(Path(ellipseIn: CGRect(x: c.x - 12, y: c.y - 12, width: 24, height: 24)), with: .color(ring), lineWidth: 1.5)
@@ -901,7 +942,8 @@ struct NDStationPopover: View {
     static func lines(_ station: NDStation, _ i: NDInputs, _ p: NDPipelineState) -> [String] {
         let checks = i.capture.verdict?.checks ?? []
         switch station {
-        case .agents: return [Say.agentsLine, Say.explainAgents]
+        // w307: the four providers are the panel's rows now, each with its running count, under one line.
+        case .agents: return [Say.agentsPanelLine]
         // R1.12 (I 12): shorter, the same facts as L45.
         case .mac: return [Say.localCopyPanel(Say.countWord(NDBackupFacts.keepNewest))]
         // R1.12 (E3, I 11): with the local copy late, nothing new was made to upload.
@@ -965,6 +1007,11 @@ struct NDStationPopover: View {
     /// Search "Last check: working" when the search check is green, and the word index that has no check yet.
     static func rows(_ station: NDStation, _ i: NDInputs, _ m: NDModel) -> [Line] {
         switch station {
+        case .agents:
+            // w307: each harness and how many of its agents run now ("none running" at 0), in the column's order.
+            return NDPipelineLayout.agentRows.map { family, _ in
+                Line(label: NDProvider.name(family), value: Say.runningCount(i.agents.agents.first { $0.family == family }?.sessions))
+            }
         case .queue:
             return i.savesWaiting == 0 ? [Line(label: Say.waitingRow, value: Say.none)] : []
         case .drive:
