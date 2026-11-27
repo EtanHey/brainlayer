@@ -179,10 +179,16 @@ def snapshot(source: Path, target: Path, *, validate=None, max_recovery_bytes: i
                     raise CloneUnavailable(f"private WAL recovery incomplete: {result}")
                 if recovered.execute("PRAGMA journal_mode=DELETE").fetchone()[0] != "delete":
                     raise CloneUnavailable("private clone did not become standalone")
-            except sqlite3.OperationalError:
-                # Busy/locked/interrupted recovery is unavailable, not evidence of corruption.
-                raise
             except sqlite3.DatabaseError as exc:
+                code = getattr(exc, "sqlite_errorcode", None)
+                # Extended result codes retain the primary code in the low byte.
+                corrupt = (
+                    code & 0xFF in {sqlite3.SQLITE_CORRUPT, sqlite3.SQLITE_NOTADB}
+                    if code is not None
+                    else getattr(exc, "sqlite_errorname", None) in {"SQLITE_CORRUPT", "SQLITE_NOTADB"}
+                )
+                if not corrupt:
+                    raise  # Ordinary recovery failures use the outer unavailable/fallback path.
                 raise CloneIntegrityError(f"private clone recovery failed: {type(exc).__name__}: {exc}") from exc
             finally:
                 recovered.close()
