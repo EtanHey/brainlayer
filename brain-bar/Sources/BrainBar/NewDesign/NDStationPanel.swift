@@ -97,6 +97,19 @@ struct NDStationPanelBody: View {
         }
     }
 
+    /// w303 review: a label set on two lines, broken at the space that makes the longer line shortest (13 pt Medium), so
+    /// "Copy a report for your agent" reads "Copy a report / for your agent" rather than leaving "your agent" alone.
+    static func twoLines(_ label: String) -> String {
+        let words = label.split(separator: " ").map(String.init)
+        guard words.count > 1 else { return label }
+        func width(_ s: String) -> CGFloat { NDPipelineLayout.textWidth(s, size: 13, weight: .medium) }
+        let best = (1..<words.count).min { a, b in
+            max(width(words[..<a].joined(separator: " ")), width(words[a...].joined(separator: " ")))
+                < max(width(words[..<b].joined(separator: " ")), width(words[b...].joined(separator: " ")))
+        }!
+        return words[..<best].joined(separator: " ") + "\n" + words[best...].joined(separator: " ")
+    }
+
     /// R1.7 item 10: a row at 12 pt is 18 pt high.
     static let rowHeight: CGFloat = 18
 
@@ -140,15 +153,18 @@ struct NDStationPanelBody: View {
         if action.kind == .copyReport {
             // w303: "Copy a report for your agent" is never cut short. Where the panel is too narrow for it on one line
             // (the Nightly check-up's, 160 pt beside its station, boxed in by Memory, Save queue and Weekly clean's words),
-            // the button takes the panel's width and its label wraps onto a second line, centred.
+            // the button takes the panel's width and its label takes two centred lines, broken between its phrases
+            // ("Copy a report / for your agent"); the spoken label stays whole.
             ViewThatFits(in: .horizontal) {
                 HStack {
                     Spacer()
                     NDCopyReportButton(label: NDPipelineChart.shortLabel(action), spoken: action.label) { perform(action.kind) }
                         .focused($actionFocused)
                 }
-                NDCopyReportButton(label: NDPipelineChart.shortLabel(action), spoken: action.label, lines: 2) { perform(action.kind) }
-                    .focused($actionFocused)
+                NDCopyReportButton(label: Self.twoLines(NDPipelineChart.shortLabel(action)), spoken: action.label, lines: 2) {
+                    perform(action.kind)
+                }
+                .focused($actionFocused)
             }
         } else {
             // R1.8 item 6: the waiting line takes the whole footer, left-aligned, 13 pt secondary, a small spinner first;

@@ -100,8 +100,15 @@ final class BrainBarTopPanelsFitTests: XCTestCase {
                 // Copy report reserves the wider of its two faces: its label, and the tick (12 pt + 4) with "Copied".
                 let copied = L.textWidth(BrainBarMenuPresenter.SurfaceSay.copiedLabel, size: 13, weight: .medium) + 16
                 XCTAssertLessThanOrEqual(copied, room, context)
-                let lines = Self.wrap(label, width: room)
-                XCTAssertLessThanOrEqual(lines.count, action.kind == .copyReport ? 2 : 1, "\(context) wraps to \(lines)")
+                let oneLine = L.textWidth(label, size: 13, weight: .medium) <= room
+                if action.kind == .copyReport, !oneLine {
+                    // The two-line face: each phrase on its own line, whole.
+                    for line in NDStationPanelBody.twoLines(label).split(separator: "\n").map(String.init) {
+                        XCTAssertLessThanOrEqual(L.textWidth(line, size: 13, weight: .medium), room, "\(context): \"\(line)\"")
+                    }
+                } else {
+                    XCTAssertTrue(oneLine, "\(context) wraps to \(Self.wrap(label, width: room))")
+                }
             }
         }
     }
@@ -123,15 +130,55 @@ final class BrainBarTopPanelsFitTests: XCTestCase {
         return lines + [line]
     }
 
-    /// The wrapped button really lays out on two lines, whole, at the narrowest panel that carries it (160 pt).
-    func testTwoLineCopyReportShowsTheWholeLabel() throws {
+    /// The production panel body, as the Nightly check-up's panel lays it out: at 160 pt (132 pt inside) its Copy report
+    /// takes two lines, at 400 pt one. Measures the real subtree (NDStationPanelBody → ViewThatFits), so a one-line-only
+    /// fallback (the label cut short, the button 22 pt high) fails it.
+    func testTheNarrowPanelsCopyReportTakesTwoWholeLines() throws {
         let store = NDStore(fixture: BrainBarDesignFixture.inputs(.nightlyFailing), page: .overview)
-        let narrow = NDStationPopover.measure(AnyView(NDStationPopover(store: store, station: .jobs)), width: 160).height
-        let wide = NDStationPopover.measure(AnyView(NDStationPopover(store: store, station: .jobs)), width: 400).height
-        XCTAssertGreaterThan(narrow, wide, "the narrow panel is taller (more lines), never clipped")
-        let button = NDStationPopover.measure(AnyView(NDCopyReportButton(label: "Copy a report for your agent", spoken: "",
-                                                                         lines: 2) {}), width: 132)
-        XCTAssertGreaterThanOrEqual(button.height, 2 * 15, "two lines of 13 pt (button=\(button))")
+        var model = NDStationPopover.model(.jobs, item: store.r1.stationItems[.jobs], store.inputs, store.model, store.r1.pipeline)
+        XCTAssertEqual(model.action?.kind, .copyReport)
+        model.lines = []
+        model.title = "Nightly"
+        let body = AnyView(NDStationPanelBody(model: model))
+        let narrow = NDStationPopover.measure(body, width: 160).height
+        let wide = NDStationPopover.measure(body, width: 400).height
+        // 13 pt Medium is ~16 pt a line: the second line adds at least 12 pt to the 22 pt button.
+        XCTAssertGreaterThanOrEqual(narrow - wide, 12, "narrow=\(narrow) wide=\(wide)")
+        XCTAssertEqual(NDStationPanelBody.twoLines("Copy a report for your agent"), "Copy a report\nfor your agent")
+    }
+
+    /// Drive's rows keep their 8 pt above them while an upload runs (they were packed to 2 pt).
+    func testUploadingDriveRowsKeepTheirSpace() throws {
+        let store = try XCTUnwrap(stores().first { $0.0 == "calm-uploading-45" }?.1)
+        let model = NDStationPopover.model(.drive, item: store.r1.stationItems[.drive], store.inputs, store.model, store.r1.pipeline)
+        XCTAssertFalse(model.rows.isEmpty)
+        let shown = NDStationPopover.measure(AnyView(NDStationPopover(store: store, station: .drive)), width: 320).height
+        let spaced = NDStationPopover.measure(AnyView(NDStationPanelBody(model: model).frame(maxWidth: .infinity, alignment: .leading)),
+                                              width: 320).height
+        XCTAssertEqual(shown, spaced, accuracy: 0.5)
+    }
+
+    /// A copy panel ends at the cards' right edge (836 in chart coordinates), and covers each Activity axis word whole or
+    /// not at all, for every range.
+    func testCopyPanelsKeepToTheCardsAndNeverCutAnAxisWord() throws {
+        let plotLeft: CGFloat = 52, plotRight: CGFloat = 52 + 768, axisTop = L.activityBottom - 16 - 14
+        for (name, store) in try stores() {
+            let chart = chart(store)
+            for station: NDStation in [.mac, .drive] {
+                let panel = chart.panel(station, content: AnyView(NDStationPopover(store: store, station: station)))
+                let context = "\(name) \(station) body=\(panel.body)"
+                XCTAssertLessThanOrEqual(panel.outer.maxX, 836.01, context)
+                for range in NDRange.allCases {
+                    let (oldest, middle, now) = range.axis
+                    let w = [oldest, middle, now].map { L.textWidth($0, size: 11) }
+                    for word in [CGRect(x: plotLeft, y: axisTop, width: w[0], height: 14),
+                                 CGRect(x: (plotLeft + plotRight - w[1]) / 2, y: axisTop, width: w[1], height: 14),
+                                 CGRect(x: plotRight - w[2], y: axisTop, width: w[2], height: 14)] {
+                        XCTAssertTrue(!panel.body.intersects(word) || panel.body.contains(word), "\(context) cuts \(range) \(word)")
+                    }
+                }
+            }
+        }
     }
 
     /// w303 renders (offscreen, NDRenderHarness's host): the Activity card, the Pipeline heading and the Pipeline card

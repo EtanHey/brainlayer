@@ -311,6 +311,21 @@ enum NDPipelineLayout {
     /// copy, the Activity chart is not what is being read; opening below lands on Weekly clean's words.
     static let copyPanels: Set<NDStation> = [.mac, .drive]
     static let copyPanelMaxWidth: CGFloat = 320
+    /// w303 review: the Activity and Pipeline cards' right edge in chart coordinates (the chart's 820 pt plus the card's
+    /// 16 pt padding). A copy panel over the cards stops there rather than at the window's 12 pt inset.
+    static var cardsRightEdge: CGFloat { size.width + 16 }
+    /// w303 review: the Activity card's axis words in chart coordinates, for every range (oldest at the plot's left, the
+    /// middle centred, "now" at its right; the plot starts after the 52 pt gutter, at chart x 52), 4 pt of margin around
+    /// each. A copy panel covers each one whole or not at all: before, Local copy's edge cut "30 min ago" to "30 mi".
+    static var activityAxisWords: [CGRect] {
+        let y = activityBottom - 16 - 14, left = NDActivitySection.gutter, right = left + NDActivitySection.plotWidth
+        return NDRange.allCases.flatMap { range -> [CGRect] in
+            let (oldest, middle, now) = range.axis
+            let w = [oldest, middle, now].map { textWidth($0, size: NDScale.caption) }
+            return [CGRect(x: left, y: y, width: w[0], height: 14), CGRect(x: (left + right - w[1]) / 2, y: y, width: w[1], height: 14),
+                    CGRect(x: right - w[2], y: y, width: w[2], height: 14)].map { $0.insetBy(dx: -4, dy: 0) }
+        }
+    }
 
     /// How high a panel's body may reach: Search stays under the Kept-safe frame; the copies reach over the Activity
     /// card's plot, never its totals row or heading (w303); every other panel stops at the card's axis labels (§ B).
@@ -380,7 +395,8 @@ enum NDPipelineLayout {
         }
         let ceiling = panelCeiling(s)
         let low = horizontal ? max(windowInside.minX, tip.x - width + arrowInset) : max(ceiling, tip.y - height + arrowInset)
-        let high = horizontal ? min(windowInside.maxX - width, tip.x - arrowInset) : min(footerTop - 4 - height, tip.y - arrowInset)
+        let rightLimit = copyPanels.contains(s) ? cardsRightEdge : windowInside.maxX
+        let high = horizontal ? min(rightLimit - width, tip.x - arrowInset) : min(footerTop - 4 - height, tip.y - arrowInset)
         guard low <= high else { return nil }
         let arrowBox = horizontal
             ? CGRect(x: tip.x - arrowHalfWidth, y: min(tip.y, edge == .top ? body.maxY : body.minY), width: 2 * arrowHalfWidth,
@@ -394,14 +410,21 @@ enum NDPipelineLayout {
         for rect in obstacles + bodyObstacles {
             positions += horizontal ? [rect.minX - width, rect.maxX] : [rect.minY - height, rect.maxY]
         }
+        // A copy panel either clears an axis word or holds all of it.
+        let wholeOrNone = copyPanels.contains(s) ? activityAxisWords : []
+        for rect in wholeOrNone {
+            positions += horizontal ? [rect.minX - width, rect.maxX, rect.minX, rect.maxX - width]
+                : [rect.minY - height, rect.maxY, rect.minY, rect.maxY - height]
+        }
         for position in positions.sorted(by: { abs($0 - desired) < abs($1 - desired) }) where position >= low && position <= high {
             var placed = body
             if horizontal { placed.origin.x = position } else { placed.origin.y = position }
             let outer = placed.union(arrowBox)
-            guard placed.minX >= windowInside.minX, placed.maxX <= windowInside.maxX,
+            guard placed.minX >= windowInside.minX, placed.maxX <= min(windowInside.maxX, rightLimit),
                   placed.minY >= ceiling, placed.maxY <= footerTop - 4,
                   !obstacles.contains(where: { outer.intersects($0) }),
-                  !bodyObstacles.contains(where: { placed.intersects($0) }) else { continue }
+                  !bodyObstacles.contains(where: { placed.intersects($0) }),
+                  !wholeOrNone.contains(where: { placed.intersects($0) && !placed.contains($0) }) else { continue }
             return Panel(edge: edge, anchor: anchor, tip: tip, body: placed, outer: outer,
                          clearanceException: nil)
         }

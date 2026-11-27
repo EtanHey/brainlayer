@@ -68,7 +68,12 @@ import XCTest
                     let obstacles = L.panelObstacles(station, state: state, actions: [], actionWidths: [:],
                                                     interior: p.clearanceException == nil, displayedWords: chart.displayedPanelWords)
                     let ceiling = L.panelCeiling(station)  // w303: the copies reach over the Activity plot
+                    // w303 review: the copies also stop at the cards' right edge and hold an Activity axis word whole or
+                    // not at all.
+                    let copy = L.copyPanels.contains(station)
                     let blocked = nearer.minX < L.windowInside.minX || nearer.maxX > L.windowInside.maxX
+                        || (copy && nearerBody.maxX > L.cardsRightEdge)
+                        || (copy && L.activityAxisWords.contains { nearerBody.intersects($0) && !nearerBody.contains($0) })
                         || nearer.minY < ceiling || nearer.maxY > L.footerTop - 4
                         || obstacles.contains { nearer.intersects($0) }
                         || L.panelBodyObstacles(station, interior: p.clearanceException == nil).contains { nearerBody.intersects($0) }
