@@ -16,8 +16,8 @@
       "sha256": "df7a391626d3d8a7c2075771e8fc0383b891e739754016e096281b23b29e709c"
     },
     "src/brainlayer/backup_heavy_gate.py": {
-      "sha": "Merge of main (Track 5 #1880: pressure before disk, verified-raw reclaim, failed-proof memo) into #1885 (clear the gate wait alert on admission only when this run waited); lead pin-only resolution 2026-11-26; backup_heavy_gate.py auto-merged; sha256 = merged bytes",
-      "sha256": "c956958db57df0e0bd7917335c2c4c8aad5d09315b6419e3856a5f311dfb7132"
+      "sha": "2026-11-27 backup-gate-m1-next R2: stale timer binds content/device/inode/mtime_ns; exclusive hard-link publication; reserve only behind a held lock after resource admission; retain owned slot through post-lock bounce, withdraw on the next failed resource sample. M4 unchanged. Fairness remains outside BackupVerdict/DotTable; deferred/admitted/alert transitions and receipt facts unchanged. No line anchor names this gate; line_refs_at and mapped modules unchanged. Fail-first production-code races prove the protocol, not sync_report. No model change.",
+      "sha256": "c3be8df82fb1657d26725de0320511367798a657df339ef89a126bb5074f4a8a"
     },
     "src/brainlayer/maintenance.py": {
       "sha": "5882de81",
