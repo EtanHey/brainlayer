@@ -1,0 +1,62 @@
+# Recorder cadence — w308, M1 Pro 14" (ProMotion 120 Hz), macOS 26.5.1, AFTER-2 = 13bb20c8
+# 2026-11-28 00:41 IST
+
+## Power: mains
+  Now drawing from 'AC Power'
+   -InternalBattery-0 (id=23461987)	47%; AC attached; not charging present: true
+  "ExternalConnected" = Yes
+  "IsCharging" = No
+
+## Appearance: Dark (System Settings not changed)
+
+## Same recorder as w300: ScreenCaptureKit (tools/sck.swift, unchanged), minimumFrameInterval 1/240 s, region x 892 y 33 620x764 pt @2x, reference strip (tools/ref.swift, unchanged) at x 900 y 780 inside the region. Only change (record.sh): 38 s recording / 42 s strip, because g9 adds ~3.6 s.
+
+### a2.mov (evidence run; fresh app launch before it)  ffprobe:
+  width=1240
+  height=1528
+  r_frame_rate=120/1
+  avg_frame_rate=22860/191
+  nb_frames=4572
+  duration=38.200000
+  recorder log: recording started 314587.1974304167 frames 4572 dropped-by-writer 0 status 2 
+  frame times (host clock, from the recorder):
+  frames 4572 span 38.192 s avg fps 119.69
+  dt ms p5/25/50/75/95/99 [8.33 8.33 8.33 8.33 8.33 8.33] max 25.0
+  reference strip:
+  frames 4572 intervals 4571
+  interval(frames) histogram: {np.float64(1.0): np.int64(4560), np.float64(2.0): np.int64(10), np.float64(3.0): np.int64(1)}
+  ref step == interval: 4524  step < interval (ref missed): 8  step > interval: 39
+  interval histogram (frames of 8.33 ms): {'1': 4560, '2': 10, '3': 1} | ref step == interval on 4524 of 4571 | total ref advance 4614 vs 4583 recorded frame periods
+  recorder misses inside measured motion windows (gesture, ms after its input, frames): [('g1b', 669.6, 2), ('g8', 366.2, 2), ('g9c', 314.7, 2), ('g9', 9.3, 2)]
+
+### t1.mov (repeat run; fresh app launch before it)  ffprobe:
+  width=1240
+  height=1528
+  r_frame_rate=120/1
+  avg_frame_rate=548880/4589
+  nb_frames=4574
+  duration=38.241667
+  recorder log: recording started 314229.8659578751 frames 4574 dropped-by-writer 0 status 2 
+  frame times (host clock, from the recorder):
+  frames 4574 span 38.233 s avg fps 119.61
+  dt ms p5/25/50/75/95/99 [8.33 8.33 8.33 8.33 8.33 8.33] max 50.0
+  reference strip:
+  frames 4574 intervals 4573
+  interval(frames) histogram: {np.float64(1.0): np.int64(4565), np.float64(2.0): np.int64(6), np.float64(5.0): np.int64(1), np.float64(6.0): np.int64(1)}
+  ref step == interval: 4524  step < interval (ref missed): 15  step > interval: 34
+  interval histogram (frames of 8.33 ms): {'1': 4565, '2': 6, '5': 1, '6': 1} | ref step == interval on 4524 of 4573 | total ref advance 4607 vs 4588 recorded frame periods
+  recorder misses inside measured motion windows (gesture, ms after its input, frames): [('g6', 1617.3, 2)]
+
+## Input-to-recorded-frame floor (tools/probe.swift + tools/pdrv.swift, same recorder, same HID-tap scroll events)
+A borderless window whose CALayer flips black/white on each scroll event (no SwiftUI, actions off), 40 single events (point delta 9, as the flick's first event) 150-160 ms apart at varied vsync phase:
+  post->first changed recorded frame, display frames (120 Hz): n 40 min 1.35 p50 1.80 mean 1.81 max 2.56
+  sorted: 1.35 1.36 1.36 1.37 1.43 1.45 1.45 1.48 1.53 1.58 1.59 1.59 1.60 1.66 1.66 1.67 1.68 1.71 1.76 1.79 1.81 1.82 1.82 1.89 1.90 1.90 1.91 1.96 1.97 2.02 2.04 2.12 2.13 2.13 2.14 2.20 2.22 2.25 2.30 2.56
+  post->probe handled the event, ms: p50 1.34 max 4.80
+  probe.mov: recording started 315006.98397725006 frames 1196 dropped-by-writer 0 status 2 
+
+## The reference strip's "step > interval" lines are its own wrap, not missed frames
+In a2 the strip moved 2 slots over a one-frame interval 39 times (t1: 34; w300's after run: 3). They recur every 1.25 s
+(e.g. g9b at +243, +1493, +2743, +3993, +5243, +6493 ms), which is the strip's 150-slot cycle (150 frames / 120 Hz),
+and the total excess (a2: 4614 slot steps over 4583 recorded frame periods = 31) equals the ~30.6 wraps in 38.2 s:
+one extra measured slot per wrap. A frame the compositor or recorder missed shows as a recorded interval of 2+ frames
+instead, and those are counted above (a2: 11 of 4571 intervals).
