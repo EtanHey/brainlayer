@@ -3,6 +3,7 @@
 import os
 import signal
 import subprocess
+import sys
 import time
 import zipfile
 from pathlib import Path
@@ -28,12 +29,31 @@ STUBBORN = 'trap "" TERM; exec -a "$0" /bin/sleep 300'
 
 
 def _wait_for_command(proc: subprocess.Popen, prefix: str) -> subprocess.Popen:
+    # Linux's per-pid ps output can truncate long pytest bundle paths to the
+    # terminal width. Read argv directly there; macOS needs full-width ps.
     deadline = time.monotonic() + 5
-    while not subprocess.run(
-        ["ps", "-o", "command=", "-p", str(proc.pid)], capture_output=True, text=True
-    ).stdout.startswith(prefix):
+    while True:
+        assert proc.poll() is None, "fixture process exited before becoming ready"
+        if sys.platform == "linux":
+            command = Path(f"/proc/{proc.pid}/cmdline").read_bytes().split(b"\0", 1)[0].decode()
+        else:
+            command = subprocess.run(
+                ["ps", "-ww", "-o", "command=", "-p", str(proc.pid)],
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout
+        if command.startswith(prefix):
+            break
         assert time.monotonic() < deadline, "fixture process never showed its command line"
         time.sleep(0.02)
+    # Readiness must also be visible to the exact process scan the updater uses.
+    scan = subprocess.run(["ps", "-axo", "pid=,command="], capture_output=True, text=True, check=True)
+    assert any(
+        fields[0] == str(proc.pid) and fields[1].startswith(prefix)
+        for line in scan.stdout.splitlines()
+        if len(fields := line.split(maxsplit=1)) == 2
+    ), "ready fixture is absent from the updater's process scan"
     return proc
 
 
