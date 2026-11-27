@@ -68,7 +68,12 @@ def _pressure_reason(swap_limit: float, load_limit: float) -> str | None:
     return None
 
 
-def _disk_reason(host: str) -> str | None:
+def _disk_reason(host: str, failed_proofs: set[tuple] | None = None) -> str | None:
+    """Measure first; prove and reclaim dated raws only when that could admit, then measure again.
+
+    `failed_proofs` is the gate's per-process memo of raw/archive identities whose proof failed,
+    so a retry never re-hashes an unchanged pair.
+    """
     from . import backup_daily as backup
 
     floor_gib = float(os.environ.get("BRAINLAYER_BACKUP_HEAVY_HOST_FREE_GIB", 40 if host == "m4" else 0))
@@ -93,17 +98,32 @@ def _disk_reason(host: str) -> str | None:
                 clone_mode=clone_mode,
                 **(backup.backup_clone.budget(backup.get_db_path()) if clone_mode else {}),
             )
-        required = peak + backup._clone_growth_reserve_bytes(staging, 0) + math.ceil(floor_gib * 1024**3)
         volume_path = staging
         while not volume_path.exists():
             volume_path = volume_path.parent
-        free = backup.disk_space.measure_disk_space(volume_path, include_available=False).free_now_bytes
+
+        def measure() -> tuple[list[tuple[Path, int]], int, int]:
+            reserves = backup._clone_growth_reserves(staging, 0)
+            required = peak + sum(size for _, size in reserves) + math.ceil(floor_gib * 1024**3)
+            free = backup.disk_space.measure_disk_space(volume_path, include_available=False).free_now_bytes
+            return reserves, required, free
+
+        reserves, required, free = measure()
+        if free < required:
+            # Upper bound of what reclaiming the dated raws can return: each raw's COW reserve plus
+            # its allocated blocks (a byte copy frees them; a clone shares them and frees less).
+            reclaimable = sum(size + path.lstat().st_blocks * 512 for path, size in reserves if path.parent == staging)
+            if free + reclaimable >= required and backup._reclaim_verified_raws_before_admission(
+                staging, failed_proofs
+            ):
+                reserves, required, free = measure()
     except (OSError, RuntimeError, ValueError) as exc:
         return f"disk space measurement unavailable: {type(exc).__name__}"
     if free < required:
+        reserved = ", ".join(f"{path.relative_to(staging)}={size / 1024**3:.3f} GiB" for path, size in reserves)
         return (
             f"disk space needs {required / 1024**3:.3f} GiB, has {free / 1024**3:.3f} GiB "
-            f"(peak plus {floor_gib:g} GiB host floor)"
+            f"(peak plus {floor_gib:g} GiB host floor)" + (f"; retained COW reserves: {reserved}" if reserved else "")
         )
     return None
 
@@ -111,7 +131,9 @@ def _disk_reason(host: str) -> str | None:
 def _upload_peak_bytes(staging: Path, *, full: bool) -> int:
     """Count only NEW verification files; existing local archives already occupy free space.
 
-    Inspect receipt metadata, never hash payloads or mutate the journal before admission.
+    This estimator only inspects receipt metadata; it never hashes payloads or mutates
+    the journal. The caller sweeps stale clones before measuring, and proves and reclaims
+    dated raws under the staging lock only when that could admit.
     Budget all possible pending candidates because upload-only can drain them sequentially.
     """
     from . import backup_daily as backup
@@ -181,7 +203,9 @@ def backup_heavy_gate(*, deadline: float | None = None, job_key: str = "backup-d
     last_reason = "pressure admission window elapsed"
     owned = False
     admitted = False
+    waited = False
     previous = {}
+    failed_proofs: set[tuple] = set()  # Raw/archive identities whose reclaim proof failed this gate run.
 
     def stopped(signum, _frame):
         raise SystemExit(128 + signum)
@@ -197,8 +221,10 @@ def backup_heavy_gate(*, deadline: float | None = None, job_key: str = "backup-d
                     f"last cause: {last_reason}"
                 )
             past_window = time.monotonic() >= pressure_window_end
-            disk_reason = _disk_reason(host)
-            reason = disk_reason or (None if past_window else _pressure_reason(swap_limit, load_limit))
+            # Pressure first: the disk check may prove and reclaim raws, which is heavy I/O.
+            reason = (None if past_window else _pressure_reason(swap_limit, load_limit)) or _disk_reason(
+                host, failed_proofs
+            )
             if reason is None:
                 try:
                     lock.mkdir()
@@ -206,13 +232,17 @@ def backup_heavy_gate(*, deadline: float | None = None, job_key: str = "backup-d
                     reason = "heavy lock held by another lane (never cleared by backup)"
                 else:
                     owned = True
-                    disk_reason = _disk_reason(host)
-                    reason = disk_reason or (None if past_window else _pressure_reason(swap_limit, load_limit))
+                    reason = (None if past_window else _pressure_reason(swap_limit, load_limit)) or _disk_reason(
+                        host, failed_proofs
+                    )
                     if reason is None and time.monotonic() < expires:
                         admitted = True
                         _log(log, "took")
                         if past_window:
                             _log(log, f"running past window after {window:g}s; ignoring swap/load: {last_reason}")
+                        if waited:
+                            # Clear only the wait alert this gate raised; an older one waits for the backup's end.
+                            report(job_key, None)
                         yield
                         return
                     if reason is None:
@@ -224,6 +254,7 @@ def backup_heavy_gate(*, deadline: float | None = None, job_key: str = "backup-d
                 f"backup waiting behind the heavy-work gate since {since}: {reason}",
                 replace_reason=True,
             )
+            waited = True
             last_reason = reason
             _log(log, f"deferred: {reason}; retry in {retry:g}s")
             print(f"brainlayer backup deferred: {reason}", flush=True)

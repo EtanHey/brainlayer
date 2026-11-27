@@ -1,3 +1,4 @@
+import fcntl
 import json
 import plistlib
 from types import SimpleNamespace
@@ -13,6 +14,7 @@ REAL_BREW_PROCESSES = auto.brew_processes
 @pytest.fixture
 def monitor(tmp_path, monkeypatch):
     monkeypatch.setenv("BRAINLAYER_JOB_ALERT_PATH", str(tmp_path / "job-alerts.json"))
+    monkeypatch.setenv("BRAINBAR_UPDATE_ROOT", str(tmp_path / "update-root"))
     agents = tmp_path / "agents"
     agents.mkdir()
     app = tmp_path / "BrainBar.app"
@@ -622,3 +624,68 @@ def test_unwritable_migration_never_clears_or_flaps(monitor, monkeypatch):
     assert len(alerts) == 3 and all(reason is not None for _, reason in alerts)
     assert not notifications and not calls
     assert not worker.state.with_suffix(".scan-migration.json").exists()
+
+
+def _hold_custody(tmp_path, mode=fcntl.LOCK_EX):
+    """Take update-custody.lock the way the updater's Ruby supervisor does, as a separate holder."""
+    (tmp_path / "update-root").mkdir(exist_ok=True)
+    holder = (tmp_path / "update-root/update-custody.lock").open("a")
+    try:
+        fcntl.flock(holder, mode | fcntl.LOCK_NB)
+    except BlockingIOError:
+        holder.close()
+        raise
+    return holder
+
+
+def test_update_custody_defers_activation_and_the_lock_dies_with_its_holder(monitor, tmp_path):
+    """A new build's tick must not launch while the updater restores plists and carries approval."""
+    worker, _, calls, _ = monitor
+    holder = _hold_custody(tmp_path)
+    try:
+        worker.tick()
+        assert not calls and not worker.state.exists()
+    finally:
+        holder.close()  # A SIGKILLed or panicked updater releases custody the same way.
+    worker.tick()
+    assert len(calls) == 1
+
+
+def test_update_cannot_take_custody_between_final_check_and_activation_child(monitor, monkeypatch, tmp_path):
+    worker, _, calls, _ = monitor
+    contended = []
+    write = auto._atomic_write_json
+
+    def attempted(path, payload):
+        if payload.get("stage") == "attempted":  # Last step before the activation child starts.
+            with pytest.raises(BlockingIOError):
+                _hold_custody(tmp_path)
+            contended.append(True)
+        return write(path, payload)
+
+    monkeypatch.setattr(auto, "_atomic_write_json", attempted)
+    worker.tick()
+    assert contended == [True] and len(calls) == 1
+    _hold_custody(tmp_path).close()  # Released once the activation child has exited.
+
+
+def test_update_deferral_alerts_after_fifteen_minutes_and_recovers(monitor, monkeypatch, tmp_path):
+    worker, _, calls, alerts = monitor
+    clock = [1000.0]
+    monkeypatch.setattr(auto, "time", SimpleNamespace(time=lambda: clock[0]))
+    holder = _hold_custody(tmp_path)
+    try:
+        worker.tick()
+        clock[0] += 899
+        worker.tick()
+        assert not calls and not alerts
+        clock[0] += 2
+        worker.tick()
+        worker.tick()
+    finally:
+        holder.close()
+    update_alerts = [a for a in alerts if a[0] == "brainbar-activation-update"]
+    assert len(update_alerts) == 1 and ">15 minutes" in update_alerts[0][1]
+    worker.tick()
+    assert ("brainbar-activation-update", None) in alerts
+    assert len(calls) == 1

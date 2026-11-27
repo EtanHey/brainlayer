@@ -622,10 +622,19 @@ extension BrainBarMenuPresenter {
         }
         static let backupUploading = "Uploading to Google Drive"
         static let backupVerifying = ObservabilityPresentation.backupVerificationText
-        static let backupLastGood = "Last good copy"
+        /// The Backups page: the newest verified copy, dated by when it was made (`db_snapshot.last_at` is the snapshot's
+        /// creation time, not the time it was verified, so it never reads as "verified at").
+        static let backupLastGood = "Newest verified copy is from"
+        static let backupUploadStarted = "Upload started"
+        /// The time of the last confirmed byte checkpoint, beside the percentage: a clock time, never a duration.
+        static func backupUpdatedAt(_ time: String) -> String { "updated \(time)" }
+        /// Google Drive's status line in the Pipeline while a backup uploads (the station's own line, 11 pt).
         static let backupUploadingShort = "Uploading"
         static let backupVerifyingShort = "Checking copy"
-        static let backupLastGoodShort = "Last good"
+        static func driveUploadingPercent(_ percent: Int) -> String { "Uploading \(percent)%" }
+        /// A stall: the time bytes last moved. "at", not "since": "Stalled since 12:58 PM" is too wide for Drive's
+        /// column in a 12-hour locale (Kept-safe rule), "Stalled at 12:58 PM" fits.
+        static func driveStalledAt(_ time: String) -> String { "Stalled at \(time)" }
         static let backupInProgress = "In progress"
         static func driveCopyUploading(_ age: String) -> String {
             "Your database backup in Google Drive is \(age); an upload is running."

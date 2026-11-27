@@ -47,7 +47,7 @@ def admission(monkeypatch):
         monkeypatch.setattr(gate, "time", lane_time)
         monkeypatch.setattr(backup, "time", lane_time)
         monkeypatch.setattr(gate, "_pressure_reason", lambda *args: None)
-        monkeypatch.setattr(gate, "_disk_reason", lambda host: None)
+        monkeypatch.setattr(gate, "_disk_reason", lambda host, failed_proofs=None: None)
         monkeypatch.setattr(gate, "expected_phase_seconds", lambda: 60)
         monkeypatch.setattr(backup, "_configured_backup_timeout_seconds", lambda: 3600)
         yield path, clock
@@ -97,6 +97,7 @@ def test_main_waits_then_runs_when_gate_opens(admission, monkeypatch, closed):
     def run(seconds):
         assert sleeps == [10]
         assert lock.is_dir()
+        assert "backup-daily" not in job_alerts.active_alerts()  # Admitted: no longer waiting.
         return 0
 
     monkeypatch.setattr(gate.time, "sleep", sleep)
@@ -146,6 +147,40 @@ def test_term_unwinds_owned_lock(admission):
     assert signal.getsignal(signal.SIGTERM) == previous
 
 
+@pytest.mark.parametrize("key", ["backup-daily", "backup-snapshot"])
+def test_admission_clears_the_wait_alert_this_gate_raised(admission, monkeypatch, key):
+    path, clock = admission
+    assert job_alerts.alert_path() == path / "alerts.json"  # Never the real job-alerts.json.
+    other = "backup-snapshot" if key == "backup-daily" else "backup-daily"
+    job_alerts.report(other, "Database backup failed; check the backup log")
+    monkeypatch.setattr(gate, "_pressure_reason", lambda *args: "swap too high" if clock[0] == 0 else None)
+    waits = []
+
+    def sleep(seconds):
+        waits.append(job_alerts.active_alerts()[key])
+        clock[0] += seconds
+
+    monkeypatch.setattr(gate.time, "sleep", sleep)
+    with gate.backup_heavy_gate(job_key=key):
+        alerts = job_alerts.active_alerts()
+        assert key not in alerts  # Admitted and running, so no longer "waiting behind the gate".
+        assert alerts[other] == "Database backup failed; check the backup log"  # Only its own key.
+    assert len(waits) == 1
+    assert "waiting behind the heavy-work gate" in waits[0] and "swap too high" in waits[0]
+
+
+@pytest.mark.parametrize("key", ["backup-daily", "backup-snapshot"])
+def test_admission_without_a_wait_keeps_an_alert_this_gate_did_not_raise(admission, monkeypatch, key):
+    path, _ = admission
+    assert job_alerts.alert_path() == path / "alerts.json"  # Never the real job-alerts.json.
+    previous_night = "Database backup failed; check the backup log"
+    job_alerts.report(key, previous_night)
+    monkeypatch.setattr(gate.time, "sleep", lambda seconds: pytest.fail("the gate waited"))
+    with gate.backup_heavy_gate(job_key=key):
+        assert job_alerts.active_alerts()[key] == previous_night
+    assert job_alerts.active_alerts()[key] == previous_night  # Only the backup's own end clears it.
+
+
 def test_snapshot_deadline_bounds_admission(admission, monkeypatch):
     path, clock = admission
     (path / "lock").mkdir()
@@ -172,14 +207,14 @@ def test_probe_failure_is_closed(monkeypatch):
     assert gate._pressure_reason(9, 12) == "swap usage unavailable"
 
 
-def test_pressure_window_ends_runs_under_lock_and_clears_alert_on_success(admission, monkeypatch):
+def test_pressure_window_ends_runs_under_lock_and_clears_alert_on_admission(admission, monkeypatch):
     path, clock = admission
     monkeypatch.setattr(gate, "_pressure_reason", lambda *args: "swap too high")
 
     def run(seconds):
         assert clock[0] == 20
         assert (path / "lock").is_dir()
-        assert "swap too high" in job_alerts.active_alerts()["backup-daily"]
+        assert "backup-daily" not in job_alerts.active_alerts()  # The heavy log keeps the ignored reason.
         assert seconds == 3580
         return 0
 
@@ -205,14 +240,15 @@ def test_past_window_still_waits_for_another_lanes_lock(admission, monkeypatch):
     def run(seconds):
         assert clock[0] == 30
         assert lock.is_dir()
-        assert "backup-daily" in job_alerts.active_alerts()
+        assert "backup-daily" not in job_alerts.active_alerts()  # Admitted: no longer waiting.
         return 1
 
     monkeypatch.setattr(gate.time, "sleep", sleep)
     monkeypatch.setattr(backup, "_supervise_backup_process", run)
     assert backup.main() == 1
     assert not lock.exists()
-    assert "backup-daily" in job_alerts.active_alerts()  # A failed forced run never clears it.
+    # A failed forced run reports its failure, never a stale "waiting" alert.
+    assert job_alerts.active_alerts()["backup-daily"] == "Database backup failed; check the backup log"
 
 
 @pytest.mark.parametrize("value", ["nan", "inf", "0", "-1"])
@@ -395,7 +431,8 @@ def test_alert_tracks_disk_then_pressure_then_lock(disk_admission, monkeypatch):
     lock = path / "lock"
     lock.mkdir()
     monkeypatch.setenv("BRAINLAYER_BACKUP_HEAVY_WINDOW_SECONDS", "100")
-    monkeypatch.setattr(gate, "_pressure_reason", lambda *args: "swap too high" if clock[0] < 20 else None)
+    # Pressure is checked before disk, so it opens at 0 for the disk shortage to name itself.
+    monkeypatch.setattr(gate, "_pressure_reason", lambda *args: "swap too high" if 10 <= clock[0] < 20 else None)
 
     def sleep(seconds):
         assert {0: "needs", 10: "swap too high", 20: "lock held"}[clock[0]] in job_alerts.active_alerts()[
@@ -537,7 +574,7 @@ def test_sigkill_mid_wait_leaves_durable_alert(admission):
 import os, signal
 from brainlayer import backup_daily as backup, backup_heavy_gate as gate
 gate._pressure_reason = lambda *args: 'swap too high'
-gate._disk_reason = lambda host: None
+gate._disk_reason = lambda host, failed_proofs=None: None
 def wait(seconds):
     os.write(int(os.environ['BACKUP_TEST_READY_FD']), b'w')
     signal.pause()
