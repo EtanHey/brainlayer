@@ -30,13 +30,85 @@ last sample and encounter the same supervisor restart as a release installation.
 A separate BrainLayer protected-operation admission follow-up is required to
 close that race; see the UI overhaul phase-14 lead decision 2.
 
-Order: formula upgrade, installed-keg signature verification, service consolidation,
-old-app backup, cask reinstall, activation with a real MCP handshake, installed bundle
-version check. A signature failure leaves the cask and services untouched.
-App replacement or activation failure restores the saved bundle and verifies
-activation again before pruning older failed bundles. Retention failures are
-non-fatal. A failed restore leaves custody and its recovery instruction
-in `update-state`; it never silently retries an unsettled attempt.
+Order: formula upgrade, handoff to the new keg's helper, installed-keg signature
+verification, service consolidation, LaunchAgent plist copy, stop BrainBar, old-app
+backup, cask reinstall, plist check, signature and Gatekeeper check with approval
+carried, one activation with a real MCP handshake, installed bundle version check.
+A signature failure leaves the cask and services untouched.
+
+**Stop first.** The helper stops BrainBar itself before it touches the bundle. It
+boots out `com.brainlayer.brainbar` and `com.brainlayer.brainbar-daemon`, sends
+SIGTERM to every process whose executable (argv[0], as launchd starts it) is inside
+`BrainBar.app` (a process that only names a bundle path, such as `tail`, is left
+alone), waits up to
+`BRAINBAR_UPDATE_STOP_TIMEOUT` seconds (default 30), and sends SIGKILL only after
+that. It never relies on Homebrew's quit: that is an AppleScript request that needs
+Automation access, which a launchd job never has (on 24 Nov 2026 it failed with
+"did not quit", the running bundle was moved, and the M1's socket stayed down).
+The backup move happens only after every BrainBar process has exited. If the stop
+fails, the untouched app is activated again and the attempt ends `failed`. Every
+process scan's exit status counts: if `ps` or `launchctl print` fails, the process
+state is unknown, nothing more is moved, nothing is activated, and the attempt ends
+`recovery-required` with the activation command.
+
+**Plists.** The cask uninstall trashes both LaunchAgent plists and its postflight
+writes new ones. The helper copies both plists into
+`Backups.noindex/LaunchAgents-<operation>` before the stop and puts back any plist
+the cask did not write, so the single `brainlayer brainbar activate --verify` call
+always finds both. The copy is removed after a successful update. If putting a plist
+back fails, activation cannot recreate it: the attempt ends `recovery-required`
+with the saved plist paths and the exact `cp -p … ~/Library/LaunchAgents/` and
+activation commands.
+
+**One activator.** `brainlayer brainbar activate` already serializes callers on
+`~/Library/LaunchAgents/.brainbar-activation.lock`: a manual caller waits and then
+finds the bundle running, and an automatic caller defers. That lock covers only the
+activation itself; between the cask step and that call the helper restores plists
+and carries approval. The formula supervisor's 5-second auto-activation tick
+therefore also takes a SHARED non-blocking flock on
+`~/Library/Application Support/BrainBar/update-custody.lock` and holds it from its
+first check until the activation child exits. While an update holds its EXCLUSIVE
+custody, the tick defers. While a tick holds the shared lock, an update cannot take
+custody: it takes a shared lock long enough to atomically record `waiting` for
+this operation, then exits successfully before mutation. The app retries at its
+next scheduled check without another click, using the same operation and helper.
+A separate `update-wait.lock` serializes shared-lock contenders. A different
+operation's non-terminal state (including `waiting` and `recovery-required`) is
+never overwritten. If another updater holds exclusive custody, the helper exits
+75 without touching its state. The shared lock excludes installer state writes
+throughout the waiting receipt's read and rename. A flock dies with its holder,
+so a SIGKILLed or panicked updater never blocks activation. A deferral longer than
+15 minutes raises the `brainbar-activation-update` job alert, cleared when the
+deferral ends. The fence
+ships in the formula: each tick is a fresh
+`/opt/homebrew/opt/brainlayer/libexec/venv/bin/python -m brainlayer.brainbar_auto_activation`
+process, and the opt link points at the new keg once the helper has upgraded the
+formula, so the fence is live before the cask step.
+
+**Approval.** After the cask step the helper runs the same gates as the release
+installer (`brainlayer-update-brainbar.sh`): `codesign --verify --deep --strict` and
+a Gatekeeper assessment that reports `accepted` and `Notarized Developer ID`. A
+failure rolls back. When the old app carried the user's approval flag (0x40) and the
+signing identity is unchanged, the flag is written onto the new quarantine value;
+quarantine provenance is kept, never stripped. Otherwise the first launch asks.
+
+**Rollback** uses the same order: stop whatever runs from the replacement, move it
+aside, restore the saved bundle and any missing plist, then activate and verify
+again before pruning older failed bundles. Retention failures are non-fatal. A
+failed restore leaves custody and its recovery instruction in `update-state`; it
+never silently retries an unsettled attempt.
+
+**Handoff to the new release.** The app copies the helper from the INSTALLED keg,
+so the copy is always the old release's script. After `brew upgrade --formula`,
+the helper execs the new keg's `brainlayer/launchd/brainbar-update.sh` with
+`--custody-held --handoff VERSION OPERATION_ID` when that file differs and carries
+the `# brainbar-update-handoff: 1` marker. `exec` keeps the pid, so the inherited
+custody flock, `update.lock/pid` and the state file carry over; the new script
+refuses unless the lock names its own pid and operation, and resumes at the
+signature step. An install older than this change has no handoff, so it runs its own
+old steps to the end. **The first update to the release that carries this fix must
+be done by the release install, `brainlayer-update-brainbar.sh`, not the in-app
+Update button.**
 
 Cancellation is accepted before formula mutation. After mutation, the operation
 finishes or restores; Cancel does not kill it. The state file contains operation

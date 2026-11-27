@@ -40,6 +40,20 @@
 - Search: hybrid RRF reranking now incorporates importance and recency signals
 - Embeddings: deferred from synchronous to async pipeline
 
+## [1.6.13] - 2026-11-27
+
+### BrainBar's in-app update now stops BrainBar itself before replacing it and comes back serving (the 1.6.12 update could leave memory down), and the Pipeline's Google Drive node shows a running upload cleanly in every state
+
+- BrainBar: finish pending-store drains before closing SQLite (#1881)
+- test(cli): keep stats timing check reliable on shared CI runners (#1876)
+- fix(supervisor): recover when a recorded group exits during identity checks (#1877)
+- fix(backup): isolate clone alerts and report recovery corruption (#1879)
+- fix(calendar): show nightly progress while backup uploads run (#1878)
+- fix(backup): reclaim verified raws before disk admission (#1880)
+- Backup alert stops saying "waiting" once the heavy-work gate lets the backup run (#1885)
+- BrainBar: Google Drive shows a running upload cleanly, in every upload state (#1886)
+- BrainBar in-app update stops the running app before replacing it, and hands off to the new keg's helper (#1884)
+
 ## [1.6.12] - 2026-11-24
 
 ### BrainBar can update itself (check, offer, install with backup and restore, relaunch), has one design, swipes between Overview, Backups and Jobs, counts how often agents read from memory, and no longer marks a backup lane unread because of old log rows

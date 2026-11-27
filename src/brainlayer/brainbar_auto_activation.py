@@ -66,8 +66,10 @@ def brew_active():
 
 
 class AutoActivator:
-    def __init__(self, agents: Path, state: Path):
+    def __init__(self, agents: Path, state: Path, update_root: Path | None = None):
         self.agents, self.state = agents, state
+        default = Path.home() / "Library/Application Support/BrainBar"
+        self.update_root = update_root or Path(os.environ.get("BRAINBAR_UPDATE_ROOT") or default)
 
     def tick(self):
         self.state.parent.mkdir(parents=True, exist_ok=True)
@@ -147,7 +149,44 @@ class AutoActivator:
             _atomic_write_json(path, {"since": since, "alerted": alerted})
         return bool(processes)
 
+    def _note_update_deferral(self, deferred):
+        path = self.state.with_suffix(".update.json")
+        prior = json.loads(path.read_text()) if path.exists() else {}
+        if not deferred:
+            if prior:
+                path.unlink()
+                if prior.get("alerted"):
+                    report("brainbar-activation-update", None)
+            return
+        now = time.time()
+        since = min(prior.get("since", now), now)
+        alerted = prior.get("alerted", False)
+        if now - since > 900 and not alerted:
+            report(
+                "brainbar-activation-update",
+                "BrainBar activation deferred by an in-app update for >15 minutes; "
+                "inspect update-state and update.log in ~/Library/Application Support/BrainBar",
+            )
+            alerted = True
+        _atomic_write_json(path, {"since": since, "alerted": alerted})
+
     def _tick(self):
+        # The in-app updater holds update-custody.lock EXCLUSIVELY for its whole attempt, and it
+        # restores plists and carries approval outside the activation lock. A SHARED hold from
+        # this check until the activation child exits fences the two both ways: an update in
+        # progress defers this tick, and an update started meanwhile fails to take custody
+        # (exit 75) and retries at its next check. The lock dies with its holder.
+        self.update_root.mkdir(parents=True, exist_ok=True, mode=0o700)
+        with (self.update_root / "update-custody.lock").open("a") as custody:
+            try:
+                fcntl.flock(custody, fcntl.LOCK_SH | fcntl.LOCK_NB)
+            except BlockingIOError:
+                self._note_update_deferral(True)
+                return
+            self._note_update_deferral(False)
+            self._tick_with_custody()
+
+    def _tick_with_custody(self):
         if self._defer_for_brew():
             return
         apps = set()

@@ -52,8 +52,11 @@ import XCTest
         clock.value = now.addingTimeInterval(30 * 60)
         XCTAssertEqual(model.observabilityNow, now, "the read has not completed again")
         let expired = try XCTUnwrap(model.backupProgress)
-        XCTAssertNil(expired.percentage)
         XCTAssertTrue(expired.isStalled)
+        // Review 1886 B2: the stall keeps its last amount for the grey bar; no number is said in words.
+        XCTAssertEqual(expired.barFill(), .grey(0.25))
+        XCTAssertFalse(expired.stationLine().contains("%"))
+        XCTAssertFalse(expired.title.contains("%"))
     }
 
     func testMissingTotalIsIndeterminateWithNoNumber() throws {
@@ -153,7 +156,9 @@ import XCTest
         XCTAssertEqual(fresh.accessibilityValue, "25 percent")
         for age in [TimeInterval?.none, .some(1201)] {
             let p = try XCTUnwrap(BrainBarBackupProgress.read(backups(checkpointAge: age), now: now))
-            XCTAssertNil(p.percentage)
+            // An undated checkpoint carries no amount; a stalled one keeps it for its grey bar, never in words.
+            XCTAssertEqual(p.percentage, age == .some(1201) ? 25 : nil)
+            XCTAssertFalse(p.stationLine().contains("%"))
             XCTAssertEqual(p.isStalled, age == .some(1201))
             if age == .some(1201) {
                 XCTAssertEqual(p.accessibilityValue, now.addingTimeInterval(-1201).formatted(date: .abbreviated, time: .shortened))
