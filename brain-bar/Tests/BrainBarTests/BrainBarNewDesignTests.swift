@@ -3248,7 +3248,9 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
         let source = try String(contentsOf: URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
             .deletingLastPathComponent().appendingPathComponent("Sources/BrainBar/NewDesign/NDStationPanel.swift"), encoding: .utf8)
         XCTAssertTrue(source.contains("Text(keepingUnits(line)).font(NDType.panelBody).foregroundStyle(ND.t2)"))
-        XCTAssertTrue(source.contains("Text(line.label).font(NDType.panelBody)") && source.contains("Text(line.value).font(NDType.panelValue)"))
+        // #1899 R1 (N1): a quiet value ("none running", "not known") reads as body text; every other value stays semibold.
+        XCTAssertTrue(source.contains("Text(line.label).font(NDType.panelBody)")
+                      && source.contains("Text(line.value).font(line.quiet ? NDType.panelBody : NDType.panelValue)"))
         // Two of the deck's sentences run to three lines at 12 pt on their own: Read's explanation and the first sentence
         // of Drive's. Holding them to two needs shorter sentences in the deck (reported, not rewritten here).
         let longSentences = [Say.explainRead, NDStationPanelBody.paragraphs([Say.explainDrive])[0], Say.explainNightly]

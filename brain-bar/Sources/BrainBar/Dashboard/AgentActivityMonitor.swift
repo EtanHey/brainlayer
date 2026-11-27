@@ -34,6 +34,46 @@ enum AgentFamily: String, CaseIterable, Sendable {
     }
 }
 
+/// #1899 R1: the harnesses whose agents can be running now. Antigravity (`agy`, whatever model it runs) and the Gemini CLI
+/// are different harnesses; the session buckets above fold both into `.gemini` and drop a non-Gemini `agy`.
+enum AgentHarness: String, CaseIterable, Sendable {
+    case claude
+    case codex
+    case cursor
+    case antigravity
+    case geminiCLI
+}
+
+/// #1899 R1: running agents per harness, from live session state only. A session is running while its own process lives
+/// (each Claude, Cursor, Gemini CLI and `agy` CLI session has one, and nested CLIs fold into the outer session), or, for a
+/// Codex thread hosted by an app server, while its own rollout says a turn is under way (`task_started` with no later
+/// `task_complete` or `turn_aborted`). A transcript written recently is NOT running: that is `presences`, which counts
+/// finished sessions for 10 minutes. Where liveness cannot be established the count is nil (unknown): no measurement, an
+/// Antigravity ACP server whose conversations BrainBar cannot see into, or a Codex app server whose rollouts were not read.
+struct AgentRunning: Sendable, Equatable {
+    /// Top-level live session processes per harness.
+    var processes: [AgentHarness: Int] = [:]
+    /// A `codex app-server` is alive: its threads have no process of their own.
+    var codexHostAlive = false
+    /// Its threads that are mid-turn, from their rollouts; nil when not read.
+    var hostedCodexThreads: Int? = nil
+    /// An Antigravity ACP server (`agy_acp_server`) is alive: its conversations' liveness is not readable.
+    var antigravityHostAlive = false
+    var measured = true
+
+    static let unmeasured = AgentRunning(measured: false)
+
+    func count(_ harness: AgentHarness) -> Int? {
+        guard measured else { return nil }
+        let own = processes[harness] ?? 0
+        switch harness {
+        case .antigravity: return antigravityHostAlive ? nil : own
+        case .codex: return codexHostAlive ? hostedCodexThreads.map { own + $0 } : own
+        default: return own
+        }
+    }
+}
+
 struct AgentPresence: Sendable, Equatable {
     let family: AgentFamily
     let count: Int
@@ -52,17 +92,22 @@ struct AgentPresence: Sendable, Equatable {
 struct AgentActivitySnapshot: Sendable, Equatable {
     let presences: [AgentPresence]
     let measurement: MetricEvidenceReadability
+    /// #1899 R1: running agents per harness (live sessions only), apart from the session counts above.
+    let running: AgentRunning
 
     init(
         presences: [AgentPresence],
-        measurement: MetricEvidenceReadability = .readable
+        measurement: MetricEvidenceReadability = .readable,
+        running: AgentRunning = .unmeasured
     ) {
         self.presences = presences
         self.measurement = measurement
+        self.running = measurement.isReadable ? running : .unmeasured
     }
 
     static let empty = AgentActivitySnapshot(
-        presences: AgentFamily.allCases.map { AgentPresence(family: $0, count: 0) }
+        presences: AgentFamily.allCases.map { AgentPresence(family: $0, count: 0) },
+        running: AgentRunning()
     )
 
     static func unavailable(_ reason: String) -> AgentActivitySnapshot {
@@ -70,6 +115,13 @@ struct AgentActivitySnapshot: Sendable, Equatable {
             presences: AgentFamily.allCases.map { AgentPresence(family: $0, count: 0) },
             measurement: .unreadable(reason)
         )
+    }
+
+    /// The hosted Codex threads that are mid-turn, read only while an app server runs.
+    func withHostedCodexThreads(_ threads: Int?) -> AgentActivitySnapshot {
+        var next = running
+        next.hostedCodexThreads = threads
+        return AgentActivitySnapshot(presences: presences, measurement: measurement, running: next)
     }
 
     var isMeasured: Bool { measurement.isReadable }
@@ -90,7 +142,8 @@ struct AgentActivitySnapshot: Sendable, Equatable {
             presences: presences.map {
                 AgentPresence(family: $0.family, count: max($0.count, transcriptSessions[$0.family] ?? 0))
             },
-            measurement: measurement
+            measurement: measurement,
+            running: running
         )
     }
 
@@ -134,6 +187,7 @@ final class AgentActivityMonitor: Sendable {
     private let executablePathResolver: @Sendable (Int32) -> String?
     private let argv0Resolver: @Sendable (Int32) -> String?
     private let transcriptSessions: @Sendable () -> [AgentFamily: Int]
+    private let hostedCodexThreads: @Sendable () -> Int?
 
     /// The live process probes are named explicitly (`.live`) where production builds a
     /// monitor; tests inject synthetic process rows, path/argv resolvers and transcript counts.
@@ -141,12 +195,14 @@ final class AgentActivityMonitor: Sendable {
         snapshotProvider: @escaping @Sendable () -> String?,
         executablePathResolver: @escaping @Sendable (Int32) -> String?,
         argv0Resolver: @escaping @Sendable (Int32) -> String? = { _ in nil },
-        transcriptSessions: @escaping @Sendable () -> [AgentFamily: Int] = { [:] }
+        transcriptSessions: @escaping @Sendable () -> [AgentFamily: Int] = { [:] },
+        hostedCodexThreads: @escaping @Sendable () -> Int? = { nil }
     ) {
         self.snapshotProvider = snapshotProvider
         self.executablePathResolver = executablePathResolver
         self.argv0Resolver = argv0Resolver
         self.transcriptSessions = transcriptSessions
+        self.hostedCodexThreads = hostedCodexThreads
     }
 
     /// The live process table: `ps` rows, and the kernel's executable path per candidate PID;
@@ -155,17 +211,25 @@ final class AgentActivityMonitor: Sendable {
         snapshotProvider: AgentActivityMonitor.captureProcessSnapshot,
         executablePathResolver: AgentActivityMonitor.kernelExecutablePath,
         argv0Resolver: AgentActivityMonitor.kernelArgv0,
-        transcriptSessions: { liveTranscriptSessions.counts() }
+        transcriptSessions: { liveTranscriptSessions.counts() },
+        hostedCodexThreads: { liveHostedCodexThreads.counts()[.codex] }
     )
 
     private static let liveTranscriptSessions = AgentTranscriptActivity.Cache { now in
         AgentTranscriptActivity.count(home: FileManager.default.homeDirectoryForCurrentUser, now: now)
     }
 
+    /// #1899 R1: running state must be fresh, so this scan keeps its answer 10 s (the session scan above keeps 60 s).
+    private static let liveHostedCodexThreads = AgentTranscriptActivity.Cache(ttl: 10) { now in
+        [.codex: AgentTranscriptActivity.runningHostedCodexThreads(home: FileManager.default.homeDirectoryForCurrentUser, now: now)]
+    }
+
     func sample() -> AgentActivitySnapshot {
         guard let snapshot = snapshotProvider() else { return .unavailable("ps capture failed") }
-        return Self.parse(snapshot, executablePath: executablePathResolver, argv0: argv0Resolver)
+        let parsed = Self.parse(snapshot, executablePath: executablePathResolver, argv0: argv0Resolver)
             .merging(transcriptSessions: transcriptSessions())
+        // Hosted threads are read only while a server hosts them: with none alive, a rollout left mid-turn is not running.
+        return parsed.running.codexHostAlive ? parsed.withHostedCodexThreads(hostedCodexThreads()) : parsed
     }
 
     struct ProcessRow: Equatable {
@@ -199,24 +263,38 @@ final class AgentActivityMonitor: Sendable {
         let rows = snapshot.split(whereSeparator: \.isNewline).compactMap(parseRow)
         var parentByPID: [Int32: Int32] = [:]
         var candidates: [Int32: AgentFamily] = [:]
+        var harnesses: [Int32: AgentHarness] = [:]
+        var running = AgentRunning()
         for var row in rows {
             parentByPID[row.pid] = row.parentPID
             guard mentionsAnAgent(row) else { continue }
             // The kernel path is resolved BEFORE classification (#1019 R1): it marks where a
             // spaced argv[0] ends, so the binary, its role and its flags are read correctly.
             row.executablePath = executablePath(row.pid)
-            guard let family = candidateFamily(row, Invocation(command: row.command, kernelPath: row.executablePath, actualArgv0: argv0(row.pid))),
-                  !isAppOrSystemExecutable(row.executablePath) else { continue }
-            candidates[row.pid] = family
+            let invocation = Invocation(command: row.command, kernelPath: row.executablePath, actualArgv0: argv0(row.pid))
+            // A Codex app server (T3 Code's, or the Codex app's own bundled one) hosts threads without processes.
+            if invocation.binary == "codex", codexRole(invocation) == "app-server" { running.codexHostAlive = true }
+            guard !isAppOrSystemExecutable(row.executablePath) else { continue }
+            if isAntigravityHost(row, invocation) {
+                running.antigravityHostAlive = true
+                continue
+            }
+            let family = candidateFamily(row, invocation)
+            if let family { candidates[row.pid] = family }
+            if let harness = runningHarness(row, invocation, family: family) { harnesses[row.pid] = harness }
         }
 
         var counts = Dictionary(uniqueKeysWithValues: AgentFamily.allCases.map { ($0, 0) })
-        for (pid, family) in candidates where !hasCandidateAncestor(pid, parentByPID: parentByPID, candidates: candidates) {
+        for (pid, family) in candidates where !hasCandidateAncestor(pid, parentByPID: parentByPID, isCandidate: { candidates[$0] != nil }) {
             counts[family, default: 0] += 1
+        }
+        for (pid, harness) in harnesses where !hasCandidateAncestor(pid, parentByPID: parentByPID, isCandidate: { harnesses[$0] != nil }) {
+            running.processes[harness, default: 0] += 1
         }
 
         return AgentActivitySnapshot(
-            presences: AgentFamily.allCases.map { AgentPresence(family: $0, count: counts[$0, default: 0]) }
+            presences: AgentFamily.allCases.map { AgentPresence(family: $0, count: counts[$0, default: 0]) },
+            running: running
         )
     }
 
@@ -306,15 +384,37 @@ final class AgentActivityMonitor: Sendable {
         "cursor-agent": .cursor,
     ]
 
+    /// #1899 R1: the harness a live session process runs. An `agy` CLI session is Antigravity whatever model it runs (the
+    /// session buckets only take a Gemini-model `agy`); every other Gemini session is the Gemini CLI.
+    private static func runningHarness(_ row: ProcessRow, _ invocation: Invocation, family: AgentFamily?) -> AgentHarness? {
+        if row.executable == "agy" || invocation.binary == "agy" {
+            guard !isNonSessionMode(invocation), !isIgnoredProcess(executable: row.executable, invocation: invocation),
+                  !isBridgeOrProxy(executable: row.executable, invocation: invocation) else { return nil }
+            return .antigravity
+        }
+        switch family {
+        case .claude: return .claude
+        case .codex: return .codex
+        case .cursor: return .cursor
+        case .gemini: return .geminiCLI
+        case nil: return nil
+        }
+    }
+
+    /// T3 Code's Antigravity ACP server (`agy_acp_server.par`; `ucomm` truncates it to 16 characters).
+    private static func isAntigravityHost(_ row: ProcessRow, _ invocation: Invocation) -> Bool {
+        invocation.binary.hasPrefix("agy_acp_server") || row.executable.hasPrefix("agy_acp_server")
+    }
+
     private static func hasCandidateAncestor(
         _ pid: Int32,
         parentByPID: [Int32: Int32],
-        candidates: [Int32: AgentFamily]
+        isCandidate: (Int32) -> Bool
     ) -> Bool {
         var visited: Set<Int32> = [pid]
         var current = parentByPID[pid]
         while let ancestor = current, ancestor > 1, visited.insert(ancestor).inserted {
-            if candidates[ancestor] != nil { return true }
+            if isCandidate(ancestor) { return true }
             current = parentByPID[ancestor]
         }
         return false
@@ -411,17 +511,22 @@ final class AgentActivityMonitor: Sendable {
             if arguments.first == "--chrome-native-host" || arguments.first == "remote-control" { return true }
             return arguments.count >= 2 && arguments[0] == "mcp" && arguments[1] == "serve"
         case "codex":
-            var index = 0
-            while index < arguments.count, arguments[index].hasPrefix("-") {
-                // A value-taking flag written as two tokens consumes its value too; `--x=value`
-                // and boolean flags are one token.
-                index += codexValueFlags.contains(arguments[index]) ? 2 : 1
-            }
-            guard index < arguments.count else { return false }
-            return codexNonSessionRoles.contains(arguments[index])
+            return codexRole(invocation).map(codexNonSessionRoles.contains) ?? false
         default:
             return false
         }
+    }
+
+    /// A `codex` invocation's subcommand, after every global flag; nil when it has none.
+    private static func codexRole(_ invocation: Invocation) -> String? {
+        let arguments = invocation.arguments
+        var index = 0
+        while index < arguments.count, arguments[index].hasPrefix("-") {
+            // A value-taking flag written as two tokens consumes its value too; `--x=value`
+            // and boolean flags are one token.
+            index += codexValueFlags.contains(arguments[index]) ? 2 : 1
+        }
+        return index < arguments.count ? arguments[index] : nil
     }
 
     private static let codexNonSessionRoles: Set<String> = ["app-server", "mcp-server", "remote-control"]

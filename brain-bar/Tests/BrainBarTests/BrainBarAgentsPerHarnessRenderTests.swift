@@ -10,19 +10,22 @@ import XCTest
 
     /// The states the PR's table names: every harness idle; a mix; 2- and 3-digit counts; a count on a faulted provider;
     /// the monitor unable to measure.
-    static let scenarios: [(name: String, fixture: Fixture.Name, sessions: [AgentFamily: Int?])] = [
+    static let scenarios: [(name: String, fixture: Fixture.Name, running: [AgentFamily: Int?])] = [
         ("zero", .calm, [.claude: 0, .codex: 0, .cursor: 0, .gemini: 0]),
         ("mixed", .calm, [.claude: 7, .codex: 2, .cursor: 0, .gemini: 1]),
         ("wide", .calm, [.claude: 128, .codex: 12, .cursor: 3, .gemini: 999]),
         ("fault", .agentNotRead, [.claude: 4, .codex: 23, .cursor: 0, .gemini: 0]),
+        // #1899 R1 (N2): a count beside the faulted provider's ring and badge (the fixture faults Cursor).
+        ("fault-count", .agentNotRead, [.claude: 0, .codex: 0, .cursor: 12, .gemini: 0]),
         ("unmeasured", .calm, [.claude: nil, .codex: nil, .cursor: nil, .gemini: nil]),
     ]
 
-    static func inputs(_ fixture: Fixture.Name, _ sessions: [AgentFamily: Int?]) -> NDInputs {
+    /// The fixture with these running counts (nil: liveness unknown).
+    static func inputs(_ fixture: Fixture.Name, _ running: [AgentFamily: Int?]) -> NDInputs {
         var i = Fixture.inputs(fixture)
         i.agents = NDAgents(agents: i.agents.agents.map { agent in
             var a = agent
-            a.sessions = sessions[agent.family] ?? nil
+            a.running = running[agent.family] ?? nil
             return a
         })
         return i
@@ -36,7 +39,7 @@ import XCTest
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         for (suffix, appearance) in NDRenderHarness.appearances {
             for scenario in Self.scenarios {
-                let store = NDStore(fixture: Self.inputs(scenario.fixture, scenario.sessions), page: .overview)
+                let store = NDStore(fixture: Self.inputs(scenario.fixture, scenario.running), page: .overview)
                 _ = try NDRenderHarness.hover(store, station: .agents, name: "agents-\(scenario.name)-hover-\(suffix)",
                                               appearance: appearance, in: dir)
             }

@@ -308,8 +308,20 @@ import SwiftUI
         return NDAgents(agents: AgentFamily.allCases.map { family in
             NDAgents.Agent(family: family,
                            sessions: measured ? activity?.presences.first { $0.family == family }?.count ?? 0 : nil,
-                           saves: counts?[family])
+                           saves: counts?[family],
+                           running: activity?.running.count(runningHarness(family)))
         })
+    }
+
+    /// #1899 R1: the column's rows are the harnesses BrainLayer reads; its `.gemini` row is Antigravity (its watch root is
+    /// Antigravity's own folder), never the Gemini CLI, which BrainLayer does not read and the column does not show.
+    static func runningHarness(_ family: AgentFamily) -> AgentHarness {
+        switch family {
+        case .claude: .claude
+        case .codex: .codex
+        case .cursor: .cursor
+        case .gemini: .antigravity
+        }
     }
 
     static let jobOrder: [BrainLayerLaunchdJob] = [.watch, .hotlane, .drain, .walCheckpoint, .backupDaily, .jsonlBackup,

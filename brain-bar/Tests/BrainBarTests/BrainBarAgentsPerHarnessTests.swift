@@ -11,8 +11,8 @@ import XCTest
     typealias L = NDPipelineLayout
     typealias Fixture = BrainBarDesignFixture
 
-    private func inputs(_ sessions: [AgentFamily: Int?], fixture: Fixture.Name = .calm) -> NDInputs {
-        BrainBarAgentsPerHarnessRenderTests.inputs(fixture, sessions)
+    private func inputs(_ running: [AgentFamily: Int?], fixture: Fixture.Name = .calm) -> NDInputs {
+        BrainBarAgentsPerHarnessRenderTests.inputs(fixture, running)
     }
 
     private let mixed: [AgentFamily: Int?] = [.claude: 7, .codex: 2, .cursor: 0, .gemini: 1]
@@ -22,7 +22,7 @@ import XCTest
     func testTheChartCarriesTheMonitorsCounts() {
         let state = NDPipelineState.make(inputs(mixed))
         XCTAssertEqual(state.agentsRunning, [.claude: 7, .codex: 2, .cursor: 0, .gemini: 1])
-        XCTAssertEqual(NDPipelineState.make(inputs(unmeasured)).agentsRunning, [:], "not measured is not zero")
+        XCTAssertEqual(NDPipelineState.make(inputs(unmeasured)).agentsRunning, [:], "unknown liveness is not zero")
         // The count is BrainBar's own measurement, not the verdict's: a stale verdict keeps it.
         let stale = NDPipelineState.make(inputs(mixed, fixture: .notConfirmed))
         XCTAssertTrue(stale.allUnconfirmed)
@@ -67,8 +67,11 @@ import XCTest
         let rows = NDStationPopover.rows(.agents, i, NDModel.make(i))
         XCTAssertEqual(rows.map(\.label), ["Claude", "Codex", "Cursor", "Antigravity"])
         XCTAssertEqual(rows.map(\.value), ["7 running", "2 running", "none running", "1 running"])
+        // #1899 R1 (N1): idle and unknown rows are quiet (t2 regular); running ones keep the value style.
+        XCTAssertEqual(rows.map(\.quiet), [false, false, true, false])
         let u = inputs(unmeasured)
         XCTAssertEqual(NDStationPopover.rows(.agents, u, NDModel.make(u)).map(\.value), Array(repeating: "not known", count: 4))
+        XCTAssertTrue(NDStationPopover.rows(.agents, u, NDModel.make(u)).allSatisfy(\.quiet))
         // The calm panel carries them; a fault panel stays the fault's (title, who is still read, Copy report), which has
         // no room for four more rows under the column. The counts stay on the icons there.
         let calm = NDStore(fixture: inputs(mixed), page: .overview)
@@ -97,6 +100,11 @@ import XCTest
         return out
     }
 
+    /// What a count puts on the chart: its ink, and its plate where it has one.
+    private func footprint(_ family: AgentFamily, _ count: Int, _ faulted: Bool) -> CGRect {
+        L.countPlate(family, count: count, faulted: faulted) ?? L.countInk(family, count: count, faulted: faulted)
+    }
+
     func testACountNeverReachesAConnectorAnIconOrAnotherCount() {
         let lines = connectorRects()
         XCTAssertFalse(lines.isEmpty)
@@ -104,23 +112,27 @@ import XCTest
             let c = L.iconCentre(family)
             return CGRect(x: c.x - L.iconSize / 2, y: c.y - L.iconSize / 2, width: L.iconSize, height: L.iconSize)
         }
-        for count in [7, 42, 999] {
+        for count in [7, 42, 88, 999] {
             for faulted in [false, true] {
-                let masks = L.agentRows.map { L.countMask($0.0, count: count, faulted: faulted) }
+                let marks = L.agentRows.map { footprint($0.0, count, faulted) }
                 for (index, (family, _)) in L.agentRows.enumerated() {
-                    let mask = masks[index]
+                    let mark = marks[index]
                     let label = "\(family) \(count) faulted \(faulted)"
-                    for (name, line) in lines { XCTAssertFalse(mask.intersects(line), "\(label) reaches \(name)") }
-                    for icon in icons { XCTAssertFalse(mask.intersects(icon), "\(label) covers an icon") }
-                    for (j, other) in masks.enumerated() where j != index {
-                        XCTAssertFalse(mask.intersects(other), "\(label) touches another count")
+                    for (name, line) in lines { XCTAssertFalse(mark.intersects(line), "\(label) reaches \(name)") }
+                    for icon in icons { XCTAssertFalse(mark.intersects(icon), "\(label) covers an icon") }
+                    for (j, other) in marks.enumerated() where j != index {
+                        XCTAssertFalse(mark.intersects(other), "\(label) touches another count")
                     }
-                    XCTAssertGreaterThanOrEqual(mask.minX, 0)
-                    XCTAssertLessThan(mask.maxX, L.point(.read).x - L.lineEnd, "\(label) stays left of Read")
+                    XCTAssertGreaterThanOrEqual(mark.minX, 0)
+                    XCTAssertLessThan(mark.maxX, L.point(.read).x - L.lineEnd, "\(label) stays left of Read")
                     if faulted {
+                        // The ring (r 12, 1.5 pt) and the badge (r 7.2 at +8.5, -8.5) keep 1.5 pt to the figures.
                         let c = L.iconCentre(family)
-                        let ring = CGRect(x: c.x - 12.75, y: c.y - 12.75, width: 25.5, height: 25.5)
-                        XCTAssertGreaterThanOrEqual(L.countRect(family, count: count, faulted: true).minX, ring.maxX + 2, "\(label) clears the ring")
+                        let ink = L.countInk(family, count: count, faulted: true)
+                        XCTAssertGreaterThanOrEqual(ink.minX, c.x + 12.75 + 1.5, "\(label) clears the ring")
+                        let badge = CGPoint(x: c.x + 8.5, y: c.y - 8.5)
+                        let nearest = CGPoint(x: max(ink.minX, min(badge.x, ink.maxX)), y: max(ink.minY, min(badge.y, ink.maxY)))
+                        XCTAssertGreaterThanOrEqual(hypot(nearest.x - badge.x, nearest.y - badge.y), 7.2 + 1.5, "\(label) clears the badge")
                     }
                 }
             }
@@ -130,11 +142,30 @@ import XCTest
         XCTAssertEqual(L.agentRows.map(\.1), [36, 60, 84, 108])
     }
 
+    /// #1899 R1 (B3): 1 and 2 digits sit inside the column's border (its inner edge at x 59.5) with no plate; only a count
+    /// that reaches the border (3 digits, or one beside a faulted ring) breaks it on a plate.
+    func testTwoDigitsStayInsideTheColumnAndOnlyWiderCountsBreakItsBorder() {
+        let inner = L.agentsFrame.maxX - 0.5
+        for family in AgentFamily.allCases {
+            for count in [1, 7, 10, 12, 23, 47, 88, 99] {
+                let ink = L.countInk(family, count: count, faulted: false)
+                XCTAssertLessThanOrEqual(ink.maxX, inner - 0.5, "\(family) \(count) ends inside the border")
+                XCTAssertGreaterThanOrEqual(ink.minX, L.iconCentre(family).x + L.iconSize / 2 + 1.5, "\(family) \(count) clears the icon")
+                XCTAssertNil(L.countPlate(family, count: count, faulted: false), "\(family) \(count) needs no plate")
+            }
+            for count in [100, 128, 999] {
+                XCTAssertNotNil(L.countPlate(family, count: count, faulted: false), "\(family) \(count) breaks the border")
+            }
+        }
+        XCTAssertEqual(L.countFontSize, 9)
+    }
+
     func testACountUsesTheChartsFigureStyle() {
         XCTAssertEqual(L.countText(1234), "1234")
-        // Monospaced figures: every 3-digit count is as wide as every other.
+        // Monospaced figures: every 3-digit count's box is as wide as every other.
         XCTAssertEqual(L.countRect(.claude, count: 111, faulted: false).width, L.countRect(.claude, count: 888, faulted: false).width)
         XCTAssertLessThan(L.countRect(.claude, count: 7, faulted: false).width, L.countRect(.claude, count: 77, faulted: false).width)
+        XCTAssertEqual(L.countFont.pointSize, 9)
     }
 
     /// WCAG relative luminance of a dynamic colour in an appearance.

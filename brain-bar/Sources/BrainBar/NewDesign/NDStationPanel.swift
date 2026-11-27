@@ -86,8 +86,9 @@ struct NDStationPanelBody: View {
                     Text(line.label).font(NDType.panelBody).foregroundStyle(ND.t2).fixedSize(horizontal: false, vertical: true)
                     Spacer(minLength: line.value.isEmpty ? 0 : 12)
                     if !line.value.isEmpty {
-                        Text(line.value).font(NDType.panelValue)
-                            .foregroundStyle(line.tone == .fault ? ND.redText : line.tone == .warn ? ND.orangeText : ND.t1)
+                        Text(line.value).font(line.quiet ? NDType.panelBody : NDType.panelValue)
+                            .foregroundStyle(line.tone == .fault ? ND.redText : line.tone == .warn ? ND.orangeText
+                                             : line.quiet ? ND.t2 : ND.t1)
                     }
                 }
                 .frame(minHeight: Self.rowHeight)

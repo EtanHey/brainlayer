@@ -117,7 +117,12 @@ enum AgentTranscriptActivity {
     }
 
     private static func isCodexSubagent(_ url: URL) -> Bool {
-        guard let handle = try? FileHandle(forReadingFrom: url) else { return false }
+        codexFirstLine(url).range(of: codexSubagentMarker) != nil
+    }
+
+    /// A rollout's first line (its `session_meta`), up to `codexFirstLineCap`.
+    private static func codexFirstLine(_ url: URL) -> Data {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return Data() }
         defer { try? handle.close() }
         var line = Data()
         while line.count < codexFirstLineCap,
@@ -129,6 +134,61 @@ enum AgentTranscriptActivity {
             }
             line.append(chunk)
         }
-        return line.range(of: codexSubagentMarker) != nil
+        return line
+    }
+
+    // MARK: running hosted Codex threads (#1899 R1)
+
+    /// Originators whose sessions have a process of their own, counted from `ps`: the interactive CLI and `codex exec`.
+    /// Every other originator (T3 Code, the Codex app, the SDK) is a thread hosted by an app server.
+    static let codexOwnProcessOriginators: Set<String> = ["codex_cli_rs", "codex_exec"]
+    /// How much of a rollout's end is read for its last turn marker.
+    static let codexTailCap = 1 << 20
+    private static let codexTurnMarkers: Set<String> = ["task_started", "task_complete", "turn_aborted"]
+
+    /// Hosted Codex threads that are mid-turn now: a top-level rollout written in the last `window`, from a hosted
+    /// originator, whose last turn marker is `task_started`. A finished turn (`task_complete`, `turn_aborted`) is not
+    /// running however recently it was written. A thread silent for longer than `window` mid-turn is missed (a lower bound).
+    static func runningHostedCodexThreads(
+        home: URL,
+        now: Date,
+        window: TimeInterval = window,
+        fileManager: FileManager = .default
+    ) -> Int {
+        let rollouts = recentTranscripts(under: home.appendingPathComponent(".codex/sessions"), maxDepth: 4,
+                                         cutoff: now.addingTimeInterval(-window), fileManager: fileManager)
+        var threads: Set<String> = []
+        for url in rollouts {
+            let first = codexFirstLine(url)
+            guard first.range(of: codexSubagentMarker) == nil else { continue }
+            if let originator = codexOriginator(first), codexOwnProcessOriginators.contains(originator) { continue }
+            if codexTurnInProgress(url) { threads.insert(sessionID(url)) }
+        }
+        return threads.count
+    }
+
+    static func codexOriginator(_ firstLine: Data) -> String? {
+        guard let object = try? JSONSerialization.jsonObject(with: firstLine) as? [String: Any],
+              let payload = object["payload"] as? [String: Any] else { return nil }
+        return payload["originator"] as? String
+    }
+
+    /// The rollout's last turn marker is `task_started`. Read from the end, at most `codexTailCap`: a turn's completion is
+    /// its last record, so a tail longer than the cap with no marker in it is the middle of a started turn.
+    static func codexTurnInProgress(_ url: URL) -> Bool {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return false }
+        defer { try? handle.close() }
+        guard let size = try? handle.seekToEnd() else { return false }
+        let start = size > UInt64(codexTailCap) ? size - UInt64(codexTailCap) : 0
+        guard (try? handle.seek(toOffset: start)) != nil, let tail = try? handle.readToEnd() else { return false }
+        for line in tail.split(separator: UInt8(ascii: "\n")).reversed() {
+            guard codexTurnMarkers.contains(where: { line.range(of: Data($0.utf8)) != nil }),
+                  let object = try? JSONSerialization.jsonObject(with: Data(line)) as? [String: Any],
+                  object["type"] as? String == "event_msg",
+                  let payload = object["payload"] as? [String: Any],
+                  let type = payload["type"] as? String, codexTurnMarkers.contains(type) else { continue }
+            return type == "task_started"
+        }
+        return start > 0
     }
 }

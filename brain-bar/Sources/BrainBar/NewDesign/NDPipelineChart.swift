@@ -378,7 +378,7 @@ struct NDPipelineChart: View {
     static func drawCount(_ ctx: GraphicsContext, _ count: Int, family: AgentFamily, faulted: Bool) {
         typealias L = NDPipelineLayout
         let rect = L.countRect(family, count: count, faulted: faulted)
-        ctx.fill(Path(L.countMask(family, count: count, faulted: faulted)), with: .color(ND.card))
+        if let plate = L.countPlate(family, count: count, faulted: faulted) { ctx.fill(Path(plate), with: .color(ND.card)) }
         let resolved = ctx.resolve(text(L.countText(count), size: L.countFontSize, color: ND.harness(family), weight: .semibold, mono: true))
         let size = resolved.measure(in: CGSize(width: 200, height: 40))
         let baseline = resolved.firstBaseline(in: size)
@@ -891,6 +891,9 @@ struct NDStationPopover: View {
         var label: String
         var value: String
         var tone: NDModel.Tone = .fine
+        /// #1899 R1 (N1): a value that reports nothing going on ("none running", "not known") reads as body text, so the
+        /// running harnesses carry the weight.
+        var quiet = false
     }
 
     /// What a panel says (R1.5 change 2): its mark, title, lines (the first in `t1` under a fault), rows and action.
@@ -1010,7 +1013,8 @@ struct NDStationPopover: View {
         case .agents:
             // w307: each harness and how many of its agents run now ("none running" at 0), in the column's order.
             return NDPipelineLayout.agentRows.map { family, _ in
-                Line(label: NDProvider.name(family), value: Say.runningCount(i.agents.agents.first { $0.family == family }?.sessions))
+                let running = i.agents.agents.first { $0.family == family }?.running
+                return Line(label: NDProvider.name(family), value: Say.runningCount(running), quiet: (running ?? 0) == 0)
             }
         case .queue:
             return i.savesWaiting == 0 ? [Line(label: Say.waitingRow, value: Say.none)] : []
