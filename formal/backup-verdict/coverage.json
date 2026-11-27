@@ -16,8 +16,8 @@
       "sha256": "df7a391626d3d8a7c2075771e8fc0383b891e739754016e096281b23b29e709c"
     },
     "src/brainlayer/backup_heavy_gate.py": {
-      "sha": "Track 5 fix r1: pressure before disk; measure, reclaim verified raws only when that could admit, re-measure; failed-proof memo per gate run; admission arithmetic tested outside model",
-      "sha256": "9f18d88e2b47c95040fef2a6722428530569ca9c76a4d68ab09d5e0876de3f4f"
+      "sha": "Merge of main (Track 5 #1880: pressure before disk, verified-raw reclaim, failed-proof memo) into #1885 (clear the gate wait alert on admission only when this run waited); lead pin-only resolution 2026-11-26; backup_heavy_gate.py auto-merged; sha256 = merged bytes",
+      "sha256": "c956958db57df0e0bd7917335c2c4c8aad5d09315b6419e3856a5f311dfb7132"
     },
     "src/brainlayer/maintenance.py": {
       "sha": "5882de81",
