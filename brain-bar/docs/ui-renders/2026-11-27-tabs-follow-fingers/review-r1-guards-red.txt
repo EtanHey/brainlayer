@@ -12,3 +12,8 @@ N7 reverted -> testAHardFlickAtTheEndsNeverCrossesTheEnd: exit 0  (first flick, 
 N7 reverted -> testAHardFlickAtTheEndsNeverCrossesTheEnd: exit 1
   BrainBarTabsFollowFingersTests.swift:548: error: -[BrainBarTests.BrainBarTabsFollowFingersTests testAHardFlickAtTheEndsNeverCrossesTheEnd] : XCTAssertTrue failed - 1→2: never past the end (2.018584621745371)
   BrainBarTabsFollowFingersTests.swift:548: error: -[BrainBarTests.BrainBarTabsFollowFingersTests testAHardFlickAtTheEndsNeverCrossesTheEnd] : XCTAssertTrue failed - 1→2: never past the end (2.039357592256003)
+
+Fixed height reverted (fitted() = the page's own height, as L17) -> testTheFixed*: exit 1
+  BrainBarTabsFollowFingersTests.swift:406: error: -[BrainBarTests.BrainBarTabsFollowFingersTests testTheFixedHeightFollowsOnlyTheTallestPage] : XCTAssertEqual failed: ("Optional(452.0)") is not equal to ("Optional(742.0)")
+  BrainBarTabsFollowFingersTests.swift:406: error: -[BrainBarTests.BrainBarTabsFollowFingersTests testTheFixedHeightFollowsOnlyTheTallestPage] : XCTAssertEqual failed: ("Optional(510.0)") is not equal to ("Optional(742.0)")
+  BrainBarTabsFollowFingersTests.swift:406: error: -[BrainBarTests.BrainBarTabsFollowFingersTests testTheFixedHeightFollowsOnlyTheTallestPage] : XCTAssertEqual failed: ("Optional(486.0)") is not equal to ("Optional(829.0)")

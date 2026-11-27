@@ -4,7 +4,8 @@ import SwiftUI
 private typealias Say = BrainBarMenuPresenter.SurfaceSay
 
 /// The window (DESIGN-SPEC-R1 § 2.3 to 2.6): a unified 52 pt title bar holding only the centred tabs, the pages, and a
-/// 28 pt footer that says when it was checked. Each page takes its own height (L17). The pages and the tabs' glass pill
+/// 28 pt footer that says when it was checked. The height is the tallest page's for every tab (`NDWindowSizing`; L17's
+/// per-page heights are one flag away). The pages and the tabs' glass pill
 /// follow a two-finger swipe live and settle on one spring after it or after a click (the shared tab-swipe spec,
 /// `GlassTabPager`); under Reduce Motion the pages cross-fade in place.
 struct NDWindowRoot: View {
@@ -940,7 +941,20 @@ struct NDButtonStyle: ButtonStyle {
     }
 }
 
-// MARK: - Page height (L17)
+// MARK: - Page height (L17, switchable)
+
+/// How the window's height is chosen.
+///
+/// - `perPageHeights == false` (ACTIVE, orc ruling 27 Nov 2026, 22:18, a two-way door): one fixed height for all three
+///   tabs, the tallest page's, clamped to the visible screen (L57); a shorter page sits at the top with room below. A
+///   tab switch or a swipe never resizes the window; it changes only when the tallest page's content height changes.
+///   Why: with pages that follow the fingers side by side, a per-page height either resizes mid-swipe or after the
+///   rest, and the owner saw that after-swap resize as a layout shift (QA r2, 1.6.13).
+/// - `perPageHeights == true` (L17 as ratified): each page takes its own height; the resize waits for the tabs to
+///   rest (tab-swipe spec 4). Switching back is this one line.
+@MainActor enum NDWindowSizing {
+    static var perPageHeights = false
+}
 
 /// L57: measure the current page and cap its content area at the visible screen minus AppKit chrome.
 @MainActor enum NDPageHeight {
@@ -957,6 +971,12 @@ struct NDButtonStyle: ButtonStyle {
         }
         let hosting = NSHostingController(rootView: view.frame(width: width).environment(\.ndPalette, .window))
         return ceil(hosting.sizeThatFits(in: CGSize(width: width, height: CGFloat.greatestFiniteMagnitude)).height)
+    }
+
+    /// The window's height for `page` under `NDWindowSizing`: the page's own (L17), or the tallest page's (fixed).
+    static func fitted(_ store: NDStore, page: NDPage, screen: CGFloat?, titleBarHeight: CGFloat = 0) -> CGFloat {
+        guard !NDWindowSizing.perPageHeights else { return window(store, page: page, screen: screen, titleBarHeight: titleBarHeight) }
+        return NDPage.allCases.map { window(store, page: $0, screen: screen, titleBarHeight: titleBarHeight) }.max() ?? 0
     }
 
     /// L57 replaces the fixed 40 pt allowance with the actual AppKit title-bar height.

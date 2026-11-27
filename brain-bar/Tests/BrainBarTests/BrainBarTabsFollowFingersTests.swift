@@ -220,8 +220,10 @@ final class BrainBarTabsFollowFingersTests: XCTestCase {
 
     /// A controller on the real path, with a live pager and the resize seam; `finishes` decides whether the resize
     /// lands at once or waits for the test.
-    private func liveController() -> BrainBarDashboardPanelController {
+    private func liveController(perPageHeights: Bool) -> BrainBarDashboardPanelController {
         NSApplication.shared.setActivationPolicy(.prohibited)
+        NDWindowSizing.perPageHeights = perPageHeights
+        addTeardownBlock { @MainActor in NDWindowSizing.perPageHeights = false }
         let controller = BrainBarDashboardPanelController(workspace: BrainBarRecordingWorkspace(), runtime: BrainBarRuntime())
         controller.visibleHeightOverride = 2000
         controller.reduceMotionForTesting = false
@@ -238,9 +240,10 @@ final class BrainBarTabsFollowFingersTests: XCTestCase {
     /// QA r2 (1.6.13): the window resized to the new page right after each swap. Review r1 (B1): a store update while
     /// the tabs move must not refit either. On the controller's real path, with the run loop turning between frames and
     /// the store publishing mid-swipe, the window's height never changes on a frame where the pill and pages are
-    /// between tabs; it moves once, after they rest, on the existing 200 ms resize.
+    /// between tabs; it moves once, after they rest, on the existing 200 ms resize. (L17's per-page heights: the
+    /// flag-on path of `NDWindowSizing`; the default fixed height is the next test.)
     func testTheWindowHeightHoldsWhileTwoPagesShareIt() throws {
-        let controller = liveController()
+        let controller = liveController(perPageHeights: true)
         let store = controller.newDesignStore
         let window = controller.windowForTesting
         var resizes: [(progress: Double, from: CGFloat, to: CGFloat)] = []
@@ -310,11 +313,110 @@ final class BrainBarTabsFollowFingersTests: XCTestCase {
         XCTAssertGreaterThan(fractionalFrames, 60, "the checks ran on frames between tabs")
     }
 
+    /// Orc ruling 27 Nov 22:18: one window height for all three tabs, the tallest page's, clamped to the screen. On the
+    /// controller's real path the height is identical on every page and on every frame of a swipe, a click and their
+    /// settles (no resize at all); it changes only when the tallest page's content height changes.
+    func testTheFixedWindowHeightIsTheTallestPagesOnEveryPageAndFrame() throws {
+        XCTAssertFalse(NDWindowSizing.perPageHeights, "fixed height is the default")
+        let controller = liveController(perPageHeights: false)
+        let store = controller.newDesignStore
+        let window = controller.windowForTesting
+        var resizes = 0
+        controller.pageFrameAnimatorForTesting = { target, _, _, finish in
+            resizes += 1
+            window.setFrame(target, display: false)
+            finish()
+        }
+        let tallest = NDPage.allCases.map {
+            NDPageHeight.window(store, page: $0, screen: controller.fitScreenHeight, titleBarHeight: controller.fitTitleBarHeight)
+        }.max()!
+        for page in NDPage.allCases {
+            XCTAssertEqual(NDPageHeight.fitted(store, page: page, screen: controller.fitScreenHeight,
+                                               titleBarHeight: controller.fitTitleBarHeight), tallest, "\(page): the tallest page's")
+        }
+        let height = window.frame.height
+        XCTAssertGreaterThanOrEqual(window.contentRect(forFrameRect: window.frame).height, tallest - 0.5)
+        var time = 100.0
+        var frames = 0
+        func check(_ name: String) {
+            yieldToObservers()
+            frames += 1
+            XCTAssertEqual(window.frame.height, height, "\(name): one height on every frame")
+        }
+        // Every page by swipe (there and back), and by click (far tab, and back mid-settle).
+        for dx: CGFloat in [-12, -12, 12, 12] {
+            store.drivePages(.grab(dx * 3), at: time, width: NDGrid.windowWidth)
+            for _ in 0..<45 {
+                time += frame
+                store.drivePages(.move(dx), at: time, width: NDGrid.windowWidth)
+                check("swipe")
+            }
+            time += frame
+            store.drivePages(.release, at: time, width: NDGrid.windowWidth)
+            for _ in 0..<120 where store.tabs.phase != .resting {
+                time += frame
+                store.tabs.tick(at: time)
+                check("swipe settle")
+            }
+            yieldToObservers()
+            check("rest on \(store.page)")
+        }
+        XCTAssertEqual(store.page, .overview, "the swipes went to Jobs and back")
+        store.tabs.select(2, at: time)
+        for _ in 0..<10 {
+            time += frame
+            store.tabs.tick(at: time)
+            check("click")
+        }
+        store.tabs.select(0, at: time)
+        for _ in 0..<120 where store.tabs.phase != .resting {
+            time += frame
+            store.tabs.tick(at: time)
+            check("click back")
+        }
+        yieldToObservers()
+        check("rest")
+        XCTAssertEqual(resizes, 0, "no tab switch resized the window")
+        XCTAssertGreaterThan(frames, 300)
+
+        // Only a change in the tallest page's content height moves it: a screen that caps the window lower refits it
+        // once (the L57 clamp), and a tab switch after that still changes nothing.
+        controller.visibleHeightOverride = tallest - 100 + controller.fitTitleBarHeight
+        controller.fitPage(store.page)
+        XCTAssertEqual(resizes, 1, "the tallest height changed: one refit")
+        let capped = window.frame.height
+        XCTAssertLessThan(capped, height)
+        store.tabs.select(1, at: time)
+        for _ in 0..<120 where store.tabs.phase != .resting {
+            time += frame
+            store.tabs.tick(at: time)
+        }
+        yieldToObservers()
+        XCTAssertEqual(window.frame.height, capped, "a tab switch never resizes")
+        XCTAssertEqual(resizes, 1)
+    }
+
+    /// Fixed height in the pure function: every page of a store gets its tallest page's height, and it moves only with
+    /// that page's content (calm → two faults lengthens Overview, the tallest).
+    func testTheFixedHeightFollowsOnlyTheTallestPage() {
+        let calm = NDStore(fixture: BrainBarDesignFixture.inputs(.calm), page: .overview)
+        let faults = NDStore(fixture: BrainBarDesignFixture.inputs(.twoFaults), page: .overview)
+        for store in [calm, faults] {
+            let own = NDPage.allCases.map { NDPageHeight.window(store, page: $0, screen: nil) }
+            for page in NDPage.allCases { XCTAssertEqual(NDPageHeight.fitted(store, page: page, screen: nil), own.max()) }
+        }
+        XCTAssertEqual(NDPageHeight.fitted(calm, page: .backups, screen: 500), 500, "clamped to the visible screen (L57)")
+        NDWindowSizing.perPageHeights = true
+        defer { NDWindowSizing.perPageHeights = false }
+        XCTAssertEqual(NDPageHeight.fitted(calm, page: .backups, screen: nil), NDPageHeight.window(calm, page: .backups, screen: nil),
+                       "the flag brings back L17's per-page height")
+    }
+
     /// Review r1 (B3): a new swipe or click during the 200 ms resize that follows a rest lands the window on that
     /// resize's target at once, before anything moves; no frame between tabs changes the height. The seam here keeps
     /// the resize running (it never calls `finish` itself).
     func testANewSwipeDuringTheResizeLandsTheWindowFirst() throws {
-        let controller = liveController()
+        let controller = liveController(perPageHeights: true) // only per-page heights resize after a rest
         let store = controller.newDesignStore
         let window = controller.windowForTesting
         var running: (target: NSRect, finish: () -> Void)?
@@ -595,9 +697,14 @@ final class BrainBarTabsFollowFingersTests: XCTestCase {
                 try NDRenderHarness.write(try NDRenderHarness.host(view, size: size, appearance: appearance),
                                           name: "after-header-\(name)-solid-\(suffix)", in: url)
             }
+            // The window at each page and mid-swipe, at the one fixed height (the tallest page's).
+            for page in NDPage.allCases {
+                let store = NDStore(fixture: BrainBarDesignFixture.inputs(.twoFaults), page: page)
+                _ = try NDRenderHarness.window(store, name: "after-window-fixed-\(page.rawValue)-\(suffix)", appearance: appearance, in: url)
+            }
             let window = NDStore(fixture: BrainBarDesignFixture.inputs(.calm), page: .overview)
             window.tabs.present(0.5)
-            let size = NSSize(width: NDGrid.windowWidth, height: 640)
+            let size = NSSize(width: NDGrid.windowWidth, height: NDPageHeight.fitted(window, page: .overview, screen: nil))
             let root = NDWindowRoot(store: window, drawsTrafficLights: true).environment(\.glassTabSolidPill, true)
                 .frame(width: size.width, height: size.height)
             try NDRenderHarness.write(try NDRenderHarness.host(root, size: size, appearance: appearance),

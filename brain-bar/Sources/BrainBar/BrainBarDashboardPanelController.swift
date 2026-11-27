@@ -294,7 +294,8 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
         window.toolbar = newDesignToolbar.toolbar
         window.toolbarStyle = .unified
         window.titlebarSeparatorStyle = .none  // the root draws the one hairline at 52 pt
-        // L17: the window takes each page's own height, width 900, and snaps on a tab switch with the top edge fixed.
+        // Width 900; the height is the tallest page's (or, with `NDWindowSizing.perPageHeights`, L17's per-page height,
+        // resized on a tab switch with the top edge fixed).
         fitPage(newDesignStore.page)
         if pageObserver == nil {
             // D1: after the page is stored (didSet), never from `$page` (willSet).
@@ -412,7 +413,7 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
             return
         }
         let size = NSSize(width: NDGrid.windowWidth,
-                          height: NDPageHeight.window(newDesignStore, page: page, screen: fitScreenHeight,
+                          height: NDPageHeight.fitted(newDesignStore, page: page, screen: fitScreenHeight,
                                                       titleBarHeight: fitTitleBarHeight))
         let frameSize = window.frameRect(forContentRect: NSRect(origin: .zero, size: size)).size
         let target = NDPageHeight.frame(size: frameSize, keeping: window.frame, visibleFrame: fitVisibleFrame)
@@ -617,7 +618,7 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
     /// A real window resizes on both axes, down to the size the dashboard needs.
     func windowWillResize(_ sender: NSWindow, to frameSize: NSSize) -> NSSize {
 #if BRAINBAR_UI
-        // L17: the new design's window is the page's size; the delegate holds it even if AppKit's layout clears the
+        // L17 / NDWindowSizing: the new design's window is the fitted size; the delegate holds it even if AppKit's layout clears the
         // content limits (it keeps one pair of size limits, and the toolbar's own layout can reset it).
         if let fitted = fittedFrameSize { return fitted }
         let minimum = currentMinSize

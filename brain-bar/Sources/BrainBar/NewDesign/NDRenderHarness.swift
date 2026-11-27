@@ -99,9 +99,11 @@ import SwiftUI
 
     static func window(_ store: NDStore, name: String, appearance: NSAppearance.Name, size: NSSize? = nil,
                        in directory: URL) throws -> String {
-        // L17: each page at its own height.
-        let size = size ?? NSSize(width: NDGrid.windowWidth, height: NDPageHeight.window(store, page: store.page, screen: nil))
-        let view = NDWindowRoot(store: store, drawsTrafficLights: true).frame(width: size.width, height: size.height)
+        // The window's fitted height (`NDWindowSizing`: the tallest page's, or L17's per-page height).
+        let size = size ?? NSSize(width: NDGrid.windowWidth, height: NDPageHeight.fitted(store, page: store.page, screen: nil))
+        // `cacheDisplay` cannot capture Liquid Glass, so the tab pill is drawn as its solid stand-in.
+        let view = NDWindowRoot(store: store, drawsTrafficLights: true).environment(\.glassTabSolidPill, true)
+            .frame(width: size.width, height: size.height)
         try write(host(view, size: size, appearance: appearance), name: name, in: directory)
         return name
     }

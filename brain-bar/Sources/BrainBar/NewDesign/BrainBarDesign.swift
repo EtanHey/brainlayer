@@ -236,7 +236,8 @@ enum NDType {
 /// R1 geometry (§ 1.3, § 2.6): a 4 pt grid, 24 pt rows, a 900 pt window that takes each page's height.
 enum NDGrid {
     static let windowWidth: CGFloat = 900
-    /// L17: each page's own height (the window snaps to it on a tab switch, top edge fixed, no animation).
+    /// L17: each page's own height (in use only with `NDWindowSizing.perPageHeights`; the window is otherwise the
+    /// tallest page's height for every tab).
     static func windowHeight(_ page: NDPage) -> CGFloat {
         switch page {
         case .overview: 716

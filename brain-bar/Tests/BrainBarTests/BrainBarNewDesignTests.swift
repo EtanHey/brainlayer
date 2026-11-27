@@ -91,6 +91,9 @@ import SwiftUI
     /// AppKit's): the sequence is "new page first, then the height", in both directions, and no frame of the resize
     /// draws the old page.
     func testR18PageSwitchShowsTheNewPageFirstOnTheRealPath() throws {
+        // L17's per-page heights (`NDWindowSizing.perPageHeights`, off by default since 27 Nov): the flag-on path.
+        NDWindowSizing.perPageHeights = true
+        defer { NDWindowSizing.perPageHeights = false }
         let d = defaults()
         d.set("new", forKey: BrainBarDesign.key)
         let controller = BrainBarDashboardPanelController(workspace: BrainBarRecordingWorkspace(), runtime: BrainBarRuntime())
@@ -277,8 +280,9 @@ import SwiftUI
             XCTAssertEqual(store.drawnPageForTesting, page, "the window root drew the page the tab names")
             XCTAssertEqual(store.tabs.selection, index, "the selected tab names the same page")
             XCTAssertEqual(store.tabs.progress, Double(index), "a window never shown lands at once")
-            // L25: the page's height, capped the way the controller caps it (the runner's screen is small: 644 pt).
-            let height = NDPageHeight.window(store, page: page, screen: controller.fitScreenHeight, titleBarHeight: controller.fitTitleBarHeight)
+            // L25: the window's fitted height (`NDWindowSizing`: the tallest page's, or the page's own under L17), capped
+            // the way the controller caps it (the runner's screen is small: 644 pt).
+            let height = NDPageHeight.fitted(store, page: page, screen: controller.fitScreenHeight, titleBarHeight: controller.fitTitleBarHeight)
             let held = controller.windowWillResize(window, to: NSSize(width: 1200, height: 300)).height
             for measured in [window.frame.height, held] {
                 XCTAssertGreaterThanOrEqual(measured, height - 0.5, "\(page): the height follows the same page")
@@ -333,14 +337,14 @@ import SwiftUI
         // Review blocker 1: one unified 52 pt row, the pages control centred in the toolbar.
         XCTAssertEqual(controller.windowForTesting.toolbarStyle, .unified)
         XCTAssertEqual(controller.windowForTesting.toolbar?.centeredItemIdentifiers, [NDToolbar.pages])
-        // L17: the window is 900 wide and takes the page's own height (Overview 716, R1.1), min = max; a tab switch snaps
-        // it to the next page's height with the top edge fixed.
+        // The window is 900 wide and takes its fitted height (`NDWindowSizing`: the tallest page's for every tab, or
+        // under L17 the page's own, Overview 716, R1.1), min = max; a tab switch keeps the top edge fixed.
         // AppKit may add the unified toolbar's chrome to a content size it holds (20 pt on macOS 27 headless, 24 on CI's
         // macOS 15, 0 measured on the capture Mac's macOS 26), so heights are pinned to [page, page + one 52 pt row].
         let window = controller.windowForTesting
         func holds(_ page: NDPage, _ line: UInt = #line) {
             // L57: the measured page, capped at the visible screen minus actual AppKit chrome.
-            let h = NDPageHeight.window(controller.newDesignStore, page: page, screen: controller.fitScreenHeight, titleBarHeight: controller.fitTitleBarHeight)
+            let h = NDPageHeight.fitted(controller.newDesignStore, page: page, screen: controller.fitScreenHeight, titleBarHeight: controller.fitTitleBarHeight)
             let held = controller.windowWillResize(window, to: NSSize(width: 1400, height: 200))
             XCTAssertEqual(held.width, 900, "not resizable: the delegate holds the page size", line: line)
             XCTAssertGreaterThanOrEqual(held.height, h, line: line)

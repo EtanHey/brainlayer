@@ -23,7 +23,7 @@ import SwiftUI
             // A change made anywhere else (a menu item, a test) moves the tabs and pages too; one made by the tabs is
             // already their selection.
             tabs.follow(NDPage.allCases.firstIndex(of: page) ?? 0)
-            // The window's height (L17) waits for the pill and pages to come to rest: while two pages share the window
+            // A window refit (a per-page height under L17) waits for the pill and pages to come to rest: while two pages share the window
             // mid-swipe or mid-settle, nothing but the pages and the pill moves (tab-swipe spec 4; the QA judge saw the
             // height change right after each page swap on 1.6.13).
             guard tabs.phase == .resting else {
