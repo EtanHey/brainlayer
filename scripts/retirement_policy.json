@@ -3440,6 +3440,14 @@
         "target": "sqlite3.connect"
       }
     },
+    "7fef0dcade880314447fa543e21f2ba89cc8cd9f118030a4f964ec16b946511e": {
+      "non_cloud_purpose": "Local launchd fleet watchdog: re-bootstraps active local jobs, honoring operator disable and maintenance pause; defers BrainBar revival while the in-app updater holds exclusive update custody and retains shared custody across enable/bootstrap; no model transport.",
+      "site": {
+        "body_sha256": "99457f6e5ceb97efdb368e120511f645a9b0a7cfc4b968b66ecda931304ae19c",
+        "kind": "non_python_source",
+        "path": "scripts/launchd/fleet-watchdog.sh"
+      }
+    },
     "800da84bf99a94e9be0778b25f8ed589d3fef3dfccf9ae8205459ea70d383c95": {
       "non_cloud_purpose": "Stdlib local Unix control and CompletedProcess policy-seam metadata; no activation/network/model sender at import.",
       "site": {

@@ -10,6 +10,7 @@ in both directions with a fake `launchctl` first on PATH; the sentinel is parsed
 
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import plistlib
@@ -175,6 +176,77 @@ def test_enabled_but_absent_label_is_bootstrapped(tmp_path: Path) -> None:
     assert result.bootstrapped() == {"com.brainlayer.watch"}
     assert result.enabled() == {"com.brainlayer.watch"}
     assert "re-bootstrapped com.brainlayer.watch" in result.log
+
+
+@pytest.mark.parametrize("override", [False, True], ids=["default-root", "override-root"])
+def test_update_custody_defers_only_brainbar_then_revives_after_release(tmp_path, monkeypatch, override):
+    home = tmp_path / "home"
+    root = tmp_path / "update-root" if override else home / "Library/Application Support/BrainBar"
+    monkeypatch.delenv("BRAINBAR_UPDATE_ROOT", raising=False)
+    if override:
+        monkeypatch.setenv("BRAINBAR_UPDATE_ROOT", str(root))
+    root.mkdir(parents=True)
+    brainbar = {"com.brainlayer.brainbar", "com.brainlayer.brainbar-daemon"}
+    labels = (*sorted(brainbar), "com.brainlayer.watch")
+    with (root / "update-custody.lock").open("a") as custody:
+        fcntl.flock(custody, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        held = _run_drill(tmp_path, home=home, agent_labels=labels)
+        assert held.process.returncode == 0, held.process.stderr
+        assert held.enabled() == {"com.brainlayer.watch"}
+        assert held.bootstrapped() == {"com.brainlayer.watch"}
+        assert held.log.count("update custody held") == 1
+    released = _run_drill(tmp_path, home=home, agent_labels=labels)
+    assert released.process.returncode == 0, released.process.stderr
+    assert released.enabled() == set(labels)
+    assert released.bootstrapped() == set(labels)
+
+
+def test_brainbar_revival_holds_custody_during_both_launchctl_children(tmp_path, monkeypatch):
+    root = tmp_path / "update-root"
+    root.mkdir()
+    probe = tmp_path / "custody-probe.txt"
+    monkeypatch.setenv("BRAINBAR_UPDATE_ROOT", str(root))
+    monkeypatch.setenv("CUSTODY_PROBE", str(probe))
+    # Each real shell child checks updater exclusion AND auto-activator sharing.
+    # Probe inside enable AND bootstrap, without timing/sleep races.
+    script = FAKE_LAUNCHCTL.replace(
+        'if [ "$1" = "print-disabled" ]; then',
+        """case "$1" in
+enable|bootstrap)
+    /usr/bin/ruby -e '
+      File.open(File.join(ENV.fetch("BRAINBAR_UPDATE_ROOT"), "update-custody.lock"), "a") do |lock|
+        held = !lock.flock(File::LOCK_EX | File::LOCK_NB)
+        shared = !!lock.flock(File::LOCK_SH | File::LOCK_NB)
+        File.open(ENV.fetch("CUSTODY_PROBE"), "a") { |out| out.puts "#{ARGV[0]}:#{held}:#{shared}" }
+      end
+    ' "$1"
+    ;;
+esac
+if [ "$1" = "print-disabled" ]; then""",
+    )
+    monkeypatch.setattr(sys.modules[__name__], "FAKE_LAUNCHCTL", script)
+    labels = ("com.brainlayer.brainbar", "com.brainlayer.brainbar-daemon")
+    result = _run_drill(tmp_path, agent_labels=labels)
+    assert result.process.returncode == 0, result.process.stderr
+    assert result.enabled() == set(labels)
+    assert result.bootstrapped() == set(labels)
+    assert probe.read_text().splitlines() == ["enable:true:true", "bootstrap:true:true"] * 2
+    with (root / "update-custody.lock").open("a") as custody:
+        fcntl.flock(custody, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+
+def test_unavailable_custody_fails_closed_for_brainbar_only(tmp_path, monkeypatch):
+    root = tmp_path / "not-a-directory"
+    root.write_text("occupied")
+    monkeypatch.setenv("BRAINBAR_UPDATE_ROOT", str(root))
+    result = _run_drill(
+        tmp_path,
+        agent_labels=("com.brainlayer.brainbar", "com.brainlayer.brainbar-daemon", "com.brainlayer.watch"),
+    )
+    assert result.process.returncode == 0
+    assert result.enabled() == {"com.brainlayer.watch"}
+    assert result.bootstrapped() == {"com.brainlayer.watch"}
+    assert result.log.count("custody or activation failed") == 2
 
 
 def test_operator_disabled_label_is_skipped_never_enabled_or_bootstrapped(tmp_path: Path) -> None:
