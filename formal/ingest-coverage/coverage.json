@@ -25,7 +25,7 @@
     },
     {
       "path": "src/brainlayer/health_check.py",
-      "sha256": "c6bf50b168214dee77b24c84ada640651961804bc6da29486ab3855fda412768"
+      "sha256": "f6b1fad5841380909bf93426666c4b5826ae76d0334e9949011c6a23702bc6a8"
     }
   ],
   "actions": {
@@ -41,7 +41,7 @@
     "Tick.vNext / goodNext / unk1": "health_verdict.py:653 evaluate: unknown ticks :703, evidence hold (no stall reading = no evidence), red-holds-on-amber unless r.progress (stepDown) :717 and recovery :722 (_HYSTERESIS :199)",
     "Tick.res0 (resumed_at)": "health_verdict.py:653 evaluate: confirmed clock pair vs sleep_gap_s (:684), expiry after wake_grace_s",
     "NonGreen (dot ignores unknown)": "health_verdict.py:786; badge_state.py:127 badge_on = verdict.dot == RED (the dot is the verdict)",
-    "watcher_stalled is context only": "health_check.py:1974 emits it; health_facts.py:48 CHECK_FOR_CODE maps it to ingest context, never state",
+    "watcher_stalled is context only": "health_check.py:2038 emits it; health_facts.py:48 CHECK_FOR_CODE maps it to ingest context, never state",
     "Faults roots": "watcher.py:393 default_watch_roots (claude, codex, cursor, cursor-agent-transcripts, gemini = Antigravity (agy) ~/.gemini/antigravity-cli/brain)",
     "Tick rewrite / rewrite_lossy (Dropping, StallClockIsTruthful)": "watcher.py:1518 JSONLTailer._verify_anchor and :1539 _verify_resumed_offset compare the 256 bytes before the offset and a blake2b digest of the first 4 KiB: a rewrite changing either re-reads from 0 (every record re-ingested; replay checks each); a same-length edit between them is not seen and its records are dropped; no stall code fires",
     "Tick.seen / codesSeen / alertNow": "health_facts.py:239 watcher_health_fact (missing = (None, (), None), malformed raises); :181 watcher_stall_codes returns UNOBSERVED when any stall field is absent, malformed or inconsistent, including a catch_up key that is null, not {state: str}, or catching_up without a measured bytes_behind and eta_s (fault partial); :478 _run_bounded turns a raise or timeout into UNOBSERVED; :598 and :701 the ingest inputs",
@@ -56,5 +56,6 @@
     "alert timing": "one watcher poll per model tick; production polls every 30 s, so a 300 s episode can surface one tick later than the model's when it starts within 30 s of a read"
   },
   "atomicity": "One TLA step is one health tick. Within it the watcher polls (or not), then the monitor reads and evaluates; on the first tick after a wake the order is free (o).",
-  "thinking_merge_note": "2026-11-21: main d37d683b merged into thinking-stored-not-default. Retained main's tombstone and round-1 notes. The only watcher delta from main is 22 lines of Codex reasoning normalization before CoverageWatchdog; no covered health/lag/verdict behavior changes, so no model change. Remapped each watcher action reference by +22 after the insertion and asserted its source line text unchanged. Pin is for the combined bytes; both --require-sync checks and real-code replay are required."
+  "thinking_merge_note": "2026-11-21: main d37d683b merged into thinking-stored-not-default. Retained main's tombstone and round-1 notes. The only watcher delta from main is 22 lines of Codex reasoning normalization before CoverageWatchdog; no covered health/lag/verdict behavior changes, so no model change. Remapped each watcher action reference by +22 after the insertion and asserted its source line text unchanged. Pin is for the combined bytes; both --require-sync checks and real-code replay are required.",
+  "update_custody_note": "2026-11-27: health_check.py fences BrainBar heal commands with shared updater custody and preserves heal counters during a deliberate update hold. Ingest census, watcher stall detection, verdict transitions and TLA+ model are unchanged. Targeted health-check tests exercise exclusive deferral, shared coexistence and command-lifetime custody; this source pin is sync evidence, not a TLC run."
 }
