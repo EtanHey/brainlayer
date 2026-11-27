@@ -254,8 +254,12 @@ enum NDPipelineLayout {
     /// footer 28, page sides 24).
     static var footerTop: CGFloat { size.height + verticalPadding + 20 }
     /// R1.12 (§ B): the Activity card's bottom edge in chart coordinates (surface padding 16, heading row 22 + 8, the
-    /// 32 pt gap): no panel reaches into the card, its bars or its axis labels.
+    /// 32 pt gap): no panel reaches into the card, its bars or its axis labels, except the two copies' (w303, below).
     static var activityBottom: CGFloat { -verticalPadding - 8 - 22 - NDGrid.activityToPipeline }
+    /// w303: the top of the Activity card's plot in chart coordinates: the card's bottom edge, its 16 pt padding, the axis
+    /// row (4 + 14), the plot with its now tick (112 + 8) and the 14 pt above the plot. Above it sit the card's totals row
+    /// and its heading.
+    static var activityPlotTop: CGFloat { activityBottom - 16 - 18 - (NDActivitySection.plotHeight + 8) - 14 }
     /// The Activity card's axis labels end its 16 pt bottom padding above its edge: a panel may cover that empty padding
     /// (the comps do), never the bars or the labels.
     static var activityLabelsBottom: CGFloat { activityBottom - 16 }
@@ -299,6 +303,21 @@ enum NDPipelineLayout {
     static let searchPanelWidth: CGFloat = 264
 
     static let topRowPanels: Set<NDStation> = [.agents, .read, .memory, .mac, .drive]
+
+    /// w303 (lead decision; relaxes R1.12 § B for these two only): Local copy and Google Drive open upward from their own
+    /// station as ordinary popovers at most 320 pt wide, over the bottom of the Activity card. The room § B left above
+    /// the top row (about 60 pt) was too short for their stacked body, so they widened into a one-row strip at least
+    /// 760 pt wide that covered the Pipeline heading's row and the "Session backups" line. While the pointer is on a
+    /// copy, the Activity chart is not what is being read; opening below lands on Weekly clean's words.
+    static let copyPanels: Set<NDStation> = [.mac, .drive]
+    static let copyPanelMaxWidth: CGFloat = 320
+
+    /// How high a panel's body may reach: Search stays under the Kept-safe frame; the copies reach over the Activity
+    /// card's plot, never its totals row or heading (w303); every other panel stops at the card's axis labels (§ B).
+    static func panelCeiling(_ s: NDStation) -> CGFloat {
+        if s == .search { return keptSafe.maxY + 4 }
+        return copyPanels.contains(s) ? activityPlotTop : activityLabelsBottom + 4
+    }
 
     static func panelWords(_ s: NDStation, state: NDPipelineState, displayedWords: [NDStation: [CGRect]]) -> [CGRect] {
         displayedWords[s] ?? labelRects(s, state)
@@ -359,7 +378,7 @@ enum NDPipelineLayout {
             tip = CGPoint(x: anchor.minX, y: own.midY)
             body = CGRect(x: tip.x - arrowLength - width, y: tip.y - height / 2, width: width, height: height)
         }
-        let ceiling = s == .search ? keptSafe.maxY + 4 : activityLabelsBottom + 4
+        let ceiling = panelCeiling(s)
         let low = horizontal ? max(windowInside.minX, tip.x - width + arrowInset) : max(ceiling, tip.y - height + arrowInset)
         let high = horizontal ? min(windowInside.maxX - width, tip.x - arrowInset) : min(footerTop - 4 - height, tip.y - arrowInset)
         guard low <= high else { return nil }
@@ -391,6 +410,7 @@ enum NDPipelineLayout {
 
     /// L58b: progressively widen above, preserving content measurement and the same window margins.
     static func widenedPanelWidths(_ s: NDStation) -> [CGFloat] {
+        guard !copyPanels.contains(s) else { return [] }  // w303: the copies never widen past 320 pt
         let normal = panelSide(s, hasAction: false).width
         let limit = windowInside.maxX - windowInside.minX
         guard normal < limit else { return [] }
@@ -425,7 +445,8 @@ enum NDPipelineLayout {
             if let candidate = panelCandidate(s, edge: edge, state: state, actions: [], height: height,
                                               width: normal, displayedWords: displayedWords) { return candidate }
         }
-        for width: CGFloat in [normal + 40, normal + 80, normal + 160, normal + 240, 280, 264, 240, 220, 200, 180, 160] where width != normal && width <= windowInside.maxX - windowInside.minX {
+        let widest = copyPanels.contains(s) ? copyPanelMaxWidth : windowInside.maxX - windowInside.minX
+        for width: CGFloat in [normal + 40, normal + 80, normal + 160, normal + 240, 280, 264, 240, 220, 200, 180, 160] where width != normal && width <= widest {
             for edge in edges {
                 if let candidate = panelCandidate(s, edge: edge, state: state, actions: [], height: heightAtWidth(width),
                                                   width: width, displayedWords: displayedWords) { return candidate }

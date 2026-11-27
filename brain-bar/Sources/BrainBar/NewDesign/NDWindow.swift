@@ -822,9 +822,12 @@ struct NDButtonStyle: ButtonStyle {
     var filled = false
     var small = false
     var compact = false
+    /// w303: 2 lets the label wrap onto a second line, centred, the button taking the width it is given. Only a panel
+    /// too narrow for its one-line label asks for it (the Nightly check-up's panel, 160 pt beside its station).
+    var lines = 1
 
     func makeBody(configuration: Configuration) -> some View {
-        NDButtonBody(configuration: configuration, filled: filled, small: small, compact: compact)
+        NDButtonBody(configuration: configuration, filled: filled, small: small, compact: compact, lines: lines)
     }
 
     /// R1.13.1 hygiene: the padded button label has a rectangular hit area, including its corners.
@@ -838,6 +841,7 @@ struct NDButtonStyle: ButtonStyle {
         let filled: Bool
         let small: Bool
         var compact = false
+        var lines = 1
         @State private var hovering = false
         /// D8.2: while the button leaves for the waiting line it keeps its pressed look: no rest frame after the press.
         @Environment(\.ndHeldPressed) private var held
@@ -846,12 +850,17 @@ struct NDButtonStyle: ButtonStyle {
             let pressed = configuration.isPressed || held
             let fill: Color = filled ? (pressed ? ND.accentPressed : hovering ? ND.accentHover : ND.accent)
                 : (pressed ? ND.buttonPressed : hovering ? ND.buttonHover : ND.button)
+            let height: CGFloat = compact ? 20 : small ? 22 : 24
             configuration.label
                 .font(NDType.bodyMedium)
                 .foregroundStyle(filled ? Color.white : ND.t1)
-                .lineLimit(1)
+                .lineLimit(lines)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: lines > 1)
                 .padding(.horizontal, small || compact ? 10 : 12)
-                .frame(height: compact ? 20 : small ? 22 : 24)
+                .padding(.vertical, lines > 1 ? 3 : 0)
+                .frame(maxWidth: lines > 1 ? .infinity : nil)
+                .frame(minHeight: height, maxHeight: lines > 1 ? nil : height)
                 .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(fill))
                 // R1.1 change 22: hover adds a 0.5 pt inner highlight (filled) or a 0.5 pt t3 inner stroke (bordered);
                 // nothing scales, the size never changes.

@@ -67,7 +67,7 @@ import XCTest
                     let nearer = nearerBody.union(arrow)
                     let obstacles = L.panelObstacles(station, state: state, actions: [], actionWidths: [:],
                                                     interior: p.clearanceException == nil, displayedWords: chart.displayedPanelWords)
-                    let ceiling = station == .search ? L.keptSafe.maxY + 4 : L.activityLabelsBottom + 4
+                    let ceiling = L.panelCeiling(station)  // w303: the copies reach over the Activity plot
                     let blocked = nearer.minX < L.windowInside.minX || nearer.maxX > L.windowInside.maxX
                         || nearer.minY < ceiling || nearer.maxY > L.footerTop - 4
                         || obstacles.contains { nearer.intersects($0) }
@@ -103,7 +103,8 @@ import XCTest
                             displayedWords: chart.displayedPanelWords), context)
                     }
                 }
-                XCTAssertGreaterThanOrEqual(panel.body.minY, NDPipelineLayout.activityLabelsBottom + 4, context)
+                // R1.12 § B, relaxed by w303 for Local copy and Google Drive (they open over the Activity plot).
+                XCTAssertGreaterThanOrEqual(panel.body.minY, NDPipelineLayout.panelCeiling(station), context)
                 XCTAssertLessThanOrEqual(panel.outer.maxY, NDPipelineLayout.windowInside.maxY, context)
                 XCTAssertGreaterThanOrEqual(panel.outer.minX, NDPipelineLayout.windowInside.minX, context)
                 XCTAssertLessThanOrEqual(panel.outer.maxX, NDPipelineLayout.windowInside.maxX, context)

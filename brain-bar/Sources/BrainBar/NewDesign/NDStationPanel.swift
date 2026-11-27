@@ -30,6 +30,8 @@ struct NDStationPanelBody: View {
     }
 
     /// Widening also reflows the readouts; a vertical stack has a minimum height even at the widest width.
+    /// w303: only Read's panel may still take it. Local copy and Google Drive open upward over the Activity card as
+    /// ordinary 320 pt popovers (NDPipelineLayout.copyPanels), so they never need the one-row strip.
     private var wideBody: some View {
         HStack(alignment: .top, spacing: 12) {
             heading.frame(width: 220, alignment: .topLeading)
@@ -136,9 +138,16 @@ struct NDStationPanelBody: View {
 
     @ViewBuilder private func actionButton(_ action: BrainBarMenuPresentation.Action) -> some View {
         if action.kind == .copyReport {
-            HStack {
-                Spacer()
-                NDCopyReportButton(label: NDPipelineChart.shortLabel(action), spoken: action.label) { perform(action.kind) }
+            // w303: "Copy a report for your agent" is never cut short. Where the panel is too narrow for it on one line
+            // (the Nightly check-up's, 160 pt beside its station, boxed in by Memory, Save queue and Weekly clean's words),
+            // the button takes the panel's width and its label wraps onto a second line, centred.
+            ViewThatFits(in: .horizontal) {
+                HStack {
+                    Spacer()
+                    NDCopyReportButton(label: NDPipelineChart.shortLabel(action), spoken: action.label) { perform(action.kind) }
+                        .focused($actionFocused)
+                }
+                NDCopyReportButton(label: NDPipelineChart.shortLabel(action), spoken: action.label, lines: 2) { perform(action.kind) }
                     .focused($actionFocused)
             }
         } else {
@@ -176,6 +185,8 @@ struct NDCopyReportButton: View {
     typealias Say = BrainBarMenuPresenter.SurfaceSay
     let label: String
     let spoken: String
+    /// w303: 2 where the panel is too narrow for the label on one line.
+    var lines = 1
     let action: () -> Void
     @State private var copied = false
     @State private var faceOpacity: Double = 1
@@ -225,7 +236,7 @@ struct NDCopyReportButton: View {
                 .opacity(faceOpacity)
             }
         }
-        .buttonStyle(NDButtonStyle(small: true))
+        .buttonStyle(NDButtonStyle(small: true, lines: lines))
         .focusable(false)  // R1.8 item 4: one stop, the wrapper's
         .ndKeyboardFocus { action() }
         .accessibilityLabel(Text(copied ? Say.copiedLabel : spoken))

@@ -868,7 +868,7 @@ struct NDStationPopover: View {
                            waiting: NDDriveWaiting.shows(store.inputs, for: store.r1.stationItems[station]?.action),
                            compactRows: station == .search || (station == .drive && store.inputs.backupProgress != nil),
                            compactAction: station == .search,
-                           allowsWideLayout: station == .mac || station == .drive || station == .read) { store.perform($0) }
+                           allowsWideLayout: station == .read) { store.perform($0) }  // w303: not the copies
             .frame(maxWidth: .infinity, alignment: .leading)
     }
 
