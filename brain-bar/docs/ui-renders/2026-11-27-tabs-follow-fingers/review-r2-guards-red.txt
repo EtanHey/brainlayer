@@ -1,0 +1,17 @@
+Review r2 (M1 recording) guards: each cause reverted on its own in the branch tree, testNothingIsBuiltOrPublishedWhileThePagesMove run (M4, swift test). Layout times are offscreen NSHostingView layout per frame, information only.
+
+commit mid-motion (onSelect when a settle starts, as before) -> testNothingIsBuiltOrPublishedWhileThePagesMove: exit 1
+  BrainBarTabsFollowFingersTests.swift:575: error: -[BrainBarTests.BrainBarTabsFollowFingersTests testNothingIsBuiltOrPublishedWhileThePagesMove] : XCTAssertEqual failed: ("1") is not equal to ("0") - far click, commit frame: the store publishes nothing while th
+  BrainBarTabsFollowFingersTests.swift:589: error: -[BrainBarTests.BrainBarTabsFollowFingersTests testNothingIsBuiltOrPublishedWhileThePagesMove] : XCTAssertEqual failed: ("jobs") is not equal to ("overview") - not committed mid-motion
+  BrainBarTabsFollowFingersTests.swift:575: error: -[BrainBarTests.BrainBarTabsFollowFingersTests testNothingIsBuiltOrPublishedWhileThePagesMove] : XCTAssertEqual failed: ("1") is not equal to ("0") - far click settle: the store publishes nothing while the pages
+  [w294] layout per moving frame, ms: far click first 25.36, max 25.36; swipe from Backups first 2.34, max 16.51; the commit frame at rest max 61.70
+pages built only near the progress (as r1) -> testNothingIsBuiltOrPublishedWhileThePagesMove: exit 1
+  BrainBarTabsFollowFingersTests.swift:555: error: -[BrainBarTests.BrainBarTabsFollowFingersTests testNothingIsBuiltOrPublishedWhileThePagesMove] : XCTAssertEqual failed: ("[BrainBar.NDPage.overview]") is not equal to ("[BrainBar.NDPage.overview, BrainBar.NDPage
+  BrainBarTabsFollowFingersTests.swift:574: error: -[BrainBarTests.BrainBarTabsFollowFingersTests testNothingIsBuiltOrPublishedWhileThePagesMove] : XCTAssertEqual failed: ("[BrainBar.NDPage.backups]") is not equal to ("[]") - far click settle: no page is built w
+  BrainBarTabsFollowFingersTests.swift:574: error: -[BrainBarTests.BrainBarTabsFollowFingersTests testNothingIsBuiltOrPublishedWhileThePagesMove] : XCTAssertEqual failed: ("[BrainBar.NDPage.backups]") is not equal to ("[]") - far click settle: no page is built w
+  [w294] layout per moving frame, ms: far click first 1.59, max 25.80; swipe from Backups first 23.88, max 23.88; the commit frame at rest max 22.33
+
+With both fixes:
+[w294] layout per moving frame, ms: far click first 1.92, max 3.26; swipe from Backups first 2.83, max 3.53; the commit frame at rest max 29.57
+
+Pill (offscreen solid stand-in, 8-bit grey at 2x, row 34): dark pill 102 on track 49 (the recorded untinted glass: 34 on 49); light 255 on 225.

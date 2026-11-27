@@ -289,7 +289,8 @@ final class BrainBarTabsFollowFingersTests: XCTestCase {
         }
         time += frame
         store.drivePages(.release, at: time, width: NDGrid.windowWidth)
-        XCTAssertEqual(store.page, .backups, "the release picked Backups")
+        XCTAssertEqual(store.tabs.selection, 1, "the release picked Backups")
+        XCTAssertEqual(store.page, .overview, "...committed to the store only at rest")
         store.objectWillChange.send()
         yieldToObservers()
         XCTAssertTrue(resizes.isEmpty, "...but the window waits for the rest, through a store update too")
@@ -536,26 +537,82 @@ final class BrainBarTabsFollowFingersTests: XCTestCase {
         XCTAssertEqual(reduced.progress, 0)
     }
 
-    /// Reduce Motion's pages: in place, cross-faded by the same progress (no slide); the slide otherwise.
-    func testThePagesOnScreenFollowTheProgress() {
-        XCTAssertEqual(NDPageStrip.pages(progress: 0, shown: .overview), [.overview], "at rest only the selected page exists")
-        XCTAssertEqual(NDPageStrip.pages(progress: 0.4, shown: .overview), [.overview, .backups])
-        XCTAssertEqual(NDPageStrip.pages(progress: 1.5, shown: .jobs), [.backups, .jobs])
-        XCTAssertEqual(NDPageStrip.pages(progress: 0.2, shown: .jobs), [.overview, .backups, .jobs],
-                       "the page the window is sized for is laid out from the first frame")
-        XCTAssertEqual(NDPageStrip.pages(progress: -0.1, shown: .overview), [.overview], "the rubber band shows no page past the end")
-        // Review r1 (N6): while moving, origin, target and their neighbours stay built (no page is built mid-motion, and
-        // one that slides out and back keeps its scroll position).
-        XCTAssertEqual(NDPageStrip.pages(progress: 0.1, shown: .overview, motion: 0...0), [.overview, .backups])
-        XCTAssertEqual(NDPageStrip.pages(progress: 0.1, shown: .overview, motion: 0...2), [.overview, .backups, .jobs],
-                       "a click on Jobs builds Jobs before the slide reaches it")
-        XCTAssertEqual(NDPageStrip.pages(progress: 1.9, shown: .jobs, motion: 0...2), [.overview, .backups, .jobs],
-                       "and keeps where it came from")
-        let pager = GlassTabPager(count: 3, selection: 0)
-        pager.isLive = { true }
-        XCTAssertNil(NDPageStrip.motion(pager), "at rest no motion")
-        pager.select(2, at: 0)
-        XCTAssertEqual(NDPageStrip.motion(pager), 0...2)
+    /// M1 recording r1: on a commit (a click's mouse-up, a swipe's release) and at the first frame of a swipe from
+    /// Backups, the window drew nothing for 45-120 ms. The two causes, pinned on the real window root: no page body is
+    /// built after the first layout (all three stay built), and the store publishes nothing while the pill and pages
+    /// move (the selection reaches `store.page` only at rest). Frame times are printed as information, not asserted.
+    func testNothingIsBuiltOrPublishedWhileThePagesMove() throws {
+        let store = NDStore(fixture: BrainBarDesignFixture.inputs(.twoFaults), page: .overview)
+        let size = NSSize(width: NDGrid.windowWidth, height: NDPageHeight.fitted(store, page: .overview, screen: nil))
+        let host = NSHostingView(rootView: NDWindowRoot(store: store).frame(width: size.width, height: size.height))
+        host.frame = NSRect(origin: .zero, size: size)
+        var built: [NDPage] = []
+        NDPageStripProbe.built = { built.append($0) }
+        defer { NDPageStripProbe.built = nil }
+        host.layoutSubtreeIfNeeded()
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
+        host.layoutSubtreeIfNeeded()
+        XCTAssertEqual(Set(built), Set(NDPage.allCases), "all three pages are built up front")
+        built.removeAll()
+        store.tabs.isLive = { true } // after the root's clock attached (it reports a window-less host as not live)
+        var publications = 0
+        let sink = store.objectWillChange.sink { publications += 1 }
+        defer { sink.cancel() }
+
+        var time = 10.0
+        var frameTimes: [Double] = []
+        var restFrames: [Double] = []
+        func drawFrame(_ name: String) {
+            let moving = store.tabs.phase != .resting
+            let start = CACurrentMediaTime()
+            host.layoutSubtreeIfNeeded()
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.001))
+            host.layoutSubtreeIfNeeded()
+            let ms = (CACurrentMediaTime() - start) * 1000
+            if moving && store.tabs.phase != .resting { frameTimes.append(ms) } else { restFrames.append(ms) }
+            if store.tabs.phase != .resting {
+                XCTAssertEqual(built, [], "\(name): no page is built while the pages move")
+                XCTAssertEqual(publications, 0, "\(name): the store publishes nothing while the pages move")
+            }
+        }
+        func settle(_ name: String) {
+            for _ in 0..<120 where store.tabs.phase != .resting {
+                time += frame
+                store.tabs.tick(at: time)
+                drawFrame(name)
+            }
+        }
+
+        // A far click (the commit used to block here), then a swipe starting from Backups (the late first frame).
+        store.tabs.select(2, at: time)
+        drawFrame("far click, commit frame")
+        XCTAssertEqual(store.page, .overview, "not committed mid-motion")
+        settle("far click settle")
+        XCTAssertEqual(store.page, .jobs, "committed at rest")
+        XCTAssertGreaterThan(publications, 0, "...where the store publishes once")
+        let clickTimes = frameTimes
+        publications = 0
+        built.removeAll()
+        frameTimes.removeAll()
+        store.tabs.select(1, at: time)
+        settle("to Backups")
+        publications = 0
+        frameTimes.removeAll()
+        store.drivePages(.grab(-30), at: time, width: NDGrid.windowWidth)
+        drawFrame("swipe from Backups, first frame")
+        for _ in 0..<30 {
+            time += frame
+            store.drivePages(.move(-12), at: time, width: NDGrid.windowWidth)
+            drawFrame("swipe from Backups")
+        }
+        time += frame
+        store.drivePages(.release, at: time, width: NDGrid.windowWidth)
+        drawFrame("swipe release")
+        settle("swipe settle")
+        XCTAssertEqual(store.page, .jobs)
+        XCTAssertEqual(built, [], "no page was ever rebuilt")
+        print(String(format: "[w294] layout per moving frame, ms: far click first %.2f, max %.2f; swipe from Backups first %.2f, max %.2f; the commit frame at rest max %.2f",
+                     clickTimes.first ?? 0, clickTimes.max() ?? 0, frameTimes.first ?? 0, frameTimes.max() ?? 0, restFrames.max() ?? 0))
     }
 
     // MARK: Review r1: the pressed pill, one weight, the ends

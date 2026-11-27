@@ -68,8 +68,12 @@ struct GlassTabSpring: Equatable {
     var reduceMotion = false
     /// Whether frames are being drawn now (a visible window). When not, a change of selection lands at once.
     var isLive: () -> Bool = { false }
-    /// A selection the user made here (click, release, keyboard). Not called for `follow`.
+    /// A selection the user made here (click, release, keyboard, dragged pill), delivered when the pill and pages come
+    /// to REST on it, never mid-motion: whatever the app does on a selection (publish, rebuild, refit) can never cost
+    /// a frame of the motion. Not called for `follow` (the app already has that selection).
     var onSelect: ((Int) -> Void)?
+    /// The selection the app last has (reported through `onSelect`, or given by `follow`).
+    private(set) var committed: Int
     /// The clock: true while the spring needs frames.
     var onNeedsFrames: ((Bool) -> Void)?
     /// The pill and the pages came to rest on `selection` (after a settle, a jump or a release that needed none). The
@@ -92,6 +96,7 @@ struct GlassTabSpring: Equatable {
         self.spring = spring
         let index = min(max(selection, 0), count - 1)
         self.selection = index
+        committed = index
         motionOrigin = index
         progress = Double(index)
     }
@@ -133,7 +138,7 @@ struct GlassTabSpring: Equatable {
         var target = Int((progress + v * Self.projection).rounded())
         if oneStep { target = min(max(target, origin - 1), origin + 1) }
         target = min(max(target, 0), lastIndex)
-        settle(to: target, velocity: v, at: time, user: true)
+        settle(to: target, velocity: v, at: time)
     }
 
     // MARK: Selection (click, keyboard, outside)
@@ -142,15 +147,16 @@ struct GlassTabSpring: Equatable {
     func select(_ index: Int, at time: Double) {
         let index = min(max(index, 0), lastIndex)
         let v = phase == .tracking ? measuredVelocity(at: time) : velocity
-        settle(to: index, velocity: v, at: time, user: true)
+        settle(to: index, velocity: v, at: time)
     }
 
     /// Something else changed the selection (a menu item, the app's state). Animated only while frames are drawn.
     func follow(_ index: Int, at time: Double = CACurrentMediaTime()) {
         let index = min(max(index, 0), lastIndex)
         guard index != selection else { return }
+        committed = index
         if isLive() {
-            settle(to: index, velocity: velocity, at: time, user: false)
+            settle(to: index, velocity: velocity, at: time)
         } else {
             jump(to: index)
         }
@@ -195,7 +201,7 @@ struct GlassTabSpring: Equatable {
 
     // MARK: Private
 
-    private func settle(to index: Int, velocity v: Double, at time: Double, user: Bool) {
+    private func settle(to index: Int, velocity v: Double, at time: Double) {
         if phase == .resting { motionOrigin = selection }
         samples = []
         velocity = reduceMotion ? 0 : min(max(v, -Self.maximumSpeed), Self.maximumSpeed)
@@ -207,8 +213,7 @@ struct GlassTabSpring: Equatable {
             if offset != 0, velocity * offset < 0, abs(velocity) > limit { velocity = -limit * offset.sign.unit }
         }
         lastTick = time
-        let changed = selection != index
-        if changed { selection = index }
+        if selection != index { selection = index }
         if progress == Double(index), velocity == 0 {
             setPhase(.resting)
         } else if isLive() {
@@ -216,7 +221,6 @@ struct GlassTabSpring: Equatable {
         } else {
             jump(to: index)
         }
-        if changed, user { onSelect?(index) }
     }
 
     private func record(_ time: Double) {
@@ -250,6 +254,10 @@ struct GlassTabSpring: Equatable {
         phase = next
         if needsFrames != before { onNeedsFrames?(needsFrames) }
         if moves { onMove?() }
+        if next == .resting, selection != committed {
+            committed = selection
+            onSelect?(selection)
+        }
         if rests { onRest?() }
     }
 
@@ -360,8 +368,11 @@ struct GlassTabColors {
     var text: Color = .secondary
     var selectedText: Color = .primary
     var track: Color = Color.primary.opacity(0.06)
-    /// The pill where Liquid Glass is unavailable (before macOS 26).
+    /// The pill's fill: the solid pill before macOS 26, and the tint inside the glass on 26 (so the selection reads
+    /// clearly in dark and light, not only as refraction).
     var pill: Color = Color(nsColor: .controlBackgroundColor)
+    /// A hairline around the pill, so its edge holds against the track in both appearances.
+    var pillRim: Color = Color.primary.opacity(0.12)
     var countFill: Color = Color.primary.opacity(0.12)
     var countText: Color = .primary
 }
@@ -427,15 +438,22 @@ struct GlassTabBar: View {
             if #available(macOS 26.0, *), !solidPill {
                 // Not `.interactive()`: the pill never takes a hit (the bar's gesture does), so the press response is
                 // ours, below.
-                GlassEffectContainer {
-                    shape.fill(.clear)
-                        .frame(width: pill.width, height: pill.height)
-                        .glassEffect(.regular, in: .capsule)
+                // The rim is a sibling below nothing interactive (the whole pill takes no hits), not an overlay.
+                ZStack {
+                    GlassEffectContainer {
+                        shape.fill(.clear)
+                            .frame(width: pill.width, height: pill.height)
+                            .glassEffect(.regular.tint(colors.pill), in: .capsule)
+                    }
+                    shape.strokeBorder(colors.pillRim, lineWidth: 0.5).frame(width: pill.width, height: pill.height)
                 }
             } else {
-                shape.fill(colors.pill)
-                    .frame(width: pill.width, height: pill.height)
-                    .shadow(color: .black.opacity(0.12), radius: 1, y: 0.5)
+                ZStack {
+                    shape.fill(colors.pill)
+                        .shadow(color: .black.opacity(0.12), radius: 1, y: 0.5)
+                    shape.strokeBorder(colors.pillRim, lineWidth: 0.5)
+                }
+                .frame(width: pill.width, height: pill.height)
             }
         }
         .scaleEffect(press?.onPill == true && !reduceMotion ? GlassTabPress.pillScale : 1)

@@ -237,9 +237,15 @@ struct NDPageTabs: View {
     }
 
     static let metrics = GlassTabMetrics()
+    /// The selected pill: a clear fill in both appearances (white 26 % on the dark track, white on the light one) and a
+    /// hairline rim; on macOS 26 the fill tints the glass (M1 recording r1: the untinted glass read at about 1.2:1
+    /// against the dark track).
     static let colors = GlassTabColors(text: ND.t2, selectedText: ND.t1, track: Color(nsColor: NDColor.control),
-                                       pill: ND.controlSelected, countFill: Color(nsColor: NDSegments.badgeFill),
+                                       pill: Color(nsColor: pillFill), pillRim: Color(nsColor: pillRim),
+                                       countFill: Color(nsColor: NDSegments.badgeFill),
                                        countText: Color(nsColor: NDSegments.badgeText))
+    static let pillFill = NDColor.dynamic("tabs.pill", dark: NSColor(white: 1, alpha: 0.26), light: NSColor(white: 1, alpha: 1))
+    static let pillRim = NDColor.dynamic("tabs.rim", dark: NSColor(white: 1, alpha: 0.22), light: NSColor(white: 0, alpha: 0.10))
 
     static func tabs(_ r1: NDR1) -> [GlassTab] {
         NDPage.allCases.map { page in
@@ -250,8 +256,11 @@ struct NDPageTabs: View {
 }
 
 /// The pages side by side, each in its own vertical scroll, offset by the pager's progress and clipped to the window: a
-/// swipe or a settle moves them exactly as far as the pill moves between its slots. Only the pages on screen (and the
-/// one the window is sized for) exist. Reduce Motion: they stay in place and cross-fade by the same progress.
+/// swipe or a settle moves them exactly as far as the pill moves between its slots. All three pages stay built and laid
+/// out at all times (M1 recording r1: building a page when a swipe reached it, or when a click committed, held the main
+/// thread for 45-120 ms, so the first frames of the motion were never drawn); off-screen pages take no hits and are
+/// hidden from VoiceOver, and each keeps its scroll position. Reduce Motion: they stay in place and cross-fade by the
+/// same progress.
 struct NDPageStrip: View {
     let store: NDStore
     @ObservedObject var pager: GlassTabPager
@@ -265,7 +274,7 @@ struct NDPageStrip: View {
             let width = geometry.size.width
             let progress = pager.progress
             ZStack(alignment: .topLeading) {
-                ForEach(Self.pages(progress: progress, shown: shown, motion: Self.motion(pager)), id: \.self) { page in
+                ForEach(NDPage.allCases, id: \.self) { page in
                     let distance = Double(NDPage.allCases.firstIndex(of: page) ?? 0) - progress
                     pageScroll(page)
                         .frame(width: width, height: geometry.size.height)
@@ -277,6 +286,9 @@ struct NDPageStrip: View {
             }
         }
         .clipped()
+        // D1: the page the window is sized for is the one it shows at rest.
+        .onAppear { drawn(shown) }
+        .onChange(of: shown) { _, page in drawn(page) }
         // R1.10.3: the root says which page it now holds and how it got it, in the update pass itself (the one signal a
         // window that is never shown gives synchronously; page bodies are built on a display pass).
         .transaction(value: shown) { t in
@@ -285,34 +297,16 @@ struct NDPageStrip: View {
         }
     }
 
-    /// The tabs a motion in progress spans (where it started, where it is going), nil at rest.
-    static func motion(_ pager: GlassTabPager) -> ClosedRange<Int>? {
-        guard pager.phase != .resting else { return nil }
-        return min(pager.motionOrigin, pager.selection)...max(pager.motionOrigin, pager.selection)
-    }
-
-    /// The pages drawn at `progress`: the one or two on screen and the one the window is sized for; while a motion is
-    /// in progress also its origin, its target and their neighbours, so no page is built mid-motion and a page that
-    /// slides out and back keeps its scroll position. At rest the others are let go.
-    static func pages(progress: Double, shown: NDPage, motion: ClosedRange<Int>? = nil) -> [NDPage] {
-        let all = NDPage.allCases
-        let p = min(max(progress, 0), Double(all.count - 1))
-        var on = Set([Int(p.rounded(.down)), Int(p.rounded(.up))].map { all[$0] } + [shown])
-        if let motion {
-            on.formUnion(all[max(0, motion.lowerBound - 1)...min(all.count - 1, motion.upperBound + 1)])
-        }
-        return all.filter(on.contains)
-    }
-
     private func pageScroll(_ page: NDPage) -> some View {
         ScrollView(.vertical) {
             Group {
                 switch page {
-                case .overview: NDOverviewPage(store: store).onAppear { drawn(.overview) }
-                case .backups: NDBackupsPage(store: store).onAppear { drawn(.backups) }
-                case .jobs: NDJobsPage(store: store).onAppear { drawn(.jobs) }
+                case .overview: NDOverviewPage(store: store)
+                case .backups: NDBackupsPage(store: store)
+                case .jobs: NDJobsPage(store: store)
                 }
             }
+            .onAppear { NDPageStripProbe.built?(page) }
             .padding(.horizontal, NDGrid.pageSide)
             .padding(.top, NDGrid.pageTop)
             .padding(.bottom, 20)
@@ -1015,6 +1009,11 @@ extension EnvironmentValues {
         get { self[NDPreviewHoverKey.self] }
         set { self[NDPreviewHoverKey.self] = newValue }
     }
+}
+
+/// Tests only: each page body the page strip builds (its `onAppear`); after the first layout there must be none.
+@MainActor enum NDPageStripProbe {
+    static var built: ((NDPage) -> Void)?
 }
 
 /// Tests only: each page the window's root takes, and whether it arrived animated (R1.10.1, R1.10.3).
