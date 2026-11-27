@@ -1,4 +1,7 @@
+import fcntl
+import json
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -367,3 +370,105 @@ def test_other_labels_still_restart_under_memory_pressure(tmp_path):
     assert "hotlane_backlog_disabled" in [issue.code for issue in result.issues]
     assert [args[-1].rsplit("/", 1)[-1] for args in _kickstarts(commands)] == ["com.brainlayer.hotlane-brainbar"]
     assert not _sysctl_reads(commands)
+
+
+@pytest.fixture
+def heal_episode(tmp_path, monkeypatch):
+    assert Path(health.__file__).resolve().is_relative_to(Path(__file__).resolve().parents[1])
+    db = tmp_path / "brain.db"
+    _make_db(db, total=3, vector_rows=3)
+    events = []
+    commands = []
+    monkeypatch.setattr(health, "_brainbar_answers_ping", lambda *_: False)
+    monkeypatch.setattr(health, "_emit_heal_event", events.append)
+
+    def tick(*, pressure=1, state="S", threshold=2, canary=_retrieval_error):
+        config = health.HealthCheckConfig(
+            db_path=db,
+            state_path=tmp_path / "state",
+            heal=True,
+            heal_min_consecutive_failures=threshold,
+        )
+        return health.run_health_check(
+            config,
+            ps_output_fn=_ps_output_stub(""),
+            socket_request_fn=canary,
+            command_runner=_gate_runner(commands, pressure=pressure, state=state),
+            now_fn=_clock_at(25),
+        )
+
+    return tick, commands, events
+
+
+@pytest.mark.parametrize("hold", [{"pressure": 2}, {"state": "U"}], ids=["pressure", "state-U"])
+@pytest.mark.parametrize("threshold", [1, 2])
+def test_deliberate_holds_never_exhaust_breaker(heal_episode, hold, threshold):
+    tick, commands, events = heal_episode
+    results = [tick(**hold, threshold=threshold) for _ in range(5)]
+    assert not any(action.startswith(f"heal_escalation:{DAEMON}:") for result in results for action in result.actions)
+    assert all(any(action.startswith("heal_backoff:") for action in result.actions) for result in results[1:])
+    assert not _daemon_kickstarts(commands)
+    assert not any(event["_type"] == "heal_escalation" and event["label"] == DAEMON for event in events)
+
+
+@pytest.mark.parametrize("hold", [{"pressure": 2}, {"state": "U"}], ids=["pressure", "state-U"])
+def test_cleared_hold_allows_next_failing_tick_to_heal(heal_episode, hold):
+    tick, commands, _ = heal_episode
+    for _ in range(5):
+        tick(**hold)
+    result = tick()
+    assert f"kickstart:{DAEMON}" in result.actions
+    assert len(_daemon_kickstarts(commands)) == 1
+
+
+def test_update_custody_and_pressure_holds_preserve_breaker_until_heal(heal_episode, tmp_path, monkeypatch):
+    tick, commands, events = heal_episode
+    monkeypatch.setenv("BRAINBAR_UPDATE_ROOT", str(tmp_path))
+    key = health._heal_key(DAEMON, "brain_search_canary_failed")
+    tick()
+
+    def assert_deferred(result):
+        saved = json.loads((tmp_path / "state").read_text())
+        assert saved["heal_failures"][key] == 1
+        assert key not in saved["heal_tripped"]
+        assert not any(action.startswith(f"heal_escalation:{DAEMON}:") for action in result.actions)
+        assert not _daemon_kickstarts(commands)
+
+    with (tmp_path / "update-custody.lock").open("a") as updater:
+        fcntl.flock(updater, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        for _ in range(5):
+            assert_deferred(tick(pressure=2))
+    for _ in range(5):
+        result = tick(pressure=2)
+        assert f"heal_backoff:{DAEMON}:brain_search_canary_failed:pressure=2" in result.actions
+        assert_deferred(result)
+
+    result = tick()
+    assert f"kickstart:{DAEMON}" in result.actions
+    assert len(_daemon_kickstarts(commands)) == 1
+    assert json.loads((tmp_path / "state").read_text())["heal_failures"][key] == 2
+    assert not any(event["_type"] == "heal_escalation" and event["label"] == DAEMON for event in events)
+
+
+def test_real_heals_still_escalate_once_per_episode(heal_episode):
+    tick, commands, events = heal_episode
+    results = [tick() for _ in range(5)]
+    assert len(_daemon_kickstarts(commands)) == 1
+    assert sum(action.startswith(f"heal_escalation:{DAEMON}:") for result in results for action in result.actions) == 1
+    assert len([event for event in events if event["_type"] == "heal_escalation" and event["label"] == DAEMON]) == 1
+    tick(canary=_ok_canary)
+    assert not tick().actions
+    assert f"kickstart:{DAEMON}" in tick().actions
+
+
+@pytest.mark.parametrize("hold", [{"pressure": 2}, {"state": "U"}], ids=["pressure", "state-U"])
+def test_hold_after_real_heal_preserves_remaining_breaker_budget(heal_episode, hold):
+    tick, commands, events = heal_episode
+    tick()
+    tick()
+    for _ in range(4):
+        result = tick(**hold)
+        assert any(action.startswith("heal_backoff:") for action in result.actions)
+    assert not any(event["_type"] == "heal_escalation" and event["label"] == DAEMON for event in events)
+    assert f"heal_escalation:{DAEMON}:brain_search_canary_failed" in tick().actions
+    assert len(_daemon_kickstarts(commands)) == 1

@@ -853,6 +853,33 @@ print(json.dumps({"jsonrpc": "2.0", "id": 3, "result": {"content": [{"type": "te
     assert verify_mcp_transport(bridge_command=str(bridge), timeout_seconds=2) == 1
 
 
+@pytest.mark.parametrize("stderr", ["", "first diagnostic\nbridge startup failed\n"])
+def test_verify_mcp_transport_reports_bridge_exit_before_send(tmp_path: Path, monkeypatch, stderr: str) -> None:
+    import brainlayer.setup as setup
+
+    assert Path(setup.__file__).resolve().is_relative_to(Path(__file__).resolve().parents[1])
+    bridge = tmp_path / "exited-bridge"
+    bridge.write_text(
+        f"#!/usr/bin/env python3\nimport sys\nsys.stderr.write({stderr!r})\nsys.exit(23)\n",
+        encoding="utf-8",
+    )
+    bridge.chmod(0o755)
+    real_popen = setup.subprocess.Popen
+
+    def start_exited_bridge(*args, **kwargs):
+        process = real_popen(*args, **kwargs)
+        process.wait(timeout=2)
+        return process
+
+    # Force the real child to exit before send(), rather than relying on scheduler timing.
+    monkeypatch.setattr(setup.subprocess, "Popen", start_exited_bridge)
+    with pytest.raises(RuntimeError, match="MCP bridge exited with code 23") as failure:
+        setup.verify_mcp_transport(bridge_command=str(bridge), timeout_seconds=2)
+    if stderr:
+        assert str(failure.value).endswith(": bridge startup failed")
+        assert "first diagnostic" not in str(failure.value)
+
+
 def test_verify_mcp_transport_fails_loudly_when_bridge_has_no_tools(tmp_path: Path) -> None:
     from brainlayer.setup import verify_mcp_transport
 
@@ -860,7 +887,7 @@ def test_verify_mcp_transport_fails_loudly_when_bridge_has_no_tools(tmp_path: Pa
     bridge.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
     bridge.chmod(0o755)
 
-    with pytest.raises(RuntimeError, match="initialize response"):
+    with pytest.raises(RuntimeError, match="initialize response|MCP bridge exited with code 0"):
         verify_mcp_transport(bridge_command=str(bridge), timeout_seconds=2)
 
 
