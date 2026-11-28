@@ -1,63 +1,50 @@
 import AppKit
 import SwiftUI
 
-/// Tab swipe (phase 14): a two-finger sideways swipe on the trackpad moves the window to the neighbouring page, the
-/// way VoiceBar's History moves between Dictations, Ask and Speech. The gesture rules are VoiceBar's
-/// `NotchHistoryCategoryPager`, unchanged:
+/// Tab swipe: a two-finger sideways swipe on the trackpad moves the pages AND the tab bar's glass pill with the
+/// fingers, 1:1, and the release settles on a tab (the shared tab-swipe spec; `GlassTabPager` does the moving). This
+/// file decides which scroll events are that swipe. The axis rules are VoiceBar's `NotchHistoryCategoryPager`:
 ///
 /// - A gesture picks its axis once, from its first 6 pt: sideways only when it is 1.5 times more horizontal than
-///   vertical. A vertical gesture stays the page's own scroll for its whole length and never changes page.
-/// - It settles on release: past 0.22 of VoiceBar's 400 pt History list (88 pt, so the same finger travel works in
-///   both apps), or a flick (a last step of 14 pt or more in the same direction), moves one page; anything shorter
-///   moves none. However long the gesture, it moves at most one page.
-/// - The ends stop: a swipe past Jobs stays on Jobs, a swipe before Overview stays on Overview (VoiceBar does not wrap).
-///
-/// The page then changes through `store.page`, exactly as a tab click does: the page swaps at once and only the
-/// window's height moves (R1.10.1), so the swipe has no slide of its own and Reduce Motion keeps working as before.
+///   vertical. A vertical gesture stays the page's own scroll for its whole length and never moves a page.
+/// - Once it is sideways, the whole travel so far is handed over at once (`grab`), then every step as it comes (`move`),
+///   so the pages never lag the fingers by the slop.
+/// - Its end (or cancel) is the release; the pager picks the tab from position plus projected velocity, one tab at most.
 struct NDPagePager: Equatable {
     enum Axis: Equatable { case undecided, horizontal, vertical }
 
     static let slop: CGFloat = 6
     static let horizontalBias: CGFloat = 1.5
-    static let commitFraction: CGFloat = 0.22
-    static let flickDelta: CGFloat = 14
-    /// VoiceBar's History list width, the length `commitFraction` is a share of.
-    static let travelWidth: CGFloat = 400
 
     private(set) var axis: Axis = .undecided
     private var travel: CGSize = .zero
-    private var lastDeltaX: CGFloat = 0
 
     var isSwiping: Bool { axis == .horizontal }
 
     mutating func begin() {
         axis = .undecided
         travel = .zero
-        lastDeltaX = 0
     }
 
-    /// One more step of the gesture. Returns whether it is a page swipe (the caller then keeps the event from the page's
-    /// vertical scroll).
-    @discardableResult
-    mutating func move(dx: CGFloat, dy: CGFloat) -> Bool {
-        guard axis != .vertical else { return false }
-        travel.width += dx
-        travel.height += dy
-        lastDeltaX = dx
-        if axis == .undecided, max(abs(travel.width), abs(travel.height)) >= Self.slop {
+    /// One more step of the gesture: the sideways distance to move the pages by now, or nil while it is not a page
+    /// swipe. On the step that decides the axis, that is the whole sideways travel so far.
+    mutating func move(dx: CGFloat, dy: CGFloat) -> CGFloat? {
+        switch axis {
+        case .vertical: return nil
+        case .horizontal: return dx
+        case .undecided:
+            travel.width += dx
+            travel.height += dy
+            guard max(abs(travel.width), abs(travel.height)) >= Self.slop else { return nil }
             axis = abs(travel.width) > abs(travel.height) * Self.horizontalBias ? .horizontal : .vertical
+            return axis == .horizontal ? travel.width : nil
         }
-        return axis == .horizontal
     }
 
-    /// The gesture ended: +1 for the next page (fingers moved left), -1 for the previous one, 0 for none.
-    mutating func end() -> Int {
+    /// The gesture ended: whether a page swipe was in progress (and so must be released).
+    mutating func end() -> Bool {
         defer { begin() }
-        guard axis == .horizontal else { return 0 }
-        let x = travel.width
-        let flicked = abs(lastDeltaX) >= Self.flickDelta && (lastDeltaX > 0) == (x > 0)
-        guard abs(x) > Self.travelWidth * Self.commitFraction || flicked else { return 0 }
-        return x < 0 ? 1 : -1
+        return axis == .horizontal
     }
 }
 
@@ -79,11 +66,17 @@ struct NDPageSwipe: Equatable {
         var overSidewaysScroller = false
     }
 
+    /// What the pages do with an event: take hold and move by the travel so far, move by a step, or let go.
+    enum Drive: Equatable {
+        case grab(CGFloat)
+        case move(CGFloat)
+        case release
+    }
+
     struct Decision: Equatable {
         /// Keep the event from the views under it.
         var swallow = false
-        /// The page step to take now (only on the gesture's end).
-        var step = 0
+        var drive: Drive?
     }
 
     private(set) var pager = NDPagePager()
@@ -108,13 +101,18 @@ struct NDPageSwipe: Equatable {
         if phase.contains(.ended) || phase.contains(.cancelled) {
             tracking = false
             swallowsMomentum = sideways
-            // VoiceBar settles a cancelled gesture as an ended one.
-            return Decision(swallow: false, step: pager.end()) // the page's scroll view sees its gesture end
+            // VoiceBar settles a cancelled gesture as an ended one. The page's scroll view sees its gesture end.
+            return Decision(swallow: false, drive: pager.end() ? .release : nil)
         }
         guard phase.contains(.began) || phase.contains(.changed) else { return Decision() }
-        sideways = pager.move(dx: event.dx, dy: event.dy)
-        return Decision(swallow: sideways)
+        let wasSideways = sideways
+        guard let dx = pager.move(dx: event.dx, dy: event.dy) else { return Decision() }
+        sideways = true
+        return Decision(swallow: true, drive: wasSideways ? .move(dx) : .grab(dx))
     }
+
+    /// Whether a page swipe is held now (a window closing mid-swipe lets it go).
+    var isHolding: Bool { tracking && sideways }
 
     /// Whether `view` sits inside a scroll view that scrolls sideways (its document is wider than its view, or it shows
     /// a horizontal scroller).
@@ -131,20 +129,20 @@ struct NDPageSwipe: Equatable {
     }
 }
 
-extension NDPage {
-    /// The page `step` pages along, stopping at the ends.
-    func neighbour(_ step: Int) -> NDPage {
-        let pages = Self.allCases
-        let index = pages.firstIndex(of: self) ?? 0
-        return pages[min(pages.count - 1, max(0, index + step))]
-    }
-}
-
 extension NDStore {
-    /// A finished page swipe: the same change a tab click makes.
-    func swipePage(_ step: Int) {
-        guard step != 0 else { return }
-        page = page.neighbour(step)
+    /// A page swipe's step, in points of finger travel across `width` (the window): fingers moving left (negative dx)
+    /// bring the next page in, exactly as far as they moved.
+    func drivePages(_ drive: NDPageSwipe.Drive, at time: Double, width: CGFloat) {
+        let width = Double(max(width, 1))
+        switch drive {
+        case .grab(let dx):
+            tabs.grab(at: time)
+            tabs.drag(by: -Double(dx) / width, at: time)
+        case .move(let dx):
+            tabs.drag(by: -Double(dx) / width, at: time)
+        case .release:
+            tabs.release(at: time)
+        }
     }
 }
 
@@ -172,21 +170,22 @@ extension NDStore {
 /// Lifetime (review r1 of #1870): the dashboard window is retained and reused (`isReleasedWhenClosed = false`), so its
 /// content never leaves it on close. The monitor therefore follows the window itself, not the view's attachment: it
 /// registers while the window is visible (on attach, `didBecomeKey`, `didBecomeMain`, `didChangeOcclusionState`), and
-/// `willClose` removes it and drops any gesture in progress. Registration is idempotent; detaching or dismantling the
+/// `willClose` removes it and lets go of a swipe in progress (the pages settle on a tab). Registration is idempotent; detaching or dismantling the
 /// view removes it too. Offscreen renders and tests that host the root without a window register nothing.
 ///
 /// Deltas: the gesture phases decide, not `hasPreciseScrollingDeltas`. A trackpad (and a Magic Mouse) reports phases
 /// with precise point deltas; a notched mouse wheel reports neither, and the router ignores phase-less events, so a
 /// line-based delta never reaches the pager.
 struct NDPageSwipeMonitor: NSViewRepresentable {
-    let onStep: @MainActor (Int) -> Void
+    /// A swipe's step, its event time (seconds, the `CACurrentMediaTime` clock) and the width the travel is a share of.
+    let onDrive: @MainActor (NDPageSwipe.Drive, Double, CGFloat) -> Void
 
     func makeNSView(context: Context) -> Probe { Probe() }
-    func updateNSView(_ view: Probe, context: Context) { view.onStep = onStep }
+    func updateNSView(_ view: Probe, context: Context) { view.onDrive = onDrive }
     static func dismantleNSView(_ view: Probe, coordinator: ()) { view.detach() }
 
     final class Probe: NSView {
-        var onStep: (@MainActor (Int) -> Void)?
+        var onDrive: (@MainActor (NDPageSwipe.Drive, Double, CGFloat) -> Void)?
         /// Tests inject a counting registry.
         var monitors: any NDScrollEventMonitoring = NDLocalScrollMonitors.shared
         /// Tests use a private center: AppKit's own observers of these window notifications expect a real window.
@@ -252,6 +251,8 @@ struct NDPageSwipeMonitor: NSViewRepresentable {
         private func stopListening() {
             if let token { monitors.remove(token) }
             token = nil
+            // A swipe held when the window closes is let go, so the pages settle on a tab instead of staying mid-way.
+            if swipe.isHolding { onDrive?(.release, CACurrentMediaTime(), bounds.width) }
             swipe = NDPageSwipe()
         }
 
@@ -266,7 +267,8 @@ struct NDPageSwipeMonitor: NSViewRepresentable {
                 input.overSidewaysScroller = NDPageSwipe.scrollsSideways(hitView(location))
             }
             let decision = swipe.route(input)
-            if decision.step != 0 { onStep?(decision.step) }
+            // A synthesized event can carry no time; the clock's own is the same timebase.
+            if let drive = decision.drive { onDrive?(drive, event.timestamp > 0 ? event.timestamp : CACurrentMediaTime(), bounds.width) }
             return decision.swallow
         }
     }

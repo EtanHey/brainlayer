@@ -1,0 +1,9 @@
+CodeRabbit C1/C2 fail-first: the two guard tests run against 13bb20c8's behaviour (follow() unchanged; GlassTabPress.gestureDidReset a no-op, as the code then had no cancellation path), M4, swift test:
+
+  BrainBarTabsFollowFingersTests.swift:659: error: -[BrainBarTests.BrainBarTabsFollowFingersTests testACancelledPillDragLetsThePillGo] : XCTAssertNil failed: "GlassTabPress(onPill: true, slot: nil, pillCentre: 43.0, dragging: true)"
+  BrainBarTabsFollowFingersTests.swift:660: error: -[BrainBarTests.BrainBarTabsFollowFingersTests testACancelledPillDragLetsThePillGo] : XCTAssertNotEqual failed: ("tracking") is equal to ("tracking") - the hold is let go
+  BrainBarTabsFollowFingersTests.swift:666: error: -[BrainBarTests.BrainBarTabsFollowFingersTests testACancelledPillDragLetsThePillGo] : XCTAssertEqual failed: ("0.3157894736842105") is not equal to ("0.0") - it settles on a tab
+  BrainBarTabsFollowFingersTests.swift:670: error: -[BrainBarTests.BrainBarTabsFollowFingersTests testACancelledPillDragLetsThePillGo] : XCTAssertEqual failed: ("tracking") is not equal to ("resting")
+  BrainBarTabsFollowFingersTests.swift:643: error: -[BrainBarTests.BrainBarTabsFollowFingersTests testAnOutsideSelectionDuringASettleIsNeverLost] : XCTAssertEqual failed: ("backups") is not equal to ("overview") - the store follows 
+
+With the fixes: both pass; 485 tests across the BrainBar UI classes green (1 network skip).
