@@ -2,8 +2,10 @@ import XCTest
 import SwiftUI
 @testable import BrainBar
 
-/// w315: the Activity chart's heights read honestly. This file uses only API that exists on main as well, so the same
-/// code renders the before and after proof and runs the main-compatible red check.
+/// w315: the Activity chart's heights read honestly. The before renders committed under
+/// `brain-bar/docs/ui-renders/2026-11-28-activity-scale/` came from round 0 of this file, which used only API on main.
+/// Since round 2 the per-case assertions also call branch-only API (`scaleTicks`, `minVisible`, `upPeak`), so this file
+/// no longer compiles on main; re-rendering a "before" needs those assertions removed first.
 final class BrainBarActivityScaleRenderTests: XCTestCase {
     enum Case: String, CaseIterable {
         /// The owner's moment: one save, one read by an agent and three session lines in one bucket (index 40), with
