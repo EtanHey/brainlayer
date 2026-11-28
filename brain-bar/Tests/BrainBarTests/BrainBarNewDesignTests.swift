@@ -2186,7 +2186,10 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
     // MARK: Round 2a decisions (R2A-DECISIONS.md, "Taken"), one test each
 
     /// R2A 1, as R1.12 (§ B) has it: every panel keeps 12 pt inside the window's content edge on every side, with no
-    /// exception: none passes the left edge, none hangs below the window, none reaches into the Activity card.
+    /// exception: none passes the left edge, none hangs below the window. None reaches into the Activity card's bars or
+    /// axis labels, except w303's two copies (Local copy, Google Drive): they open upward over the card's plot as
+    /// ordinary 320 pt popovers, because the room § B left them made them a 760 pt strip; they still stop below the
+    /// card's totals row.
     func testR2A1PanelsStayInsideTheWindow() {
         let L = NDPipelineLayout.self
         for name in Fixture.Name.allCases {
@@ -2198,7 +2201,8 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
                 XCTAssertGreaterThanOrEqual(panel.outer.minX, L.windowInside.minX - 0.01, where_)
                 XCTAssertLessThanOrEqual(panel.outer.maxX, L.windowInside.maxX + 0.01, where_)
                 XCTAssertLessThanOrEqual(panel.outer.maxY, L.windowInside.maxY + 0.01, where_)
-                XCTAssertGreaterThanOrEqual(panel.outer.minY, L.activityLabelsBottom - 0.01,
+                let ceiling = L.copyPanels.contains(station) ? L.activityPlotTop : L.activityLabelsBottom
+                XCTAssertGreaterThanOrEqual(panel.outer.minY, ceiling - 0.01,
                                             "\(where_): over the Activity card's bars or axis labels (\(panel.outer.minY))")
             }
         }

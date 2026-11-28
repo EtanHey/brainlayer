@@ -880,9 +880,9 @@ struct NDStationPopover: View {
     var body: some View {
         NDStationPanelBody(model: Self.model(station, item: store.r1.stationItems[station], store.inputs, store.model, store.r1.pipeline),
                            waiting: NDDriveWaiting.shows(store.inputs, for: store.r1.stationItems[station]?.action),
-                           compactRows: station == .search || (station == .drive && store.inputs.backupProgress != nil),
+                           compactRows: station == .search,  // w303 review: Drive keeps its 8 pt above the rows while uploading
                            compactAction: station == .search,
-                           allowsWideLayout: station == .mac || station == .drive || station == .read) { store.perform($0) }
+                           allowsWideLayout: station == .read) { store.perform($0) }  // w303: not the copies
             .frame(maxWidth: .infinity, alignment: .leading)
     }
 
