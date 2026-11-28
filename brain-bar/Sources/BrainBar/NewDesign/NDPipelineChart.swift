@@ -15,12 +15,12 @@ final class NDPipelineLabelView: NSView {
         var labels: [NSTextField] = []
         func add(_ words: String, rect: CGRect, caption: Bool) {
             let field = NSTextField(labelWithString: words)
-            field.font = .systemFont(ofSize: 11, weight: caption ? .medium : .regular)
+            field.font = caption ? NDPipelineLayout.laneLabelFont : .systemFont(ofSize: 11, weight: .regular)
             field.textColor = NDColor.t2
             field.alignment = .center
-            field.frame = caption ? rect.insetBy(dx: -4, dy: -4) : rect
-            field.drawsBackground = caption
-            field.backgroundColor = NDColor.card
+            field.frame = rect
+            if caption { Self.centre(field, on: CGPoint(x: rect.midX, y: rect.midY)) }
+            field.drawsBackground = false
             field.setAccessibilityElement(true)
             field.setAccessibilityRole(.staticText)
             field.setAccessibilityLabel(words)
@@ -35,6 +35,16 @@ final class NDPipelineLabelView: NSView {
         }
         setAccessibilityElement(false)
         setAccessibilityChildren(labels)
+    }
+
+    /// A caption sits ON its line (the chart draws the card-coloured knock-out under it,
+    /// `NDPipelineLayout.laneLabelKnockout`): the field takes its fitted size, so its text has equal padding on each side,
+    /// and is placed by its own baseline so the middle of its capitals is on the line.
+    static func centre(_ field: NSTextField, on p: CGPoint) {
+        field.sizeToFit()
+        let size = field.frame.size
+        let capMiddle = field.firstBaselineOffsetFromTop - (field.font?.capHeight ?? 0) / 2
+        field.frame = CGRect(x: p.x - size.width / 2, y: p.y - capMiddle, width: size.width, height: size.height)
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
@@ -316,11 +326,11 @@ struct NDPipelineChart: View {
         drawStations(ctx, state: state, hovered: hovered)
         if state.allUnconfirmed {
             let words = state.lastKnownAt.map(Say.valuesLastKnownAt) ?? Say.everyPipeNotConfirmed
-            // CodeRabbit: the last-known caption masks the rail just like the other on-line captions.
-            let width = ceil(NSAttributedString(string: words, attributes: [.font: NSFont.systemFont(ofSize: 11, weight: .medium)]).size().width)
-            ctx.fill(Path(CGRect(x: NDPipelineLayout.size.width - width - 6, y: -2, width: width + 12, height: 16)),
-                     with: .color(ND.card))
-            put(ctx, text(words, size: 11, color: ND.t2, weight: .medium), x: NDPipelineLayout.size.width, baseline: 10, size: 11, anchor: .end)
+            // CodeRabbit: the last-known caption masks the rail just like the other on-line captions; like them, it sits
+            // centred on the rail, which runs into its knock-out and stops.
+            let rect = NDPipelineLayout.unconfirmedCaptionRect(words)
+            ctx.fill(Path(NDPipelineLayout.laneLabelKnockout(rect)), with: .color(ND.card))
+            ctx.draw(text(words, size: 11, color: ND.t2, weight: .medium), at: CGPoint(x: rect.maxX, y: rect.midY), anchor: .trailing)
         }
     }
 
@@ -343,6 +353,10 @@ struct NDPipelineChart: View {
                 arrowhead(ctx, end: pts[pts.count - 1], before: pts[pts.count - 2], shading: s.shading)
                 if c.bothWays { arrowhead(ctx, end: pts[0], before: pts[1], shading: s.shading) }
             }
+        }
+        // Each caption's knock-out: the line runs into it and out of it; the native caption is drawn on top, centred.
+        for (_, rect) in L.laneLabelRects() {
+            ctx.fill(Path(L.laneLabelKnockout(rect)), with: .color(ND.card))
         }
     }
 

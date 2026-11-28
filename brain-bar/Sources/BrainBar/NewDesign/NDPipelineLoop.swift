@@ -321,7 +321,7 @@ enum NDPipelineLayout {
             }
             // The agents and job panels clear the native caption fields, including their drawing insets.
             if s == .agents || s == .jobs || s == .weekly {
-                obstacles += laneLabelRects().map { $0.1.insetBy(dx: -4, dy: -4) }
+                obstacles += laneLabelRects().map { laneLabelKnockout($0.1) }
             }
         }
         for station in actions {
@@ -532,12 +532,64 @@ enum NDPipelineLayout {
         return out
     }
 
-    /// Only the two otherwise ambiguous routes get a short payload caption at rest.
-    static func laneLabelRects() -> [(String, CGRect)] {
-        [(Say.sessionBackups, yRail), (Say.searchAnswers, yAnswers)].map { words, y in
-            let w = textWidth(words, size: 11, weight: .medium)  // Gap 74 captions keep L54's type scale.
-            return (words, CGRect(x: 215 - w / 2, y: y - 8, width: w, height: 16))
+    /// Only the two otherwise ambiguous routes get a short payload caption at rest, each on its own line.
+    static let laneLabels: [(words: String, pipe: NDPipe)] = [(Say.sessionBackups, .rail), (Say.searchAnswers, .answers)]
+    /// The caption type (Gap 74 captions keep L54's type scale) and the height of its line box.
+    static var laneLabelFont: NSFont { .systemFont(ofSize: 11, weight: .medium) }
+    static var laneLabelLineHeight: CGFloat { NSLayoutManager().defaultLineHeight(for: laneLabelFont) }
+    /// The card-coloured knock-out runs this far past the words on each side, so the line visibly enters and leaves it.
+    static let laneLabelKnockoutPad: CGFloat = 6
+
+    /// The straight part of a pipe's longest segment, as drawn: between the ends of its rounded corners (each corner's
+    /// radius clamped as `NDPolyline.path` clamps it).
+    static func straightRun(_ pipe: NDPipe) -> (start: CGPoint, end: CGPoint) {
+        guard let c = connections.first(where: { $0.pipe == pipe }), c.line.points.count > 1 else { return (.zero, .zero) }
+        let pts = c.line.points
+        let i = (1..<pts.count).max { NDPolyline.seg(pts[$0 - 1], pts[$0]) < NDPolyline.seg(pts[$1 - 1], pts[$1]) } ?? 1
+        let a = pts[i - 1], b = pts[i], l = NDPolyline.seg(a, b)
+        func corner(at k: Int) -> CGFloat {
+            guard k > 0, k < pts.count - 1 else { return 0 }
+            return min(c.corner, NDPolyline.seg(pts[k - 1], pts[k]) / 2, NDPolyline.seg(pts[k], pts[k + 1]) / 2)
         }
+        let s = corner(at: i - 1) / l, e = corner(at: i) / l
+        return (CGPoint(x: a.x + (b.x - a.x) * s, y: a.y + (b.y - a.y) * s),
+                CGPoint(x: b.x - (b.x - a.x) * e, y: b.y - (b.y - a.y) * e))
+    }
+
+    /// Where the return line stops being clear of the job panels: Nightly check-up's panel opens beside its words, its
+    /// arrow starting at their right edge, and runs down across the return line; Weekly clean's opens below its own words,
+    /// further right. The knock-out of "Search answers" ends here, so no open panel's edge ever cuts through it (R13).
+    static var answersClearEdge: CGFloat { purposeRect(.jobs)?.maxX ?? .greatestFiniteMagnitude }
+
+    /// The one column both route captions share, so they read as a pair: the middle of their straight runs, moved left
+    /// only as far as the job panels force "Search answers" (its knock-out ends at `answersClearEdge`).
+    static var laneLabelColumn: CGFloat {
+        let mids = laneLabels.map { straightRun($0.pipe) }.map { ($0.start.x + $0.end.x) / 2 }
+        let answers = textWidth(Say.searchAnswers, size: 11, weight: .medium)
+        return min(mids.min() ?? 0, answersClearEdge - laneLabelKnockoutPad - answers / 2)
+    }
+
+    /// Each caption's words box: its line box centred on its own line, horizontally centred on the shared column.
+    static func laneLabelRects() -> [(String, CGRect)] {
+        let x = laneLabelColumn
+        return laneLabels.map { words, pipe in
+            let run = straightRun(pipe)
+            let y = (run.start.y + run.end.y) / 2
+            let w = textWidth(words, size: 11, weight: .medium), h = laneLabelLineHeight
+            return (words, CGRect(x: x - w / 2, y: y - h / 2, width: w, height: h))
+        }
+    }
+
+    /// The not-confirmed caption ("not confirmed: values last known at 06:00"): on the rail at the chart's right edge, its
+    /// line box centred on the rail like the route captions'.
+    static func unconfirmedCaptionRect(_ words: String) -> CGRect {
+        let w = ceil(NSAttributedString(string: words, attributes: [.font: laneLabelFont]).size().width), h = laneLabelLineHeight
+        return CGRect(x: size.width - w, y: yRail - h / 2, width: w, height: h)
+    }
+
+    /// The knock-out behind a caption: the card colour, `laneLabelKnockoutPad` past the words on each side, 16 pt tall.
+    static func laneLabelKnockout(_ words: CGRect) -> CGRect {
+        CGRect(x: words.minX - laneLabelKnockoutPad, y: words.midY - 8, width: words.width + 2 * laneLabelKnockoutPad, height: 16)
     }
 }
 
