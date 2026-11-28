@@ -72,31 +72,50 @@ final class BrainBarRangeSwitchGlassTests: XCTestCase {
 
     // MARK: Selecting a range
 
-    /// A click (or a key, or a released pill) changes the chart's range when the pill comes to rest, within half a
-    /// second, in one settle toward the pick; never on the frame the spring starts.
-    func testSelectingARangeChangesTheChartRangeAtRest() {
+    /// A plain click changes the chart's range as the pill arrives (within `rangeCommitDistance` of its slot, < 0.30 s
+    /// at 120 Hz, for the next range and two over), never on the click's frame or while the pill travels; the pill then
+    /// still settles to true rest. Review r1 B2: on 41b899bc the range waited for true rest, ~0.44 s, about 0.2 s after
+    /// the pill looked done.
+    func testAPlainClickChangesTheChartRangeAsThePillArrives() {
+        for (from, to) in [(NDRange.hour, NDRange.threeHours), (.hour, .day), (.day, .hour)] {
+            let s = store(from)
+            let target = Double(NDRange.allCases.firstIndex(of: to)!)
+            s.rangeTabs.isLive = { true }
+            let start = 10.0
+            var time = start
+            s.rangeTabs.select(Int(target), at: time)
+            XCTAssertEqual(s.range, from, "\(to.label): not committed on the click's frame")
+            var committedAt: Double?
+            var previous = abs(s.rangeTabs.progress - target)
+            while s.rangeTabs.phase != .resting, time - start < 1 {
+                time += 1.0 / 120
+                s.rangeTabs.tick(at: time)
+                let distance = abs(s.rangeTabs.progress - target)
+                XCTAssertLessThanOrEqual(distance, previous + 1e-12, "\(to.label): one settle toward the pick")
+                previous = distance
+                guard committedAt == nil else { continue }
+                if s.range == to {
+                    committedAt = time - start
+                    XCTAssertLessThan(distance, NDStore.rangeCommitDistance, "\(to.label): committed only once arrived")
+                    XCTAssertEqual(s.rangeTabs.phase, .settling, "\(to.label): before the spring's tail reaches rest")
+                } else {
+                    XCTAssertGreaterThanOrEqual(distance, NDStore.rangeCommitDistance, "\(to.label): travelling, not committed")
+                }
+            }
+            XCTAssertNotNil(committedAt, "\(to.label): the chart's range changed")
+            XCTAssertLessThan(committedAt ?? 1, 0.30, "\(from.label) -> \(to.label): the chart answers within 0.30 s")
+            XCTAssertLessThan(time - start, 0.5, "the pill still rests within half a second")
+            XCTAssertEqual(s.rangeTabs.progress, target)
+            XCTAssertEqual(s.range, to)
+            print(String(format: "[w316] range click %@ -> %@: chart at %.3f s, pill at rest %.3f s", from.label, to.label,
+                         committedAt ?? -1, time - start))
+        }
+
+        // Two picks in a row: only the one the pill arrives at reaches the chart.
         let s = store(.hour)
         s.rangeTabs.isLive = { true }
-        var time = 10.0
+        var time = 30.0
         s.rangeTabs.select(2, at: time)
-        XCTAssertEqual(s.range, .hour, "not committed mid-motion")
-        XCTAssertEqual(s.rangeTabs.phase, .settling)
-        var previous = s.rangeTabs.progress
-        var frames = 0
-        while s.rangeTabs.phase != .resting, frames < 120 {
-            time += 1.0 / 120
-            s.rangeTabs.tick(at: time)
-            XCTAssertGreaterThanOrEqual(s.rangeTabs.progress, previous - 1e-12, "one settle toward the pick")
-            previous = s.rangeTabs.progress
-            frames += 1
-        }
-        XCTAssertEqual(s.rangeTabs.progress, 2)
-        XCTAssertLessThan(Double(frames) / 120, 0.5, "rests within half a second")
-        XCTAssertEqual(s.range, .day, "the chart's range changes at rest")
-        XCTAssertEqual(s.rangeTabs.selection, 2, "the store's echo does not move the pill again")
-
-        // Two picks in a row: only the one the pill rests on reaches the chart.
-        s.rangeTabs.select(0, at: time)
         time += 1.0 / 120
         s.rangeTabs.tick(at: time)
         s.rangeTabs.select(1, at: time)
@@ -110,9 +129,9 @@ final class BrainBarRangeSwitchGlassTests: XCTestCase {
         XCTAssertEqual(closed.rangeTabs.progress, 1)
     }
 
-    /// The guard #1896 learned on the M1: the store publishes nothing while the range pill moves (a publication there
-    /// re-evaluates every observer of the store on the first frame of the motion), and once at rest.
-    func testTheStorePublishesNothingWhileTheRangePillMoves() {
+    /// The guard #1896 learned on the M1: the store publishes nothing before the range pill arrives (a publication on
+    /// the click's frame re-evaluates every observer of the store as the motion starts), and does publish once it has.
+    func testTheStorePublishesNothingBeforeTheRangePillArrives() {
         let s = store(.hour)
         s.rangeTabs.isLive = { true }
         var publications = 0
@@ -124,10 +143,47 @@ final class BrainBarRangeSwitchGlassTests: XCTestCase {
         while s.rangeTabs.phase != .resting {
             time += 1.0 / 120
             s.rangeTabs.tick(at: time)
-            if s.rangeTabs.phase != .resting { XCTAssertEqual(publications, 0, "nothing published mid-motion") }
+            if abs(s.rangeTabs.progress - 2) >= NDStore.rangeCommitDistance {
+                XCTAssertEqual(publications, 0, "nothing published before the pill arrives")
+            }
         }
-        XCTAssertGreaterThan(publications, 0, "the range publishes at rest")
+        XCTAssertGreaterThan(publications, 0, "the range publishes once the pill has arrived")
         XCTAssertEqual(s.range, .day)
+    }
+
+    /// The page tabs keep their contract: no commit distance, the page reaches the store only at true rest.
+    func testThePageTabsStillCommitAtTrueRest() {
+        let s = store(.hour)
+        XCTAssertNil(s.tabs.commitDistance)
+        s.tabs.isLive = { true }
+        var time = 7.0
+        s.tabs.select(2, at: time)
+        while s.tabs.phase != .resting {
+            XCTAssertEqual(s.page, .overview, "no page commit before true rest (progress \(s.tabs.progress))")
+            time += 1.0 / 120
+            s.tabs.tick(at: time)
+        }
+        XCTAssertEqual(s.page, .jobs)
+    }
+
+    /// Review r1 B1: an outside assignment equal to the chart's current range, made while a different pick is still
+    /// settling, wins. On 41b899bc the didSet's equality guard skipped `follow`, so the pending 24 h landed over it.
+    func testAnOutsideRangeEqualToTheCurrentOneWinsOverAPendingPick() {
+        let s = store(.hour)
+        s.rangeTabs.isLive = { true }
+        // The media clock: an outside `range` reaches the pager through `follow`, which stamps its settle with it.
+        var time = CACurrentMediaTime()
+        s.rangeTabs.select(2, at: time)
+        for _ in 0..<6 { time += 1.0 / 120; s.rangeTabs.tick(at: time) }
+        XCTAssertEqual(s.range, .hour, "the 24 h pick is still travelling")
+        s.range = .hour
+        XCTAssertEqual(s.rangeTabs.selection, 0, "the pill turns back to 1 h")
+        while s.rangeTabs.phase != .resting { time += 1.0 / 120; s.rangeTabs.tick(at: time) }
+        XCTAssertEqual(s.range, .hour, "store: the outside request stands")
+        XCTAssertEqual(s.rangeTabs.selection, 0, "pill selection: 1 h")
+        XCTAssertEqual(s.rangeTabs.progress, 0, "pill position: 1 h")
+        XCTAssertEqual(s.range.axis.0, "60 min ago", "chart: the Activity chart draws store.range, the 1 h axis")
+        XCTAssertEqual(NDRangeControl(store: s).bar.accessibilitySelection.wrappedValue, 0, "VoiceOver: 1 h")
     }
 
     /// The pill dragged and let go over a slot picks that range, like the page tabs.

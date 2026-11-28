@@ -12,18 +12,24 @@ import SwiftUI
     var r1: NDR1 { NDR1.make(inputs, model) }
     @Published var range: NDRange = .hour {
         didSet {
-            guard range != oldValue else { return }
-            // A range set anywhere else (the capture driver, a test) moves the switch's pill too; one picked on the
-            // switch is already its selection.
+            // A range set anywhere else (the capture driver, a test) moves the switch's pill too, even when it equals
+            // the range the chart already has: a pick still settling elsewhere must not land over it later (review r1
+            // B1). One picked on the switch is already its selection, so `follow` does nothing then.
             rangeTabs.follow(NDRange.allCases.firstIndex(of: range) ?? 0)
+            guard range != oldValue else { return }
             refreshWaves(force: true, applyWhileHeld: true)
         }
     }
-    /// The Activity range switch's pill (`GlassTabPager`, the page tabs' model). Like the pages, a range picked there
-    /// (click, keyboard, VoiceOver, a released pill) reaches `range` when the pill comes to REST, never on the frame the
-    /// spring starts: `range` publishes the store, and every observer of the store re-evaluating then is what froze the
-    /// first 45-120 ms of the page tabs' motion on the M1 (PR #1896, recording r1).
-    let rangeTabs = GlassTabPager(count: NDRange.allCases.count)
+    /// The Activity range switch's pill (`GlassTabPager`, the page tabs' model). A range picked there (click, keyboard,
+    /// VoiceOver, a released pill) reaches `range` as the pill ARRIVES (within `rangeCommitDistance` of its slot: 0.24 s
+    /// after a click on the next range, 0.28 s two ranges over), never on the frame the spring starts or while it travels: `range` publishes the store, and
+    /// every observer re-evaluating then is what froze the first 45-120 ms of the page tabs' motion on the M1 (PR #1896,
+    /// recording r1). The page tabs still commit at true rest.
+    let rangeTabs = GlassTabPager(count: NDRange.allCases.count, commitDistance: NDStore.rangeCommitDistance)
+    /// 0.04 of a tab: about 1.5 pt on the switch's ~37-44 pt slots, where the pill already looks arrived (review r1 B2:
+    /// at true rest, ~0.44 s, the chart answered ~0.2 s after the pill looked done). 0.02 lands a click two ranges over
+    /// at 0.325 s; 0.04 keeps both under 0.30 s at 120 Hz.
+    static let rangeCommitDistance = 0.04
     /// The one "current page": the tabs read it, the window root draws it, the window's height follows it.
     /// D1 (real screen, round 1): the window resize used to run from `$page`, which publishes in willSet, so the resize's
     /// layout pass drew the old page and the old selected segment at the new height. Followers now run here, after the
