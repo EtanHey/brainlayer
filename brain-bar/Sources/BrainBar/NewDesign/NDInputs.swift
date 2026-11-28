@@ -163,6 +163,9 @@ struct NDAgents: Equatable, Sendable {
         var sessions: Int?
         /// Saves in the last 24 h; nil when the emitter counts are not readable.
         var saves: Int?
+        /// #1899 R1: agents of this harness running now (live sessions only, `AgentRunning`); nil when liveness is unknown.
+        /// The `.gemini` row is Antigravity (`agy`, any model); the Gemini CLI has no row here.
+        var running: Int? = nil
     }
     var agents: [Agent]
 

@@ -29,6 +29,44 @@ enum NDPipelineLayout {
     static func iconCentre(_ family: AgentFamily) -> CGPoint {
         CGPoint(x: agentsFrame.midX, y: agentRows.first { $0.0 == family }?.1 ?? agentsFrame.midY)
     }
+
+    /// w307: a harness's running-agent count sits beside its icon in 9 pt Semibold monospaced figures, the chart's figure
+    /// style. #1899 R1 (B3): its origin is 1.5 pt after the icon's box, so a 2-digit count's ink ends by x 58.95, inside
+    /// the column's border (inner edge 59.5); the reviewer's 2 pt left the widest pair ("88") 0.05 pt from it. The figures
+    /// centre 1 pt above the icon's centre. A faulted provider's ring (r 12) and badge take that room, so its count starts
+    /// 16 pt from the centre, clear of both. Nothing else moves.
+    static let countFontSize: CGFloat = 9
+    static var countFont: NSFont { .monospacedDigitSystemFont(ofSize: countFontSize, weight: .semibold) }
+    /// Whole figures, no grouping: the column is narrow and a thousand running agents is not a case to dress up.
+    static func countText(_ count: Int) -> String { String(count) }
+
+    private static func countLine(_ count: Int) -> CTLine {
+        CTLineCreateWithAttributedString(NSAttributedString(string: countText(count), attributes: [.font: countFont]))
+    }
+
+    /// The count's typographic box: its advance width by the figures' cap height, the baseline on its bottom edge.
+    static func countRect(_ family: AgentFamily, count: Int, faulted: Bool) -> CGRect {
+        let c = iconCentre(family)
+        let cap = countFont.capHeight
+        let width = CGFloat(CTLineGetTypographicBounds(countLine(count), nil, nil, nil))
+        let x = faulted ? c.x + 16 : c.x + iconSize / 2 + 1.5
+        return CGRect(x: x, y: c.y - 1 - cap / 2, width: width, height: cap)
+    }
+
+    /// The figures' ink, as drawn: what the frame, the connectors and the other rows must clear.
+    static func countInk(_ family: AgentFamily, count: Int, faulted: Bool) -> CGRect {
+        let box = countRect(family, count: count, faulted: faulted)
+        let ink = CTLineGetImageBounds(countLine(count), nil)
+        return CGRect(x: box.minX + ink.minX, y: box.maxY - ink.maxY, width: ink.width, height: ink.height)
+    }
+
+    /// The card-coloured plate under a count that reaches the column's border: the border (and the hover outline) breaks
+    /// around the figures, as a caption breaks a frame's border. Only a count that reaches the border gets one (3 digits, or
+    /// 2 beside a faulted provider's ring); it never reaches a connector (geometry test).
+    static func countPlate(_ family: AgentFamily, count: Int, faulted: Bool) -> CGRect? {
+        let ink = countInk(family, count: count, faulted: faulted)
+        return ink.maxX > agentsFrame.maxX - 0.5 ? ink.insetBy(dx: -1.5, dy: -1) : nil
+    }
     /// R14: The lower Memory port sits 3 pt below the box, 8 pt below the Kept-safe frame.
     /// R2 item 8: the diagram sits centred in its card, 32 pt from each side: everything right of the agents moved 26 pt
     /// left (the long first-row lines are shorter).

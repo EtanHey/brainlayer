@@ -122,6 +122,10 @@ struct NDPipelineState: Equatable, Sendable {
     var arrivalBreaks: Set<NDStation> = []
     /// An agent whose sessions are not read: its row in the group is the station (badge left of the name).
     var agentFaults: [AgentFamily: NDSeverity] = [:]
+    /// w307: running agents per harness, from BrainBar's own agent monitor (`AgentActivitySnapshot.running`: live sessions
+    /// only, through `NDInputs.agents[].running`). A harness missing here has unknown liveness. The count is not the verdict's, so a stale verdict
+    /// does not hide it.
+    var agentsRunning: [AgentFamily: Int] = [:]
     /// Not confirmed for one check (its pipes dashed).
     var unconfirmed: Set<NDPipe> = []
     var status: [NDStation: Status] = [:]
@@ -187,6 +191,9 @@ extension NDPipelineState {
         let c = i.capture
         var s = NDPipelineState()
         s.status = statusLines(i)
+        for agent in i.agents.agents {
+            if let running = agent.running { s.agentsRunning[agent.family] = max(0, running) }
+        }
         guard let verdict = c.verdict else {
             s.allUnconfirmed = true
             return s

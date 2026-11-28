@@ -902,7 +902,22 @@ extension BrainBarMenuPresenter {
         static let railLine = "The agents\u{2019} session files go to your Google Drive as they are."
         static let answersTitle = "Answers to agents"
         static let answersLine = "What Search finds goes back to the agent that asked."
-        static let agentsLine = "Claude, Codex, Cursor and Antigravity."
+        // w307: running agents per harness, in the agents column's panel and for VoiceOver. The panel keeps the middle
+        // sentence of `explainAgents`: its first repeats the panel's title and its last is the return line's own hover, and
+        // the four count rows need their room under Save queue.
+        static let agentsPanelLine = "BrainBar reads the session files they write, and takes the memories they save."
+        static func runningCount(_ n: Int?) -> String {
+            guard let n else { return "not known" }
+            return n == 0 ? "none running" : "\(n) running"
+        }
+        static func agentsRunning(_ provider: String, _ n: Int?) -> String {
+            guard let n else { return "\(provider), running agents not known" }
+            switch n {
+            case 0: return "\(provider), no agents running"
+            case 1: return "\(provider), 1 agent running"
+            default: return "\(provider), \(n) agents running"
+            }
+        }
         static let keptSafeLine = "A local copy every night, and a copy in your Google Drive."
         // Round 2a decisions (R2A-DECISIONS.md, taken 3, 6, 8, 9).
         static func lastUpload(_ age: String) -> String { "last upload \(age) ago" }
