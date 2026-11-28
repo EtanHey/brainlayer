@@ -51,8 +51,10 @@ struct NDDashed: View {
 
 // MARK: V1 waveform
 
-/// Saves by agents above a 1 pt line (62 % of the height), conversations read below (38 %), newest on the right; each
-/// half scaled to its own maximum (floors: 4 saves, 40 reads). A zero bucket draws nothing.
+/// Saves by agents above a 1 pt line (62 % of the height), session lines ingested below (38 %), newest on the right.
+/// w315: each half has one count scale (`upPeak`, `downPeak`): saves share the upper half's with the window's reads by
+/// agents, so equal counts above the line draw equal heights; session lines, often a hundred times more, keep their own,
+/// and the window labels each half's top count. A zero bucket draws nothing.
 ///
 /// Review B1: two layers. The baseline (or the dashed unknown) and the now tick are static, across the whole plot. The
 /// bars are a moving strip clipped to the plot: on a one-bucket shift the data arrives with its outgoing bucket, and in
@@ -113,12 +115,35 @@ struct NDWaveform: View {
         CGRect(x: 0, y: plot(canvas, nowTick: nowTick).cy - 0.5, width: canvas.width, height: 1)
     }
 
-    /// The saved bar's height for a bucket, exactly as the strip draws it (each half to its own maximum; the outgoing
-    /// bucket counts, so no bar changes height as it leaves).
+    /// w315: the count the upper half's full height stands for. Saves and reads by agents share it, so one save and one
+    /// read draw the same height. The dropdown draws no reads-by-agents line, so there saves scale alone. The
+    /// outgoing bucket counts, so no bar changes height as it leaves.
+    static func upPeak(_ wave: NDWave, size: Size = .hero) -> Int {
+        size == .hero ? max(wave.savesPeak, wave.agentReadsPeak ?? 0) : wave.savesPeak
+    }
+
+    /// w315: the count the lower half's full height stands for: session lines ingested, scaled apart from the upper half.
+    static func downPeak(_ wave: NDWave) -> Int { wave.readsPeak }
+
+    /// w315: the smallest height a non-zero count draws, so one save among hundreds stays visible: 2 pt in the window
+    /// (3 % of the upper half, 5 % of the lower), 1.5 pt in the dropdown. It only lifts a bar that would draw thinner.
+    static func minVisible(_ size: Size) -> CGFloat { size == .hero ? 2 : 1.5 }
+
+    /// w315: the one rule from a count to a height. Linear in the half's scale, zero for zero, at least `minVisible` for
+    /// any other count, never past the half.
+    static func scaledHeight(_ count: Int, peak: Int, extent: CGFloat, minVisible: CGFloat) -> CGFloat {
+        guard count > 0, peak > 0 else { return 0 }
+        return min(extent, max(minVisible, CGFloat(count) / CGFloat(peak) * extent))
+    }
+
+    /// The saved bar's height for a bucket, exactly as the strip draws it (on the upper half's shared scale).
     static func savedHeight(_ wave: NDWave, saves: Int, size: Size) -> CGFloat {
-        guard saves > 0 else { return 0 }
-        let maxSaves = CGFloat(max(wave.savesPeak, 1))
-        return max(size == .hero ? 2 : 1.5, CGFloat(saves) / maxSaves * halves(size).up)
+        scaledHeight(saves, peak: upPeak(wave, size: size), extent: halves(size).up, minVisible: minVisible(size))
+    }
+
+    /// The session-lines bar's height for a bucket, exactly as the strip draws it (on the lower half's scale).
+    static func readHeight(_ wave: NDWave, reads: Int, size: Size) -> CGFloat {
+        scaledHeight(reads, peak: downPeak(wave), extent: halves(size).down, minVisible: minVisible(size))
     }
 
     /// R1.6 item 9: the top of a column's tallest bar (its saved bar, which rises from the baseline; the baseline when it
@@ -217,12 +242,9 @@ struct NDWaveStrip: View, Animatable {
     private func draw(_ ctx: GraphicsContext, _ canvas: CGSize) {
         guard let wave, wave.readable, wave.count > 0 else { return }
         let (_, cy) = NDWaveform.plot(canvas, nowTick: nowTick)
-        let down = NDWaveform.halves(size).down
         let (bw, gap) = NDWaveform.layout(width: canvas.width, count: wave.count, size: size)
         let offset = NDWaveform.offset(target: target, phase: phase, pitch: bw + gap)
-        // Each half to its own maximum; the scale includes the outgoing bucket, so no bar changes height as it leaves.
-        let maxReads = CGFloat(max(wave.readsPeak, 1))
-        let minBar: CGFloat = size == .hero ? 2 : 1.5
+        // w315: each half on its scale (`upPeak`, `downPeak`); the outgoing bucket counts, so no bar changes height as it leaves.
         let corner: CGFloat = size == .hero ? 2 : 1
         let first = offset > 0 && wave.outgoing != nil ? -1 : 0
         let cut = noDataFrom.map { NDWaveform.noDataX($0, width: canvas.width) }
@@ -240,7 +262,7 @@ struct NDWaveStrip: View, Animatable {
                          with: .color(palette.saves.opacity(alpha)))
             }
             if b.reads > 0 {
-                let bh = max(minBar, CGFloat(b.reads) / maxReads * down)
+                let bh = NDWaveform.readHeight(wave, reads: b.reads, size: size)
                 let radius = NDWaveform.barRadius(height: bh, width: bw, pill: false, corner: corner)
                 ctx.fill(Path(roundedRect: CGRect(x: x, y: cy + 0.5, width: bw, height: bh), cornerRadius: radius),
                          with: .color(palette.reads.opacity(alpha)))

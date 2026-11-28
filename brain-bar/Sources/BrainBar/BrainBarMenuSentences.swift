@@ -688,6 +688,15 @@ extension BrainBarMenuPresenter {
             guard let count else { return "Reads by agents unavailable." }
             return "\(count) reads by agents."
         }
+        /// w315: what each half's full height stands for, for VoiceOver (the gutter numbers' words).
+        static func activityScaleAccessibility(up: String?, down: String?) -> String {
+            switch (up, down) {
+            case let (up?, down?): "Full height above the line is \(up) saved or read by agents, below it \(down) session lines."
+            case let (up?, nil): "Full height above the line is \(up) saved or read by agents."
+            case let (nil, down?): "Full height below the line is \(down) session lines."
+            case (nil, nil): ""
+            }
+        }
         static let saved = "saved"
         static let sessionLinesWord = "lines"
         static let now = "now"
