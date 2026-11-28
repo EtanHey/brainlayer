@@ -1,0 +1,33 @@
+# w316 fail-first receipts (M4, swift test)
+# 1. Runtime red: sources at origin/main d7f08eff, this branch's test reduced to main-compatible assertions:
+	 Executed 1 test, with 2 failures (0 unexpected) in 1.259 (1.259) seconds
+brain-bar/Tests/BrainBarTests/BrainBarRangeSwitchGlassTests.swift:29: error: -[BrainBarTests.BrainBarRangeSwitchGlassTests testTheRangeSwitchIsTheGlassTabBar] : XCTAssertTrue failed - no system segmented control in the range switch
+brain-bar/Tests/BrainBarTests/BrainBarRangeSwitchGlassTests.swift:30: error: -[BrainBarTests.BrainBarRangeSwitchGlassTests testTheRangeSwitchIsTheGlassTabBar] : XCTAssertEqual failed: ("24.0") is not equal to ("22.0") - the heading's 22 pt row
+Test Case '-[BrainBarTests.BrainBarRangeSwitchGlassTests testTheRangeSwitchIsTheGlassTabBar]' failed (1.259 seconds).
+# 2. Compile red: sources at origin/main, the full new test class (no NDStore.rangeTabs / NDRangeControl.bar / metrics / tabs on main):
+brain-bar/Tests/BrainBarTests/BrainBarRangeSwitchGlassTests.swift:100:11: error: value of type 'NDStore' has no member 'rangeTabs'
+brain-bar/Tests/BrainBarTests/BrainBarRangeSwitchGlassTests.swift:105:16: error: value of type 'NDStore' has no member 'rangeTabs'
+brain-bar/Tests/BrainBarTests/BrainBarRangeSwitchGlassTests.swift:107:31: error: value of type 'NDStore' has no member 'rangeTabs'
+brain-bar/Tests/BrainBarTests/BrainBarRangeSwitchGlassTests.swift:113:38: error: type 'NDRangeControl' has no member 'metrics'
+brain-bar/Tests/BrainBarTests/BrainBarRangeSwitchGlassTests.swift:113:69: error: type 'NDRangeControl' has no member 'tabs'
+brain-bar/Tests/BrainBarTests/BrainBarRangeSwitchGlassTests.swift:115:84: error: value of type 'NDStore' has no member 'rangeTabs'
+brain-bar/Tests/BrainBarTests/BrainBarRangeSwitchGlassTests.swift:118:50: error: value of type 'NDStore' has no member 'rangeTabs'
+brain-bar/Tests/BrainBarTests/BrainBarRangeSwitchGlassTests.swift:119:71: error: value of type 'NDStore' has no member 'rangeTabs'
+brain-bar/Tests/BrainBarTests/BrainBarRangeSwitchGlassTests.swift:127:26: error: value of type 'NDStore' has no member 'rangeTabs'
+brain-bar/Tests/BrainBarTests/BrainBarRangeSwitchGlassTests.swift:128:26: error: value of type 'NDStore' has no member 'rangeTabs'
+brain-bar/Tests/BrainBarTests/BrainBarRangeSwitchGlassTests.swift:138:44: error: value of type 'NDRangeControl' has no member 'bar'
+brain-bar/Tests/BrainBarTests/BrainBarRangeSwitchGlassTests.swift:140:37: error: cannot infer key path type from context; consider explicitly specifying a root type
+brain-bar/Tests/BrainBarTests/BrainBarRangeSwitchGlassTests.swift:152:11: error: value of type 'NDStore' has no member 'rangeTabs'
+brain-bar/Tests/BrainBarTests/BrainBarRangeSwitchGlassTests.swift:153:11: error: value of type 'NDStore' has no member 'rangeTabs'
+brain-bar/Tests/BrainBarTests/BrainBarRangeSwitchGlassTests.swift:155:11: error: value of type 'NDStore' has no member 'rangeTabs'
+brain-bar/Tests/BrainBarTests/BrainBarRangeSwitchGlassTests.swift:156:48: error: value of type 'NDStore' has no member 'rangeTabs'
+brain-bar/Tests/BrainBarTests/BrainBarRangeSwitchGlassTests.swift:157:11: error: value of type 'NDStore' has no member 'rangeTabs'
+brain-bar/Tests/BrainBarTests/BrainBarRangeSwitchGlassTests.swift:159:23: error: value of type 'NDStore' has no member 'rangeTabs'
+brain-bar/Tests/BrainBarTests/BrainBarRangeSwitchGlassTests.swift:161:17: error: value of type 'NDStore' has no member 'rangeTabs'
+brain-bar/Tests/BrainBarTests/BrainBarRangeSwitchGlassTests.swift:161:37: error: reference to member 'resting' cannot be resolved without a contextual type
+# 3. Publish-guard red: this branch with the range committed on the click frame (a $selection sink) instead of at rest:
+brain-bar/Tests/BrainBarTests/BrainBarRangeSwitchGlassTests.swift:123: error: -[BrainBarTests.BrainBarRangeSwitchGlassTests testTheStorePublishesNothingWhileTheRangePillMoves] : XCTAssertEqual failed: ("1") is not equal to ("0") - the click's frame publishes nothing
+brain-bar/Tests/BrainBarTests/BrainBarRangeSwitchGlassTests.swift:127: error: -[BrainBarTests.BrainBarRangeSwitchGlassTests testTheStorePublishesNothingWhileTheRangePillMoves] : XCTAssertEqual failed: ("1") is not equal to ("0") - nothing published mid-motion
+brain-bar/Tests/BrainBarTests/BrainBarRangeSwitchGlassTests.swift:127: error: -[BrainBarTests.BrainBarRangeSwitchGlassTests testTheStorePublishesNothingWhileTheRangePillMoves] : XCTAssertEqual failed: ("1") is not equal to ("0") - nothing published mid-motion
+brain-bar/Tests/BrainBarTests/BrainBarRangeSwitchGlassTests.swift:127: error: -[BrainBarTests.BrainBarRangeSwitchGlassTests testTheStorePublishesNothingWhileTheRangePillMoves] : XCTAssertEqual failed: ("1") is not equal to ("0") - nothing published mid-motion
+brain-bar/Tests/BrainBarTests/BrainBarRangeSwitchGlassTests.swift:127: error: -[BrainBarTests.BrainBarRangeSwitchGlassTests testTheStorePublishesNothingWhileTheRangePillMoves] : XCTAssertEqual failed: ("1") is not equal to ("0") - nothing published mid-motion

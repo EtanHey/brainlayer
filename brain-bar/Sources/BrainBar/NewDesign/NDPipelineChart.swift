@@ -15,12 +15,12 @@ final class NDPipelineLabelView: NSView {
         var labels: [NSTextField] = []
         func add(_ words: String, rect: CGRect, caption: Bool) {
             let field = NSTextField(labelWithString: words)
-            field.font = .systemFont(ofSize: 11, weight: caption ? .medium : .regular)
+            field.font = caption ? NDPipelineLayout.laneLabelFont : .systemFont(ofSize: 11, weight: .regular)
             field.textColor = NDColor.t2
             field.alignment = .center
-            field.frame = caption ? rect.insetBy(dx: -4, dy: -4) : rect
-            field.drawsBackground = caption
-            field.backgroundColor = NDColor.card
+            field.frame = rect
+            if caption { Self.centre(field, on: CGPoint(x: rect.midX, y: rect.midY)) }
+            field.drawsBackground = false
             field.setAccessibilityElement(true)
             field.setAccessibilityRole(.staticText)
             field.setAccessibilityLabel(words)
@@ -35,6 +35,16 @@ final class NDPipelineLabelView: NSView {
         }
         setAccessibilityElement(false)
         setAccessibilityChildren(labels)
+    }
+
+    /// A caption sits ON its line (the chart draws the card-coloured knock-out under it,
+    /// `NDPipelineLayout.laneLabelKnockout`): the field takes its fitted size, so its text has equal padding on each side,
+    /// and is placed by its own baseline so the middle of its capitals is on the line.
+    static func centre(_ field: NSTextField, on p: CGPoint) {
+        field.sizeToFit()
+        let size = field.frame.size
+        let capMiddle = field.firstBaselineOffsetFromTop - (field.font?.capHeight ?? 0) / 2
+        field.frame = CGRect(x: p.x - size.width / 2, y: p.y - capMiddle, width: size.width, height: size.height)
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
@@ -146,7 +156,7 @@ struct NDPipelineChart: View {
                 let c = NDPipelineLayout.iconCentre(family)
                 Color.clear.frame(width: 22, height: 22)
                     .accessibilityElement()
-                    .accessibilityLabel(NDProvider.name(family))
+                    .accessibilityLabel(Self.providerLabel(family, state: state))
                     .allowsHitTesting(false)
                     .position(c)
             }
@@ -316,11 +326,11 @@ struct NDPipelineChart: View {
         drawStations(ctx, state: state, hovered: hovered)
         if state.allUnconfirmed {
             let words = state.lastKnownAt.map(Say.valuesLastKnownAt) ?? Say.everyPipeNotConfirmed
-            // CodeRabbit: the last-known caption masks the rail just like the other on-line captions.
-            let width = ceil(NSAttributedString(string: words, attributes: [.font: NSFont.systemFont(ofSize: 11, weight: .medium)]).size().width)
-            ctx.fill(Path(CGRect(x: NDPipelineLayout.size.width - width - 6, y: -2, width: width + 12, height: 16)),
-                     with: .color(ND.card))
-            put(ctx, text(words, size: 11, color: ND.t2, weight: .medium), x: NDPipelineLayout.size.width, baseline: 10, size: 11, anchor: .end)
+            // CodeRabbit: the last-known caption masks the rail just like the other on-line captions; like them, it sits
+            // centred on the rail, which runs into its knock-out and stops.
+            let rect = NDPipelineLayout.unconfirmedCaptionRect(words)
+            ctx.fill(Path(NDPipelineLayout.laneLabelKnockout(rect)), with: .color(ND.card))
+            ctx.draw(text(words, size: 11, color: ND.t2, weight: .medium), at: CGPoint(x: rect.maxX, y: rect.midY), anchor: .trailing)
         }
     }
 
@@ -344,10 +354,54 @@ struct NDPipelineChart: View {
                 if c.bothWays { arrowhead(ctx, end: pts[0], before: pts[1], shading: s.shading) }
             }
         }
+        // Each caption's knock-out: the line runs into it and out of it; the native caption is drawn on top, centred.
+        for (_, rect) in L.laneLabelRects() {
+            ctx.fill(Path(L.laneLabelKnockout(rect)), with: .color(ND.card))
+        }
+    }
+
+    /// w307: an icon's colour. A fault wins (red or amber); otherwise a harness with running agents takes its own colour,
+    /// and an idle or unmeasured one stays in the label colour.
+    enum AgentTone: Equatable { case fault(NDSeverity), harness, neutral }
+
+    static func agentTone(_ family: AgentFamily, state: NDPipelineState) -> AgentTone {
+        if !state.allUnconfirmed, let sev = state.agentFaults[family] { return .fault(sev) }
+        return (state.agentsRunning[family] ?? 0) > 0 ? .harness : .neutral
+    }
+
+    static func agentIconColor(_ family: AgentFamily, state: NDPipelineState) -> Color {
+        switch agentTone(family, state: state) {
+        case let .fault(sev): sev == .red ? ND.red : ND.orange
+        case .harness: ND.harness(family)
+        case .neutral: ND.t2
+        }
+    }
+
+    /// w307: the count drawn beside an icon: only for a measured harness with running agents.
+    static func agentCount(_ family: AgentFamily, state: NDPipelineState) -> Int? {
+        guard let n = state.agentsRunning[family], n > 0 else { return nil }
+        return n
+    }
+
+    /// w307: what VoiceOver reads for a provider ("Claude, 7 agents running").
+    static func providerLabel(_ family: AgentFamily, state: NDPipelineState) -> String {
+        Say.agentsRunning(NDProvider.name(family), state.agentsRunning[family])
+    }
+
+    /// The figures beside an icon, on their plate, their ink in `rect` (baseline on its bottom edge).
+    static func drawCount(_ ctx: GraphicsContext, _ count: Int, family: AgentFamily, faulted: Bool) {
+        typealias L = NDPipelineLayout
+        let rect = L.countRect(family, count: count, faulted: faulted)
+        if let plate = L.countPlate(family, count: count, faulted: faulted) { ctx.fill(Path(plate), with: .color(ND.card)) }
+        let resolved = ctx.resolve(text(L.countText(count), size: L.countFontSize, color: ND.harness(family), weight: .semibold, mono: true))
+        let size = resolved.measure(in: CGSize(width: 200, height: 40))
+        let baseline = resolved.firstBaseline(in: size)
+        ctx.draw(resolved, in: CGRect(x: rect.minX, y: rect.maxY - baseline, width: size.width, height: size.height))
     }
 
     /// The agents (R1.4 changes 1 to 3): four provider icons in one column, in the label colour; a provider a check names
-    /// takes the fault treatment at icon scale (red icon, 1.5 pt ring at r 12, the badge on its top-right).
+    /// takes the fault treatment at icon scale (red icon, 1.5 pt ring at r 12, the badge on its top-right). w307: a harness
+    /// with running agents is drawn in its colour with its count beside it.
     static func drawAgents(_ ctx: GraphicsContext, state: NDPipelineState, hovered: NDStation?) {
         typealias L = NDPipelineLayout
         let unconf = state.allUnconfirmed
@@ -361,10 +415,11 @@ struct NDPipelineChart: View {
         for (family, _) in L.agentRows {
             let c = L.iconCentre(family)
             let sev = unconf ? nil : state.agentFaults[family]
-            let color: Color = sev == .red ? ND.red : sev == .orange ? ND.orange : ND.t2
+            let color = agentIconColor(family, state: state)
             let icon = NDProvider.icon(family)
             let rect = CGRect(x: c.x - L.iconSize / 2, y: c.y - L.iconSize / 2, width: L.iconSize, height: L.iconSize)
             ctx.fill(NDSVGPath.path(icon.path, viewBox: icon.viewBox, in: rect), with: .color(color), style: FillStyle(eoFill: icon.evenOdd))
+            if let count = agentCount(family, state: state) { drawCount(ctx, count, family: family, faulted: sev != nil) }
             if let sev {
                 let ring = sev == .red ? ND.red : ND.orange
                 ctx.stroke(Path(ellipseIn: CGRect(x: c.x - 12, y: c.y - 12, width: 24, height: 24)), with: .color(ring), lineWidth: 1.5)
@@ -850,6 +905,9 @@ struct NDStationPopover: View {
         var label: String
         var value: String
         var tone: NDModel.Tone = .fine
+        /// #1899 R1 (N1): a value that reports nothing going on ("none running", "not known") reads as body text, so the
+        /// running harnesses carry the weight.
+        var quiet = false
     }
 
     /// What a panel says (R1.5 change 2): its mark, title, lines (the first in `t1` under a fault), rows and action.
@@ -866,9 +924,9 @@ struct NDStationPopover: View {
     var body: some View {
         NDStationPanelBody(model: Self.model(station, item: store.r1.stationItems[station], store.inputs, store.model, store.r1.pipeline),
                            waiting: NDDriveWaiting.shows(store.inputs, for: store.r1.stationItems[station]?.action),
-                           compactRows: station == .search || (station == .drive && store.inputs.backupProgress != nil),
+                           compactRows: station == .search,  // w303 review: Drive keeps its 8 pt above the rows while uploading
                            compactAction: station == .search,
-                           allowsWideLayout: station == .mac || station == .drive || station == .read) { store.perform($0) }
+                           allowsWideLayout: station == .read) { store.perform($0) }  // w303: not the copies
             .frame(maxWidth: .infinity, alignment: .leading)
     }
 
@@ -901,7 +959,8 @@ struct NDStationPopover: View {
     static func lines(_ station: NDStation, _ i: NDInputs, _ p: NDPipelineState) -> [String] {
         let checks = i.capture.verdict?.checks ?? []
         switch station {
-        case .agents: return [Say.agentsLine, Say.explainAgents]
+        // w307: the four providers are the panel's rows now, each with its running count, under one line.
+        case .agents: return [Say.agentsPanelLine]
         // R1.12 (I 12): shorter, the same facts as L45.
         case .mac: return [Say.localCopyPanel(Say.countWord(NDBackupFacts.keepNewest))]
         // R1.12 (E3, I 11): with the local copy late, nothing new was made to upload.
@@ -965,6 +1024,12 @@ struct NDStationPopover: View {
     /// Search "Last check: working" when the search check is green, and the word index that has no check yet.
     static func rows(_ station: NDStation, _ i: NDInputs, _ m: NDModel) -> [Line] {
         switch station {
+        case .agents:
+            // w307: each harness and how many of its agents run now ("none running" at 0), in the column's order.
+            return NDPipelineLayout.agentRows.map { family, _ in
+                let running = i.agents.agents.first { $0.family == family }?.running
+                return Line(label: NDProvider.name(family), value: Say.runningCount(running), quiet: (running ?? 0) == 0)
+            }
         case .queue:
             return i.savesWaiting == 0 ? [Line(label: Say.waitingRow, value: Say.none)] : []
         case .drive:

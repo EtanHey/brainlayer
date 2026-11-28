@@ -269,8 +269,8 @@ enum BrainBarDesignFixture {
         let day = dayWave.savesTotal + dayWave.readsTotal
         let claude = day * 62 / 100, codex = day * 28 / 100
         i.agents = NDAgents(agents: [
-            .init(family: .claude, sessions: 5, saves: claude), .init(family: .codex, sessions: 3, saves: codex),
-            .init(family: .cursor, sessions: 0, saves: day - claude - codex), .init(family: .gemini, sessions: 0, saves: 0),
+            .init(family: .claude, sessions: 5, saves: claude, running: 5), .init(family: .codex, sessions: 3, saves: codex, running: 3),
+            .init(family: .cursor, sessions: 0, saves: day - claude - codex, running: 0), .init(family: .gemini, sessions: 0, saves: 0, running: 0),
         ])
     }
 

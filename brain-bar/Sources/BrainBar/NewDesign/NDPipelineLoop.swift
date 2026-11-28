@@ -29,6 +29,44 @@ enum NDPipelineLayout {
     static func iconCentre(_ family: AgentFamily) -> CGPoint {
         CGPoint(x: agentsFrame.midX, y: agentRows.first { $0.0 == family }?.1 ?? agentsFrame.midY)
     }
+
+    /// w307: a harness's running-agent count sits beside its icon in 9 pt Semibold monospaced figures, the chart's figure
+    /// style. #1899 R1 (B3): its origin is 1.5 pt after the icon's box, so a 2-digit count's ink ends by x 58.95, inside
+    /// the column's border (inner edge 59.5); the reviewer's 2 pt left the widest pair ("88") 0.05 pt from it. The figures
+    /// centre 1 pt above the icon's centre. A faulted provider's ring (r 12) and badge take that room, so its count starts
+    /// 16 pt from the centre, clear of both. Nothing else moves.
+    static let countFontSize: CGFloat = 9
+    static var countFont: NSFont { .monospacedDigitSystemFont(ofSize: countFontSize, weight: .semibold) }
+    /// Whole figures, no grouping: the column is narrow and a thousand running agents is not a case to dress up.
+    static func countText(_ count: Int) -> String { String(count) }
+
+    private static func countLine(_ count: Int) -> CTLine {
+        CTLineCreateWithAttributedString(NSAttributedString(string: countText(count), attributes: [.font: countFont]))
+    }
+
+    /// The count's typographic box: its advance width by the figures' cap height, the baseline on its bottom edge.
+    static func countRect(_ family: AgentFamily, count: Int, faulted: Bool) -> CGRect {
+        let c = iconCentre(family)
+        let cap = countFont.capHeight
+        let width = CGFloat(CTLineGetTypographicBounds(countLine(count), nil, nil, nil))
+        let x = faulted ? c.x + 16 : c.x + iconSize / 2 + 1.5
+        return CGRect(x: x, y: c.y - 1 - cap / 2, width: width, height: cap)
+    }
+
+    /// The figures' ink, as drawn: what the frame, the connectors and the other rows must clear.
+    static func countInk(_ family: AgentFamily, count: Int, faulted: Bool) -> CGRect {
+        let box = countRect(family, count: count, faulted: faulted)
+        let ink = CTLineGetImageBounds(countLine(count), nil)
+        return CGRect(x: box.minX + ink.minX, y: box.maxY - ink.maxY, width: ink.width, height: ink.height)
+    }
+
+    /// The card-coloured plate under a count that reaches the column's border: the border (and the hover outline) breaks
+    /// around the figures, as a caption breaks a frame's border. Only a count that reaches the border gets one (3 digits, or
+    /// 2 beside a faulted provider's ring); it never reaches a connector (geometry test).
+    static func countPlate(_ family: AgentFamily, count: Int, faulted: Bool) -> CGRect? {
+        let ink = countInk(family, count: count, faulted: faulted)
+        return ink.maxX > agentsFrame.maxX - 0.5 ? ink.insetBy(dx: -1.5, dy: -1) : nil
+    }
     /// R14: The lower Memory port sits 3 pt below the box, 8 pt below the Kept-safe frame.
     /// R2 item 8: the diagram sits centred in its card, 32 pt from each side: everything right of the agents moved 26 pt
     /// left (the long first-row lines are shorter).
@@ -254,8 +292,12 @@ enum NDPipelineLayout {
     /// footer 28, page sides 24).
     static var footerTop: CGFloat { size.height + verticalPadding + 20 }
     /// R1.12 (§ B): the Activity card's bottom edge in chart coordinates (surface padding 16, heading row 22 + 8, the
-    /// 32 pt gap): no panel reaches into the card, its bars or its axis labels.
+    /// 32 pt gap): no panel reaches into the card, its bars or its axis labels, except the two copies' (w303, below).
     static var activityBottom: CGFloat { -verticalPadding - 8 - 22 - NDGrid.activityToPipeline }
+    /// w303: the top of the Activity card's plot in chart coordinates: the card's bottom edge, its 16 pt padding, the axis
+    /// row (4 + 14), the plot with its now tick (112 + 8) and the 14 pt above the plot. Above it sit the card's totals row
+    /// and its heading.
+    static var activityPlotTop: CGFloat { activityBottom - 16 - 18 - (NDActivitySection.plotHeight + 8) - 14 }
     /// The Activity card's axis labels end its 16 pt bottom padding above its edge: a panel may cover that empty padding
     /// (the comps do), never the bars or the labels.
     static var activityLabelsBottom: CGFloat { activityBottom - 16 }
@@ -300,6 +342,36 @@ enum NDPipelineLayout {
 
     static let topRowPanels: Set<NDStation> = [.agents, .read, .memory, .mac, .drive]
 
+    /// w303 (lead decision; relaxes R1.12 § B for these two only): Local copy and Google Drive open upward from their own
+    /// station as ordinary popovers at most 320 pt wide, over the bottom of the Activity card. The room § B left above
+    /// the top row (about 60 pt) was too short for their stacked body, so they widened into a one-row strip at least
+    /// 760 pt wide that covered the Pipeline heading's row and the "Session backups" line. While the pointer is on a
+    /// copy, the Activity chart is not what is being read; opening below lands on Weekly clean's words.
+    static let copyPanels: Set<NDStation> = [.mac, .drive]
+    static let copyPanelMaxWidth: CGFloat = 320
+    /// w303 review: the Activity and Pipeline cards' right edge in chart coordinates (the chart's 820 pt plus the card's
+    /// 16 pt padding). A copy panel over the cards stops there rather than at the window's 12 pt inset.
+    static var cardsRightEdge: CGFloat { size.width + 16 }
+    /// w303 review: the Activity card's axis words in chart coordinates, for every range (oldest at the plot's left, the
+    /// middle centred, "now" at its right; the plot starts after the 52 pt gutter, at chart x 52), 4 pt of margin around
+    /// each. A copy panel covers each one whole or not at all: before, Local copy's edge cut "30 min ago" to "30 mi".
+    static var activityAxisWords: [CGRect] {
+        let y = activityBottom - 16 - 14, left = NDActivitySection.gutter, right = left + NDActivitySection.plotWidth
+        return NDRange.allCases.flatMap { range -> [CGRect] in
+            let (oldest, middle, now) = range.axis
+            let w = [oldest, middle, now].map { textWidth($0, size: NDScale.caption) }
+            return [CGRect(x: left, y: y, width: w[0], height: 14), CGRect(x: (left + right - w[1]) / 2, y: y, width: w[1], height: 14),
+                    CGRect(x: right - w[2], y: y, width: w[2], height: 14)].map { $0.insetBy(dx: -4, dy: 0) }
+        }
+    }
+
+    /// How high a panel's body may reach: Search stays under the Kept-safe frame; the copies reach over the Activity
+    /// card's plot, never its totals row or heading (w303); every other panel stops at the card's axis labels (§ B).
+    static func panelCeiling(_ s: NDStation) -> CGFloat {
+        if s == .search { return keptSafe.maxY + 4 }
+        return copyPanels.contains(s) ? activityPlotTop : activityLabelsBottom + 4
+    }
+
     static func panelWords(_ s: NDStation, state: NDPipelineState, displayedWords: [NDStation: [CGRect]]) -> [CGRect] {
         displayedWords[s] ?? labelRects(s, state)
     }
@@ -321,7 +393,7 @@ enum NDPipelineLayout {
             }
             // The agents and job panels clear the native caption fields, including their drawing insets.
             if s == .agents || s == .jobs || s == .weekly {
-                obstacles += laneLabelRects().map { $0.1.insetBy(dx: -4, dy: -4) }
+                obstacles += laneLabelRects().map { laneLabelKnockout($0.1) }
             }
         }
         for station in actions {
@@ -359,9 +431,10 @@ enum NDPipelineLayout {
             tip = CGPoint(x: anchor.minX, y: own.midY)
             body = CGRect(x: tip.x - arrowLength - width, y: tip.y - height / 2, width: width, height: height)
         }
-        let ceiling = s == .search ? keptSafe.maxY + 4 : activityLabelsBottom + 4
+        let ceiling = panelCeiling(s)
         let low = horizontal ? max(windowInside.minX, tip.x - width + arrowInset) : max(ceiling, tip.y - height + arrowInset)
-        let high = horizontal ? min(windowInside.maxX - width, tip.x - arrowInset) : min(footerTop - 4 - height, tip.y - arrowInset)
+        let rightLimit = copyPanels.contains(s) ? cardsRightEdge : windowInside.maxX
+        let high = horizontal ? min(rightLimit - width, tip.x - arrowInset) : min(footerTop - 4 - height, tip.y - arrowInset)
         guard low <= high else { return nil }
         let arrowBox = horizontal
             ? CGRect(x: tip.x - arrowHalfWidth, y: min(tip.y, edge == .top ? body.maxY : body.minY), width: 2 * arrowHalfWidth,
@@ -375,14 +448,21 @@ enum NDPipelineLayout {
         for rect in obstacles + bodyObstacles {
             positions += horizontal ? [rect.minX - width, rect.maxX] : [rect.minY - height, rect.maxY]
         }
+        // A copy panel either clears an axis word or holds all of it.
+        let wholeOrNone = copyPanels.contains(s) ? activityAxisWords : []
+        for rect in wholeOrNone {
+            positions += horizontal ? [rect.minX - width, rect.maxX, rect.minX, rect.maxX - width]
+                : [rect.minY - height, rect.maxY, rect.minY, rect.maxY - height]
+        }
         for position in positions.sorted(by: { abs($0 - desired) < abs($1 - desired) }) where position >= low && position <= high {
             var placed = body
             if horizontal { placed.origin.x = position } else { placed.origin.y = position }
             let outer = placed.union(arrowBox)
-            guard placed.minX >= windowInside.minX, placed.maxX <= windowInside.maxX,
+            guard placed.minX >= windowInside.minX, placed.maxX <= min(windowInside.maxX, rightLimit),
                   placed.minY >= ceiling, placed.maxY <= footerTop - 4,
                   !obstacles.contains(where: { outer.intersects($0) }),
-                  !bodyObstacles.contains(where: { placed.intersects($0) }) else { continue }
+                  !bodyObstacles.contains(where: { placed.intersects($0) }),
+                  !wholeOrNone.contains(where: { placed.intersects($0) && !placed.contains($0) }) else { continue }
             return Panel(edge: edge, anchor: anchor, tip: tip, body: placed, outer: outer,
                          clearanceException: nil)
         }
@@ -391,6 +471,7 @@ enum NDPipelineLayout {
 
     /// L58b: progressively widen above, preserving content measurement and the same window margins.
     static func widenedPanelWidths(_ s: NDStation) -> [CGFloat] {
+        guard !copyPanels.contains(s) else { return [] }  // w303: the copies never widen past 320 pt
         let normal = panelSide(s, hasAction: false).width
         let limit = windowInside.maxX - windowInside.minX
         guard normal < limit else { return [] }
@@ -425,7 +506,8 @@ enum NDPipelineLayout {
             if let candidate = panelCandidate(s, edge: edge, state: state, actions: [], height: height,
                                               width: normal, displayedWords: displayedWords) { return candidate }
         }
-        for width: CGFloat in [normal + 40, normal + 80, normal + 160, normal + 240, 280, 264, 240, 220, 200, 180, 160] where width != normal && width <= windowInside.maxX - windowInside.minX {
+        let widest = copyPanels.contains(s) ? copyPanelMaxWidth : windowInside.maxX - windowInside.minX
+        for width: CGFloat in [normal + 40, normal + 80, normal + 160, normal + 240, 280, 264, 240, 220, 200, 180, 160] where width != normal && width <= widest {
             for edge in edges {
                 if let candidate = panelCandidate(s, edge: edge, state: state, actions: [], height: heightAtWidth(width),
                                                   width: width, displayedWords: displayedWords) { return candidate }
@@ -532,12 +614,64 @@ enum NDPipelineLayout {
         return out
     }
 
-    /// Only the two otherwise ambiguous routes get a short payload caption at rest.
-    static func laneLabelRects() -> [(String, CGRect)] {
-        [(Say.sessionBackups, yRail), (Say.searchAnswers, yAnswers)].map { words, y in
-            let w = textWidth(words, size: 11, weight: .medium)  // Gap 74 captions keep L54's type scale.
-            return (words, CGRect(x: 215 - w / 2, y: y - 8, width: w, height: 16))
+    /// Only the two otherwise ambiguous routes get a short payload caption at rest, each on its own line.
+    static let laneLabels: [(words: String, pipe: NDPipe)] = [(Say.sessionBackups, .rail), (Say.searchAnswers, .answers)]
+    /// The caption type (Gap 74 captions keep L54's type scale) and the height of its line box.
+    static var laneLabelFont: NSFont { .systemFont(ofSize: 11, weight: .medium) }
+    static var laneLabelLineHeight: CGFloat { NSLayoutManager().defaultLineHeight(for: laneLabelFont) }
+    /// The card-coloured knock-out runs this far past the words on each side, so the line visibly enters and leaves it.
+    static let laneLabelKnockoutPad: CGFloat = 6
+
+    /// The straight part of a pipe's longest segment, as drawn: between the ends of its rounded corners (each corner's
+    /// radius clamped as `NDPolyline.path` clamps it).
+    static func straightRun(_ pipe: NDPipe) -> (start: CGPoint, end: CGPoint) {
+        guard let c = connections.first(where: { $0.pipe == pipe }), c.line.points.count > 1 else { return (.zero, .zero) }
+        let pts = c.line.points
+        let i = (1..<pts.count).max { NDPolyline.seg(pts[$0 - 1], pts[$0]) < NDPolyline.seg(pts[$1 - 1], pts[$1]) } ?? 1
+        let a = pts[i - 1], b = pts[i], l = NDPolyline.seg(a, b)
+        func corner(at k: Int) -> CGFloat {
+            guard k > 0, k < pts.count - 1 else { return 0 }
+            return min(c.corner, NDPolyline.seg(pts[k - 1], pts[k]) / 2, NDPolyline.seg(pts[k], pts[k + 1]) / 2)
         }
+        let s = corner(at: i - 1) / l, e = corner(at: i) / l
+        return (CGPoint(x: a.x + (b.x - a.x) * s, y: a.y + (b.y - a.y) * s),
+                CGPoint(x: b.x - (b.x - a.x) * e, y: b.y - (b.y - a.y) * e))
+    }
+
+    /// Where the return line stops being clear of the job panels: Nightly check-up's panel opens beside its words, its
+    /// arrow starting at their right edge, and runs down across the return line; Weekly clean's opens below its own words,
+    /// further right. The knock-out of "Search answers" ends here, so no open panel's edge ever cuts through it (R13).
+    static var answersClearEdge: CGFloat { purposeRect(.jobs)?.maxX ?? .greatestFiniteMagnitude }
+
+    /// The one column both route captions share, so they read as a pair: the middle of their straight runs, moved left
+    /// only as far as the job panels force "Search answers" (its knock-out ends at `answersClearEdge`).
+    static var laneLabelColumn: CGFloat {
+        let mids = laneLabels.map { straightRun($0.pipe) }.map { ($0.start.x + $0.end.x) / 2 }
+        let answers = textWidth(Say.searchAnswers, size: 11, weight: .medium)
+        return min(mids.min() ?? 0, answersClearEdge - laneLabelKnockoutPad - answers / 2)
+    }
+
+    /// Each caption's words box: its line box centred on its own line, horizontally centred on the shared column.
+    static func laneLabelRects() -> [(String, CGRect)] {
+        let x = laneLabelColumn
+        return laneLabels.map { words, pipe in
+            let run = straightRun(pipe)
+            let y = (run.start.y + run.end.y) / 2
+            let w = textWidth(words, size: 11, weight: .medium), h = laneLabelLineHeight
+            return (words, CGRect(x: x - w / 2, y: y - h / 2, width: w, height: h))
+        }
+    }
+
+    /// The not-confirmed caption ("not confirmed: values last known at 06:00"): on the rail at the chart's right edge, its
+    /// line box centred on the rail like the route captions'.
+    static func unconfirmedCaptionRect(_ words: String) -> CGRect {
+        let w = ceil(NSAttributedString(string: words, attributes: [.font: laneLabelFont]).size().width), h = laneLabelLineHeight
+        return CGRect(x: size.width - w, y: yRail - h / 2, width: w, height: h)
+    }
+
+    /// The knock-out behind a caption: the card colour, `laneLabelKnockoutPad` past the words on each side, 16 pt tall.
+    static func laneLabelKnockout(_ words: CGRect) -> CGRect {
+        CGRect(x: words.minX - laneLabelKnockoutPad, y: words.midY - 8, width: words.width + 2 * laneLabelKnockoutPad, height: 16)
     }
 }
 

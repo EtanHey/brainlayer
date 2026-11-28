@@ -1939,7 +1939,7 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
         let providers = try XCTUnwrap(chart.components(separatedBy: "ForEach(NDPipelineLayout.agentRows").last?.components(separatedBy: ".position(c)").first)
         XCTAssertTrue(providers.contains(".allowsHitTesting(false)"))
         XCTAssertFalse(providers.contains(".help(NDProvider.name(family))"))
-        XCTAssertTrue(providers.contains(".accessibilityLabel(NDProvider.name(family))"))
+        XCTAssertTrue(providers.contains(".accessibilityLabel(Self.providerLabel(family, state: state))"))
         for family in AgentFamily.allCases {
             let icon = NDProvider.icon(family)
             let path = NDSVGPath.path(icon.path, viewBox: icon.viewBox, in: CGRect(x: 0, y: 0, width: 16, height: 16))
@@ -1989,7 +1989,9 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
     func testYourAgentsWordsAreInTheGroupHover() {
         XCTAssertEqual(NDPipelineLayout.name(.agents), Say.yourAgents)
         let i = Fixture.inputs(.calm)
-        XCTAssertEqual(NDStationPopover.lines(.agents, i, pipeline(.calm)).first, Say.agentsLine, "the group's panel lists the four providers")
+        // w307: the group's panel lists the four providers as its rows, each with its running count.
+        XCTAssertEqual(NDStationPopover.lines(.agents, i, pipeline(.calm)), [Say.agentsPanelLine])
+        XCTAssertEqual(NDStationPopover.rows(.agents, i, NDModel.make(i)).map(\.label), ["Claude", "Codex", "Cursor", "Antigravity"])
     }
 
     func testSessionsAndSavesWordsAreInTheirStationHovers() {
@@ -2186,7 +2188,10 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
     // MARK: Round 2a decisions (R2A-DECISIONS.md, "Taken"), one test each
 
     /// R2A 1, as R1.12 (§ B) has it: every panel keeps 12 pt inside the window's content edge on every side, with no
-    /// exception: none passes the left edge, none hangs below the window, none reaches into the Activity card.
+    /// exception: none passes the left edge, none hangs below the window. None reaches into the Activity card's bars or
+    /// axis labels, except w303's two copies (Local copy, Google Drive): they open upward over the card's plot as
+    /// ordinary 320 pt popovers, because the room § B left them made them a 760 pt strip; they still stop below the
+    /// card's totals row.
     func testR2A1PanelsStayInsideTheWindow() {
         let L = NDPipelineLayout.self
         for name in Fixture.Name.allCases {
@@ -2198,7 +2203,8 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
                 XCTAssertGreaterThanOrEqual(panel.outer.minX, L.windowInside.minX - 0.01, where_)
                 XCTAssertLessThanOrEqual(panel.outer.maxX, L.windowInside.maxX + 0.01, where_)
                 XCTAssertLessThanOrEqual(panel.outer.maxY, L.windowInside.maxY + 0.01, where_)
-                XCTAssertGreaterThanOrEqual(panel.outer.minY, L.activityLabelsBottom - 0.01,
+                let ceiling = L.copyPanels.contains(station) ? L.activityPlotTop : L.activityLabelsBottom
+                XCTAssertGreaterThanOrEqual(panel.outer.minY, ceiling - 0.01,
                                             "\(where_): over the Activity card's bars or axis labels (\(panel.outer.minY))")
             }
         }
@@ -3251,7 +3257,9 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
         let source = try String(contentsOf: URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
             .deletingLastPathComponent().appendingPathComponent("Sources/BrainBar/NewDesign/NDStationPanel.swift"), encoding: .utf8)
         XCTAssertTrue(source.contains("Text(keepingUnits(line)).font(NDType.panelBody).foregroundStyle(ND.t2)"))
-        XCTAssertTrue(source.contains("Text(line.label).font(NDType.panelBody)") && source.contains("Text(line.value).font(NDType.panelValue)"))
+        // #1899 R1 (N1): a quiet value ("none running", "not known") reads as body text; every other value stays semibold.
+        XCTAssertTrue(source.contains("Text(line.label).font(NDType.panelBody)")
+                      && source.contains("Text(line.value).font(line.quiet ? NDType.panelBody : NDType.panelValue)"))
         // Two of the deck's sentences run to three lines at 12 pt on their own: Read's explanation and the first sentence
         // of Drive's. Holding them to two needs shorter sentences in the deck (reported, not rewritten here).
         let longSentences = [Say.explainRead, NDStationPanelBody.paragraphs([Say.explainDrive])[0], Say.explainNightly]
