@@ -435,11 +435,16 @@ struct GlassTabBar: View {
         .onAppear { pager.reduceMotion = reduceMotion }
         .onChange(of: reduceMotion) { _, value in pager.reduceMotion = value }
         .accessibilityRepresentation {
-            Picker(accessibilityLabel, selection: Binding(get: { pager.selection }, set: { pager.select($0, at: now()) })) {
+            Picker(accessibilityLabel, selection: accessibilitySelection) {
                 ForEach(tabs.indices, id: \.self) { i in Text(tabs[i].spokenLabel).tag(i) }
             }
             .pickerStyle(.segmented)
         }
+    }
+
+    /// What VoiceOver's picker reads and sets: the pager's selection; a pick goes through `select`, like a click.
+    var accessibilitySelection: Binding<Int> {
+        Binding(get: { pager.selection }, set: { pager.select($0, at: now()) })
     }
 
     @ViewBuilder private func glassPill(_ pill: CGRect) -> some View {

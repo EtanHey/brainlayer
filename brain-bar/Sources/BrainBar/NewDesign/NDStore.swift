@@ -11,8 +11,19 @@ import SwiftUI
     /// What round 1 of the design draws (pipeline, headline items, dropdown rows, footer), from the same inputs.
     var r1: NDR1 { NDR1.make(inputs, model) }
     @Published var range: NDRange = .hour {
-        didSet { if range != oldValue { refreshWaves(force: true, applyWhileHeld: true) } }
+        didSet {
+            guard range != oldValue else { return }
+            // A range set anywhere else (the capture driver, a test) moves the switch's pill too; one picked on the
+            // switch is already its selection.
+            rangeTabs.follow(NDRange.allCases.firstIndex(of: range) ?? 0)
+            refreshWaves(force: true, applyWhileHeld: true)
+        }
     }
+    /// The Activity range switch's pill (`GlassTabPager`, the page tabs' model). Like the pages, a range picked there
+    /// (click, keyboard, VoiceOver, a released pill) reaches `range` when the pill comes to REST, never on the frame the
+    /// spring starts: `range` publishes the store, and every observer of the store re-evaluating then is what froze the
+    /// first 45-120 ms of the page tabs' motion on the M1 (PR #1896, recording r1).
+    let rangeTabs = GlassTabPager(count: NDRange.allCases.count)
     /// The one "current page": the tabs read it, the window root draws it, the window's height follows it.
     /// D1 (real screen, round 1): the window resize used to run from `$page`, which publishes in willSet, so the resize's
     /// layout pass drew the old page and the old selected segment at the new height. Followers now run here, after the
@@ -208,6 +219,8 @@ import SwiftUI
             tabsDidRest?()
         }
         tabs.onMove = { [weak self] in self?.tabsWillMove?() }
+        rangeTabs.jump(to: NDRange.allCases.firstIndex(of: range) ?? 0)
+        rangeTabs.onSelect = { [weak self] index in self?.range = NDRange.allCases[index] }
     }
 
     /// F03: the report says what the surfaces show, runtime warnings included, through the existing scrubber.
