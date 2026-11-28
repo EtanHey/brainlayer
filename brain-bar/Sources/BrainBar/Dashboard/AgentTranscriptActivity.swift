@@ -137,6 +137,13 @@ enum AgentTranscriptActivity {
         return line
     }
 
+    /// Identity of the descriptor the host actually holds, captured with its pathname.
+    struct HeldFile: Hashable, Sendable {
+        let path: String
+        let device: UInt64
+        let inode: UInt64
+    }
+
     // MARK: running hosted Codex threads (#1899 R1, R2)
 
     /// Originators whose sessions have a process of their own, counted from `ps`: the interactive CLI and `codex exec`.
@@ -178,6 +185,10 @@ enum AgentTranscriptActivity {
 
         private struct Entry {
             var identity: Identity
+            var observedSize: UInt64 = 0
+            var stamp: [Int] = [] // nanosecond mtime/ctime at the last sample
+            var tail = Data()      // consumed bytes immediately before offset, checked even on growth
+            var discardingRecord = false
             var head = Data()      // the first `headLength` bytes read, compared on every sample (K4)
             var offset: UInt64 = 0 // bytes consumed: complete lines read, plus `pending`
             var pending = Data()   // a line still without its newline, carried to the next read (K2)
@@ -188,15 +199,17 @@ enum AgentTranscriptActivity {
 
         private let lock = NSLock()
         private var entries: [String: Entry] = [:]
-        private let openFiles: @Sendable (Int32) -> [String]?
+        private let openFiles: @Sendable (Int32) -> [HeldFile]?
         private let sampleBudget: Int
         /// Bytes per read.
         static let chunk = 1 << 20
         /// K2: bytes read per sample, across every held file; a file further behind resumes on the next sample.
         static let defaultSampleBudget = 8 << 20
         static let headLength = 256
+        /// Retained bytes per record. Supports the >1 MiB completion fixture while bounding malformed input.
+        static let recordLimit = 2 << 20
 
-        init(openFiles: @escaping @Sendable (Int32) -> [String]?, sampleBudget: Int = defaultSampleBudget) {
+        init(openFiles: @escaping @Sendable (Int32) -> [HeldFile]?, sampleBudget: Int = defaultSampleBudget) {
             self.openFiles = openFiles
             self.sampleBudget = sampleBudget
         }
@@ -211,25 +224,28 @@ enum AgentTranscriptActivity {
         func runningThreads(hosts: [Int32]) -> Int? {
             lock.lock()
             defer { lock.unlock() }
-            var held: Set<String> = []
+            var held: Set<HeldFile> = []
             // K3: whatever happens below, keep state only for files a live host holds.
-            defer { entries = entries.filter { held.contains($0.key) } }
+            defer {
+                let paths = Set(held.map(\.path))
+                entries = entries.filter { paths.contains($0.key) }
+            }
             for pid in hosts {
                 guard let files = openFiles(pid) else { return nil }
-                held.formUnion(files.filter(Self.isRollout))
+                held.formUnion(files.filter { Self.isRollout($0.path) })
             }
             var budget = sampleBudget
             var proven = true
             var running: Set<String> = []
-            for path in held.sorted() {
-                guard let entry = advance(path, budget: &budget), entry.caughtUp else {
+            for file in held.sorted(by: { $0.path < $1.path }) {
+                guard let entry = advance(file, budget: &budget), entry.caughtUp else {
                     proven = false  // unreadable, or still catching up: keep reading the others
                     continue
                 }
                 switch (entry.kind, entry.turn) {
                 case (.pending, _), (.notHosted, _): continue
                 case (.unknown, _), (.hosted, .unknown): proven = false
-                case (.hosted, .started): running.insert(AgentTranscriptActivity.sessionID(URL(fileURLWithPath: path)))
+                case (.hosted, .started): running.insert(AgentTranscriptActivity.sessionID(URL(fileURLWithPath: file.path)))
                 case (.hosted, .none), (.hosted, .finished): continue
                 }
             }
@@ -243,22 +259,30 @@ enum AgentTranscriptActivity {
 
         /// Reads, within `budget`, what the file gained since the last sample (from the start for a new or different
         /// file); nil when it cannot be opened, measured or read.
-        private func advance(_ path: String, budget: inout Int) -> Entry? {
+        private func advance(_ file: HeldFile, budget: inout Int) -> Entry? {
+            let path = file.path
             // K4: open first, then measure the open file, so the bytes read are the bytes measured.
-            let fd = open(path, O_RDONLY | O_CLOEXEC)
+            let fd = open(path, O_RDONLY | O_CLOEXEC | O_NONBLOCK | O_NOFOLLOW)
             guard fd >= 0 else { return nil }
             let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
             var st = stat()
-            guard fstat(fd, &st) == 0 else { return nil }
+            guard fstat(fd, &st) == 0, st.st_mode & S_IFMT == S_IFREG,
+                  UInt64(UInt32(bitPattern: st.st_dev)) == file.device, UInt64(st.st_ino) == file.inode else { return nil }
             let size = UInt64(max(0, st.st_size))
             let identity = Identity(device: UInt64(UInt32(bitPattern: st.st_dev)), inode: UInt64(st.st_ino), born: st.st_birthtimespec)
+            let stamp = [st.st_mtimespec.tv_sec, st.st_mtimespec.tv_nsec, st.st_ctimespec.tv_sec, st.st_ctimespec.tv_nsec]
             var next = Entry(identity: identity)
-            if let kept = entries[path], kept.identity == identity, kept.offset <= size {
+            if let kept = entries[path], kept.identity == identity, kept.offset <= size,
+               !(size <= kept.observedSize && stamp != kept.stamp) {
                 if kept.head.isEmpty { next = kept } else {
                     guard (try? handle.seek(toOffset: 0)) != nil, let head = try? handle.read(upToCount: kept.head.count) else { return nil }
-                    if head == kept.head { next = kept }
+                    guard (try? handle.seek(toOffset: kept.offset - UInt64(kept.tail.count))) != nil,
+                          let tail = try? handle.read(upToCount: kept.tail.count) else { return nil }
+                    if head == kept.head, tail == kept.tail { next = kept }
                 }
             }
+            next.observedSize = size
+            next.stamp = stamp
             while next.offset < size, budget > 0 {
                 let want = Int(min(UInt64(Self.chunk), size - next.offset, UInt64(budget)))
                 guard (try? handle.seek(toOffset: next.offset)) != nil,
@@ -268,13 +292,31 @@ enum AgentTranscriptActivity {
                     next.head.append(data.prefix(Self.headLength - next.head.count))
                 }
                 next.offset += UInt64(data.count)
-                next.pending.append(data)
-                guard let lastNewline = next.pending.lastIndex(of: UInt8(ascii: "\n")) else { continue }
-                for line in next.pending[next.pending.startIndex..<lastNewline].split(separator: UInt8(ascii: "\n"),
-                                                                                     omittingEmptySubsequences: false) {
-                    if next.kind == .pending { next.kind = Self.kind(line) } else { next.turn = Self.turn(after: next.turn, line: line) }
+                next.tail = Data((next.tail + data).suffix(Self.headLength))
+                // Frame only the new chunk. Never search an ever-growing pending buffer again.
+                var start = data.startIndex
+                while start < data.endIndex {
+                    let newline = data[start...].firstIndex(of: UInt8(ascii: "\n"))
+                    let end = newline ?? data.endIndex
+                    if !next.discardingRecord {
+                        if end - start > Self.recordLimit - next.pending.count {
+                            next.pending.removeAll(keepingCapacity: false)
+                            next.discardingRecord = true
+                            next.turn = .unknown
+                            if next.kind == .pending { next.kind = .unknown }
+                        } else {
+                            next.pending.append(data[start..<end])
+                        }
+                    }
+                    guard let newline else { break }
+                    if !next.discardingRecord {
+                        if next.kind == .pending { next.kind = Self.kind(next.pending) }
+                        else { next.turn = Self.turn(after: next.turn, line: next.pending) }
+                    }
+                    next.pending.removeAll(keepingCapacity: false)
+                    next.discardingRecord = false
+                    start = newline + 1
                 }
-                next.pending = Data(next.pending[(lastNewline + 1)...])
             }
             next.caughtUp = next.offset == size
             entries[path] = next
@@ -311,11 +353,11 @@ enum AgentTranscriptActivity {
     }
     static let listRetries = 4
 
-    /// The paths of the files a live process holds open, from the kernel (`proc_pidinfo` / `proc_pidfdinfo`); nil when the
+    /// The paths and descriptor identities of files a live process holds open, from the kernel (`proc_pidinfo` / `proc_pidfdinfo`); nil when the
     /// list cannot be read whole. K1: a list that fills its buffer may be cut short, so it is read again into a buffer
     /// twice the size, at most `listRetries` times, then nil. An fd closed between the list and its read is skipped; any
     /// other failure is nil.
-    static func openFilePaths(_ pid: Int32, listFDs: ListFDs = kernelListFDs) -> [String]? {
+    static func openFilePaths(_ pid: Int32, listFDs: ListFDs = kernelListFDs) -> [HeldFile]? {
         let needed = listFDs(pid, nil, 0)
         guard needed > 0 else { return nil }
         let stride = MemoryLayout<proc_fdinfo>.stride
@@ -329,7 +371,7 @@ enum AgentTranscriptActivity {
                 capacity *= 2
                 continue
             }
-            var paths: [String] = []
+            var paths: [HeldFile] = []
             for fd in fds.prefix(Int(used) / stride) where fd.proc_fdtype == UInt32(PROX_FDTYPE_VNODE) {
                 var info = vnode_fdinfowithpath()
                 let size = Int32(MemoryLayout<vnode_fdinfowithpath>.size)
@@ -341,7 +383,9 @@ enum AgentTranscriptActivity {
                 let path = withUnsafeBytes(of: &info.pvip.vip_path) { raw in
                     String(cString: raw.bindMemory(to: CChar.self).baseAddress!)
                 }
-                paths.append(path)
+                paths.append(HeldFile(path: path,
+                                      device: UInt64(info.pvip.vip_vi.vi_stat.vst_dev),
+                                      inode: UInt64(info.pvip.vip_vi.vi_stat.vst_ino)))
             }
             return paths
         }

@@ -55,6 +55,8 @@ struct AgentRunning: Sendable, Equatable {
     var processes: [AgentHarness: Int] = [:]
     /// The live `codex app-server` processes: their threads have no process of their own.
     var codexHosts: [Int32] = []
+    /// A Codex role is unknown when a configured kernel argv probe fails.
+    var codexArgumentsReadable = true
     var codexHostAlive: Bool { !codexHosts.isEmpty }
     /// Their threads that are mid-turn, proven by the host holding the rollout; nil when not measured.
     var hostedCodexThreads: Int? = nil
@@ -69,7 +71,9 @@ struct AgentRunning: Sendable, Equatable {
         let own = processes[harness] ?? 0
         switch harness {
         case .antigravity: return antigravityHostAlive ? nil : own
-        case .codex: return codexHostAlive ? hostedCodexThreads.map { own + $0 } : own
+        case .codex:
+            guard codexArgumentsReadable else { return nil }
+            return codexHostAlive ? hostedCodexThreads.map { own + $0 } : own
         default: return own
         }
     }
@@ -186,6 +190,7 @@ struct AgentActivitySnapshot: Sendable, Equatable {
 final class AgentActivityMonitor: Sendable {
     private let snapshotProvider: @Sendable () -> String?
     private let executablePathResolver: @Sendable (Int32) -> String?
+    private let argumentsResolver: (@Sendable (Int32) -> [String]?)?
     private let argv0Resolver: @Sendable (Int32) -> String?
     private let transcriptSessions: @Sendable () -> [AgentFamily: Int]
     private let hostedCodexThreads: @Sendable ([Int32]) -> Int?
@@ -195,12 +200,14 @@ final class AgentActivityMonitor: Sendable {
     init(
         snapshotProvider: @escaping @Sendable () -> String?,
         executablePathResolver: @escaping @Sendable (Int32) -> String?,
+        argumentsResolver: (@Sendable (Int32) -> [String]?)? = nil,
         argv0Resolver: @escaping @Sendable (Int32) -> String? = { _ in nil },
         transcriptSessions: @escaping @Sendable () -> [AgentFamily: Int] = { [:] },
         hostedCodexThreads: @escaping @Sendable ([Int32]) -> Int? = { _ in nil }
     ) {
         self.snapshotProvider = snapshotProvider
         self.executablePathResolver = executablePathResolver
+        self.argumentsResolver = argumentsResolver
         self.argv0Resolver = argv0Resolver
         self.transcriptSessions = transcriptSessions
         self.hostedCodexThreads = hostedCodexThreads
@@ -211,7 +218,7 @@ final class AgentActivityMonitor: Sendable {
     static let live = AgentActivityMonitor(
         snapshotProvider: AgentActivityMonitor.captureProcessSnapshot,
         executablePathResolver: AgentActivityMonitor.kernelExecutablePath,
-        argv0Resolver: AgentActivityMonitor.kernelArgv0,
+        argumentsResolver: AgentActivityMonitor.kernelArguments,
         transcriptSessions: { liveTranscriptSessions.counts() },
         hostedCodexThreads: { liveCodexTurns.runningThreads(hosts: $0) }
     )
@@ -225,10 +232,11 @@ final class AgentActivityMonitor: Sendable {
 
     func sample() -> AgentActivitySnapshot {
         guard let snapshot = snapshotProvider() else { return .unavailable("ps capture failed") }
-        let parsed = Self.parse(snapshot, executablePath: executablePathResolver, argv0: argv0Resolver)
+        let parsed = Self.parse(snapshot, executablePath: executablePathResolver, argv0: argv0Resolver, argv: argumentsResolver)
             .merging(transcriptSessions: transcriptSessions())
-        // Hosted threads are read only while a server hosts them: with none alive, a rollout left mid-turn is not running.
-        return parsed.running.codexHostAlive ? parsed.withHostedCodexThreads(hostedCodexThreads(parsed.running.codexHosts)) : parsed
+        // An empty host list evicts the previous hosts' cached records without listing any fd.
+        let hosted = hostedCodexThreads(parsed.running.codexHosts)
+        return parsed.running.codexHostAlive ? parsed.withHostedCodexThreads(hosted) : parsed
     }
 
     struct ProcessRow: Equatable {
@@ -257,7 +265,8 @@ final class AgentActivityMonitor: Sendable {
     static func parse(
         _ snapshot: String,
         executablePath: (Int32) -> String? = { _ in nil },
-        argv0: (Int32) -> String? = { _ in nil }
+        argv0: (Int32) -> String? = { _ in nil },
+        argv: ((Int32) -> [String]?)? = nil
     ) -> AgentActivitySnapshot {
         let rows = snapshot.split(whereSeparator: \.isNewline).compactMap(parseRow)
         var parentByPID: [Int32: Int32] = [:]
@@ -270,7 +279,13 @@ final class AgentActivityMonitor: Sendable {
             // The kernel path is resolved BEFORE classification (#1019 R1): it marks where a
             // spaced argv[0] ends, so the binary, its role and its flags are read correctly.
             row.executablePath = executablePath(row.pid)
-            let invocation = Invocation(command: row.command, kernelPath: row.executablePath, actualArgv0: argv0(row.pid))
+            let arguments = argv?(row.pid)
+            let invocation = Invocation(command: row.command, kernelPath: row.executablePath,
+                                        actualArgv0: argv0(row.pid), actualArguments: arguments)
+            if invocation.binary == "codex", argv != nil, arguments == nil {
+                running.codexArgumentsReadable = false
+                continue  // kernel argv could not be read; ps words cannot prove this process's role
+            }
             // A Codex app server (T3 Code's, or the Codex app's own bundled one) hosts threads without processes.
             if invocation.binary == "codex", codexRole(invocation) == "app-server" { running.codexHosts.append(row.pid) }
             guard !isAppOrSystemExecutable(row.executablePath) else { continue }
@@ -304,7 +319,12 @@ final class AgentActivityMonitor: Sendable {
         let argv0: String
         let arguments: [String]
 
-        init(command: String, kernelPath: String?, actualArgv0: String? = nil) {
+        init(command: String, kernelPath: String?, actualArgv0: String? = nil, actualArguments: [String]? = nil) {
+            if let actualArguments, let first = actualArguments.first {
+                argv0 = first.lowercased()
+                arguments = actualArguments.dropFirst().map { $0.lowercased() }
+                return
+            }
             let path = kernelPath?.lowercased() ?? ""
             let actual = actualArgv0?.lowercased() ?? ""
             let rest: Substring
@@ -450,7 +470,9 @@ final class AgentActivityMonitor: Sendable {
 
     /// KERN_PROCARGS2 stores argc, then the exec path, NUL padding, and the original
     /// NUL-terminated argv strings. argv[0] preserves a symlink launcher path.
-    static func kernelArgv0(_ pid: Int32) -> String? {
+    static func kernelArgv0(_ pid: Int32) -> String? { kernelArguments(pid)?.first }
+
+    static func kernelArguments(_ pid: Int32) -> [String]? {
         var argmax: Int32 = 0
         var argmaxSize = MemoryLayout<Int32>.size
         guard sysctlbyname("kern.argmax", &argmax, &argmaxSize, nil, 0) == 0, argmax > 0 else { return nil }
@@ -462,20 +484,29 @@ final class AgentActivityMonitor: Sendable {
         }
         guard result == 0,
               size > MemoryLayout<Int32>.size else { return nil }
-        return argv0(fromProcessArgs: Array(bytes.prefix(size)))
+        return arguments(fromProcessArgs: Array(bytes.prefix(size)))
     }
 
-    static func argv0(fromProcessArgs bytes: [UInt8]) -> String? {
+    static func argv0(fromProcessArgs bytes: [UInt8]) -> String? { arguments(fromProcessArgs: bytes)?.first }
+
+    /// Read exactly argc NUL-terminated arguments, retaining spaces and empty values; never read the environment as argv.
+    static func arguments(fromProcessArgs bytes: [UInt8]) -> [String]? {
         let size = bytes.count
         guard size > MemoryLayout<Int32>.size else { return nil }
         let argc = bytes.withUnsafeBytes { $0.loadUnaligned(as: Int32.self) }
-        guard argc > 0 else { return nil }
+        guard argc > 0, Int(argc) <= size - MemoryLayout<Int32>.size else { return nil }
         var offset = MemoryLayout<Int32>.size
         guard let execEnd = bytes[offset..<size].firstIndex(of: 0) else { return nil }
         offset = execEnd
         while offset < size && bytes[offset] == 0 { offset += 1 }
-        guard offset < size, let argvEnd = bytes[offset..<size].firstIndex(of: 0), argvEnd > offset else { return nil }
-        return String(bytes: bytes[offset..<argvEnd], encoding: .utf8)
+        var result: [String] = []
+        for _ in 0..<argc {
+            guard offset < size, let end = bytes[offset..<size].firstIndex(of: 0),
+                  let argument = String(bytes: bytes[offset..<end], encoding: .utf8) else { return nil }
+            result.append(argument)
+            offset = end + 1
+        }
+        return result
     }
 
     /// Shells, launch wrappers and text tools are never the session process: a real
