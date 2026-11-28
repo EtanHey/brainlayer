@@ -1,0 +1,1295 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Persistent memory for AI agents — search, think, recall across every conversation">
+      
+      
+      
+        <link rel="canonical" href="https://etanhey.github.io/brainlayer/backup-apfs-clone/">
+      
+      
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/logo.svg">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.8.2">
+    
+    
+      
+        <title>APFS daily snapshots - BrainLayer</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.57a0d79d.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.fb2fffe2.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+    
+    
+      <link rel="stylesheet" href="../stylesheets/extra.css">
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="slate" data-md-color-primary="custom" data-md-color-accent="custom">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#apfs-daily-snapshots" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="BrainLayer" class="md-header__button md-logo" aria-label="BrainLayer" data-md-component="logo">
+      
+  <img src="../assets/logo.svg" alt="logo">
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            BrainLayer
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              APFS daily snapshots
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+    
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/EtanHey/brainlayer" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    EtanHey/brainlayer
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="BrainLayer" class="md-nav__button md-logo" aria-label="BrainLayer" data-md-component="logo">
+      
+  <img src="../assets/logo.svg" alt="logo">
+
+    </a>
+    BrainLayer
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/EtanHey/brainlayer" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    EtanHey/brainlayer
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting Started
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Getting Started
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../quickstart/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quick Start
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../configuration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../mcp-tools/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    MCP Tools
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../enrichment/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Retired Enrichment
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../kg-spec/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    KG Specification
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Guides
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Guides
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../data-locations/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Data Locations
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../enrichment-runbook/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Retired Enrichment Runbook
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../local-models-guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Local Models
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../mcp-config/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    MCP Config
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Decisions
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Decisions
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0000-template/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR Template
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0001-sqlite-vec-over-dedicated-vector-db/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0001: sqlite-vec
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0002-reciprocal-rank-fusion-for-hybrid-search/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0002: RRF Hybrid Search
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../roadmap/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Roadmap
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../contributing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Contributing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#consistent-db-and-wal" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Consistent DB and WAL
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#space-budget-and-verification" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Space budget and verification
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#regression-proof" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Regression proof
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Regression proof">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#m1-copy-acceptance-2026-11-22" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        M1 copy acceptance, 2026-11-22
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#m4-copy-acceptance-2026-11-23" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        M4 copy acceptance, 2026-11-23
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="apfs-daily-snapshots">APFS daily snapshots</h1>
+<p>Daily snapshots use an APFS clone when the source and staging directory share an APFS volume.
+<code>BRAINLAYER_BACKUP_SNAPSHOT_METHOD=vacuum</code> selects the existing VACUUM path explicitly; the default
+is <code>auto</code>. Unsupported filesystems, a busy writer, an outgrown WAL budget, or a failed clone log a reason
+and use VACUUM only after checking its larger peak plus the host reserve again.</p>
+<h2 id="consistent-db-and-wal">Consistent DB and WAL</h2>
+<p>The snapshot process opens the source only through SQLite. <code>BEGIN IMMEDIATE</code> holds the WAL writer
+lock across two separate-process <code>/bin/cp -c</code> calls, for the DB and its WAL. Commits and WAL restart
+or truncation cannot pass that lock. A PASSIVE checkpoint can copy only the stable WAL frames;
+replaying the frozen WAL on the clone overlays those pages consistently. DB inode and WAL
+identity/size/mtime are checked before and after copying. A source change rejects the attempt.</p>
+<p>Copying runs in another process because closing a raw source descriptor in SQLite's process could
+release its POSIX locks. Source checkpoint-on-close is disabled with
+<code>SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE</code>; an older Python/SQLite runtime without that control falls back.
+The source transaction rolls back and closes before integrity checking or compression.</p>
+<p>Run-deadline and stop signals propagate through integrity checking, including SQLite's
+exception-clearing callback boundary; they never select a VACUUM fallback. A failed clone
+integrity check raises the <code>backup-clone-integrity</code> job alert even if VACUUM succeeds. Only a
+later healthy clone integrity check clears that diagnostic.</p>
+<p>Under the staging lock, admission sweeps aged, same-user private clone directories whose
+contents are recognized regular files with one hardlink and whose recorded process is gone. Recent,
+live, linked, foreign and unknown entries remain. Their full possible COW divergence is
+reserved before admission, including retained dated raw snapshots, without crediting any
+existing bytes as free space.</p>
+<p>The private clone rebuilds its own SHM, replays its private WAL, and becomes a standalone DELETE-mode
+DB. Only that owned clone is checkpointed. Full <code>integrity_check</code> must pass before create-exclusive
+publication. Raw SHA-256 and the decompressed archive SHA-256 must match before the raw clone is
+unlinked. Peer files are never replaced or removed.</p>
+<p>SQLite's <a href="https://sqlite.org/forum/forumpost/905eb5e564">file-copy discussion</a> describes the writer
+barrier and separate-process constraint. The <a href="https://www.sqlite.org/c3ref/wal_checkpoint_v2.html">checkpoint API</a>
+documents PASSIVE versus writer-locking checkpoint modes.</p>
+<h2 id="space-budget-and-verification">Space budget and verification</h2>
+<p>The clone budget is compressed bytes plus the observed WAL size, 64 MiB of WAL growth slack, and a
+divergence allowance: planned write bytes/second times expected snapshot seconds. The existing
+2 GiB raw floor and 1 MiB copy allowance are additional. The gate retains the M4's configurable
+40 GiB host reserve (M1: zero extra). A WAL that outgrows its admission budget triggers a rechecked
+VACUUM fallback rather than unbudgeted private recovery.</p>
+<p><code>BRAINLAYER_BACKUP_CLONE_WRITE_BYTES_PER_SECOND</code> defaults to 2 MiB/s, from the read-only M4 sample
+on 2026-11-22 04:42:15–04:45:15 UTC: 1,733,624 B/s average, rounded up. The sampler used DB/WAL
+stat metadata and <code>proc_pid_rusage</code> v4 for processes observed holding the files, comparing logical
+write-byte ledger increases with physical write-byte increases every five seconds. It never opened
+a database. WAL size remained 97,920,072 bytes while its and the DB's mtimes advanced. The largest
+five-second write rate was 18,175,039 B/s. Process-wide counters include other files, and newly seen
+holders and short-lived processes limit attribution; this is a planning sample, not a future bound.
+Apple's <a href="https://github.com/apple-oss-distributions/xnu/blob/main/osfmk/kern/task.c">kernel ledger definition</a>
+specifies logical-write units as bytes. Physical counters alone miss cached writes.</p>
+<p>Expected duration uses <code>BRAINLAYER_BACKUP_HEAVY_EXPECTED_SNAPSHOT_SECONDS</code> (default 2400): this gives
+4.6875 GiB divergence allowance. For a 12 GiB archive and the sampled WAL, the allocation plan is
+about 16.84 GiB, before the separate raw/host floors. Real write activity makes a zero-divergence
+13 GB promise inappropriate. Operators can remeasure and configure the rate/time estimate.</p>
+<p>Clones pin extents when the source changes. During integrity, hashing and compression an absolute
+free-space guard preserves 40 GiB plus the existing 2 GiB raw floor on M4, or 2 GiB on M1. Whole-volume
+growth is recorded for observation and never used as an abort threshold. A floor breach removes this
+attempt's owned clone/partial archive and rechecks VACUUM capacity. If that fits, backup continues;
+otherwise the job defers with a durable alert, returning exit 75. Clone attempts never hole-punch
+shared extents.</p>
+<p>Both ordinary and weekly clone verification stream the archive without restoring a DB file.
+Weekly full verification also streams Drive's compressed and decompressed hashes. Newly created
+weekly VACUUM artifacts bind their full raw integrity proof to SHA-256 and stream too. Legacy
+receipts without that binding retain the restore verification path and its upload-phase budget.</p>
+<h2 id="regression-proof">Regression proof</h2>
+<p><code>tests/test_backup_clone.py</code> uses a separate real SQLite writer and checkpoint process. It attempts
+commits between file copies and proves they are busy, then succeed after release. A deliberately
+removed barrier permits a commit and WAL truncation between copies; the pair is rejected rather
+than published. Other cases cover clone failure, corrupt clone rejection, stop cleanup, a last
+source connection that must not checkpoint, non-APFS fallback, and the fallback capacity check.
+<code>tests/test_backup_heavy_gate.py</code> proves clone admission keeps the M4 reserve.</p>
+<p>Snapshot sleep observations span a capacity-checked VACUUM fallback, including sleep during the
+discarded clone attempt. The clone's owned identity is recorded before the post-publication observer,
+so an observer failure still removes that attempt's clone. Regression tests cover both boundaries.</p>
+<p>The M1 copy-only acceptance check bootstraps an APFS copy through a read-only canonical connection,
+rejecting changed DB/WAL identities or data versions. Snapshotting, private checkpointing, full
+integrity and compression run only against that copy. A separate restore checks full integrity and
+row counts for every table. A separate writer updates an owned synthetic table at the planned
+2 MiB/s payload rate, including a five-second burst at the observed 18,175,039 B/s peak. Sequence and
+payload checks on the restored synthetic rows supplement full integrity and table counts. The
+restore is acceptance work, not part of the production peak.</p>
+<h3 id="m1-copy-acceptance-2026-11-22">M1 copy acceptance, 2026-11-22</h3>
+<p>One run against source hashes from <code>056846f6</code> (the M1 checkout's base HEAD was <code>797ad572</code>;
+the three changed source-file hashes were asserted before and after the run).</p>
+<table>
+<thead>
+<tr>
+<th>Observation</th>
+<th>Result</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Owned source copy, including synthetic writer table</td>
+<td>4,738,621,440 bytes</td>
+</tr>
+<tr>
+<td>Compressed archive</td>
+<td>1,792,023,691 bytes</td>
+</tr>
+<tr>
+<td>Sampled volume-free delta peak during backup</td>
+<td>2,076,516,352 bytes</td>
+</tr>
+<tr>
+<td>Snapshot / restored full integrity</td>
+<td>Both <code>ok</code></td>
+</tr>
+<tr>
+<td>Per-table row counts</td>
+<td>All 93 equal</td>
+</tr>
+<tr>
+<td>Restored writer sequence/payload invariant</td>
+<td>Passed</td>
+</tr>
+<tr>
+<td>Concurrent writer</td>
+<td>17,559 commits, 287,686,656 payload bytes in 98.857 s</td>
+</tr>
+<tr>
+<td>Writer pacing</td>
+<td>2 MiB/s sustained; 18,175,039 B/s for the first five seconds</td>
+</tr>
+<tr>
+<td>Local archive proof</td>
+<td>SHA-256 matches the integrity-checked snapshot</td>
+</tr>
+</tbody>
+</table>
+<p>The sampled peak includes unrelated volume activity and excludes the separate restore check.
+This proves the copy path with an active writer on M1; it does not measure M4 production peak or
+Drive transport. The owned DB copies and archive were removed after recording the receipt.</p>
+<h3 id="m4-copy-acceptance-2026-11-23">M4 copy acceptance, 2026-11-23</h3>
+<p>The renewed check used source <code>47cd54db12620381142049d78ae8537b9d93e052</code>, asserting the daily, clone, gate and
+sleep module hashes before and after. Bootstrap used only <code>cp -c</code> of the canonical DB and WAL;
+both files' identity, size, mtime and ctime stayed unchanged across those copies. The proof process
+rejected SQLite connections outside its owned scratch directory. All recovery, snapshotting,
+writing, integrity checks and queries used owned copies.</p>
+<table>
+<thead>
+<tr>
+<th>Observation</th>
+<th>Result</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Owned source, including writer table</td>
+<td>28,334,350,336 bytes</td>
+</tr>
+<tr>
+<td>Compressed archive</td>
+<td>12,693,817,094 bytes</td>
+</tr>
+<tr>
+<td>Sampled backup-phase volume delta peak</td>
+<td>15,364,497,408 bytes</td>
+</tr>
+<tr>
+<td>Snapshot / restored full integrity</td>
+<td>Both <code>ok</code></td>
+</tr>
+<tr>
+<td>Per-table row counts</td>
+<td>All 114 equal</td>
+</tr>
+<tr>
+<td>Restored writer sequence/payload invariant</td>
+<td>Passed</td>
+</tr>
+<tr>
+<td>Concurrent writer</td>
+<td>82,309 commits, 1,348,550,656 payload bytes in 604.714 s</td>
+</tr>
+<tr>
+<td>Writer schedule</td>
+<td>2 MiB/s sustained; first five seconds at 18,175,039 B/s</td>
+</tr>
+<tr>
+<td>Writer busy results</td>
+<td>0</td>
+</tr>
+<tr>
+<td>Local archive proof</td>
+<td>SHA-256 matches the integrity-checked snapshot</td>
+</tr>
+</tbody>
+</table>
+<p>The peak includes other volume activity and excludes bootstrap and the separate restore acceptance.
+Restore enforced a 42 GiB free-space reserve. The run began with 105 GiB free; after all owned DBs,
+WAL/SHM files, the archive and scratch directory were removed, the measured free space was 107 GiB.
+Deletion used one named file per command. This is a copy-only proof, not a scheduled backup or a
+Drive upload. Small numerical receipts remain; no copied database or archive remains.</p>
+<p>Clone-specific race tests require SQLite's checkpoint-on-close control. Runtimes without that
+control use the explicit VACUUM fallback, which has its own test rather than claiming clone coverage.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+  <div class="ecosystem-links">
+    <a href="https://brainlayer.etanheyman.com">BrainLayer</a>
+    <span class="sep">/</span>
+    <a href="https://voicelayer.etanheyman.com">VoiceLayer</a>
+    <span class="sep">/</span>
+    <a href="https://cmuxlayer.etanheyman.com">cmuxLayer</a>
+    <span class="sep">/</span>
+    <a href="https://github.com/EtanHey">Golems</a>
+  </div>
+  
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.sections", "navigation.expand", "navigation.top", "content.code.copy", "search.suggest", "search.highlight"], "search": "../assets/javascripts/workers/search.a7633da7.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+  
+      <script src="../assets/javascripts/bundle.a5f9d56c.min.js"></script>
+      
+    
+  <script>
+    // Inject back-to-site link into the header, after the title
+    (function() {
+      var title = document.querySelector('.md-header__title');
+      if (!title) return;
+      var link = document.createElement('a');
+      link.href = 'https://brainlayer.etanheyman.com';
+      link.className = 'header-back';
+      link.innerHTML = '&larr; Site';
+      title.after(link);
+    })();
+  </script>
+
+  </body>
+</html>
