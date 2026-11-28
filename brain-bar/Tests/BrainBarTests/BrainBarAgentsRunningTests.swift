@@ -84,7 +84,7 @@ import XCTest
 
     private func event(_ type: String, message: String? = nil) -> String {
         let extra = message.map { #","last_agent_message":"\#($0)""# } ?? ""
-        return #"{"timestamp":"2026-11-28T00:00:00Z","type":"event_msg","payload":{"type":"\#(type)"\#(extra)}}"#
+        return #"{"timestamp":"2026-11-28T00:00:00Z","ordinal":1,"type":"event_msg","payload":{"type":"\#(type)"\#(extra)}}"#
     }
 
     private func meta(_ uuid: String, originator: String, subagent: Bool) -> String {
@@ -497,7 +497,7 @@ import XCTest
     func testAnUnreadableKernelArgvReachesTheChartAsUnknown() {
         let monitor = AgentActivityMonitor(
             snapshotProvider: { "59611 1 codex            codex --cd /fixture/home/AI Tools app-server" },
-            executablePathResolver: { _ in "/fixture/bin/codex" }, argumentsResolver: { _ in nil })
+            executablePathResolver: { _ in nil }, argumentsResolver: { _ in nil })
         let snapshot = monitor.sample()
         XCTAssertNil(snapshot.running.count(.codex))
         var inputs = BrainBarDesignFixture.inputs(.calm)
@@ -521,7 +521,7 @@ import XCTest
 
     func testLargeToolOutputDoesNotEraseARunningTurn() throws {
         for (n, type) in [(111, "response_item"), (112, "custom_tool_call_output")] {
-            let large = #"{"type":"\#(type)","payload":{"type":"custom_tool_call_output","output":"\#(String(repeating: "x", count: 56 * (1 << 20) / 10))"}}"#
+            let large = #"{"timestamp":"2026-11-28T00:00:00Z","ordinal":2,"type":"\#(type)","payload":{"type":"custom_tool_call_output","output":"\#(String(repeating: "x", count: 56 * (1 << 20) / 10))"}}"#
             let path = try rollout(n, lines: [event("task_started")])
             let t = tracker([1: [path]])
             XCTAssertEqual(t.runningThreads(hosts: [1]), 1)
@@ -538,8 +538,9 @@ import XCTest
                 executablePath: { _ in "/fixture/bin/codex" }, argv: { _ in nil }, processStatus: { _ in status })
             XCTAssertEqual(snapshot.running.count(.codex), 0)
         }
-        let gonePath = AgentActivityMonitor.parse("59611 1 codex            codex app-server", argv: { _ in nil })
-        XCTAssertEqual(gonePath.running.count(.codex), 0, "a vanished executable path skips the stale row")
+        let gonePath = AgentActivityMonitor.parse("59611 1 codex            codex app-server", argv: { _ in nil },
+                                                    processStatus: { _ in .gone })
+        XCTAssertEqual(gonePath.running.count(.codex), 0, "a proven-gone process skips the stale row even without a path")
     }
 
     func testAFailedArgvProbePreservesTheTrackersCachedPartialRecord() throws {
@@ -588,7 +589,7 @@ import XCTest
             XCTAssertTrue(Tracker.discardedRecordAffectsTurn(Data(event(marker, message: "incomplete").utf8)))
         }
         XCTAssertFalse(Tracker.discardedRecordAffectsTurn(Data(event("token_count").utf8)))
-        let output = #"{"timestamp":"2026-11-28T00:00:00Z", "type" : "response_item", "payload":{"type":"task_complete","text":""#
+        let output = #"{"timestamp":"2026-11-28T00:00:00Z", "ordinal":3, "type" : "response_item", "payload":{"type":"task_complete","text":""#
         XCTAssertFalse(Tracker.discardedRecordAffectsTurn(Data(output.utf8) + Data([0xf0])),
                        "a UTF-8 character split by the prefix cap is irrelevant to the known header")
         XCTAssertTrue(Tracker.discardedRecordAffectsTurn(Data("{unclassifiable".utf8)))
@@ -603,7 +604,7 @@ import XCTest
         try append(path, event("task_complete") + "\n")
         XCTAssertEqual(t.runningThreads(hosts: [1]), 0)
         let metaPath = try rollout(115, lines: [])
-        let oversizedMeta = #"{"type":"session_meta","payload":{"originator":"T3 Code","padding":"\#(big)"}}"#
+        let oversizedMeta = #"{"timestamp":"2026-11-28T00:00:00Z","ordinal":0,"type":"session_meta","payload":{"originator":"T3 Code","padding":"\#(big)"}}"#
         try (oversizedMeta + "\n" + event("task_started") + "\n").write(toFile: metaPath, atomically: false, encoding: .utf8)
         XCTAssertNil(tracker([1: [metaPath]]).runningThreads(hosts: [1]), "unreadable session kind must never be guessed")
     }
@@ -614,6 +615,33 @@ import XCTest
         let unknownOwner = AgentActivityMonitor.parse("59611 1 codex            codex app-server",
             executablePath: { _ in "/fixture/bin/codex" }, argv: { _ in nil }, processStatus: { _ in .unknown })
         XCTAssertNil(unknownOwner.running.count(.codex), "an unmeasurable owner is not silently discarded")
+    }
+
+    // MARK: Claude review round 2
+
+    func testOversizedOutputWithOrdinalPreservesTheRunningTurn() throws {
+        let output = #"{"timestamp":"2026-11-28T00:00:00Z","ordinal":42,"type":"response_item","payload":{"type":"custom_tool_call_output","output":"\#(String(repeating: "x", count: 56 * (1 << 20) / 10))"}}"#
+        let path = try rollout(121, lines: [event("task_started")])
+        let t = tracker([1: [path]])
+        XCTAssertEqual(t.runningThreads(hosts: [1]), 1)
+        try append(path, output + "\n")
+        XCTAssertEqual(t.runningThreads(hosts: [1]), 1, "ordinal before type is the production record shape")
+    }
+
+    func testKernelProcessStatusReadsTheRootOwnedLaunchd() {
+        XCTAssertEqual(AgentActivityMonitor.kernelProcessStatus(1), getuid() == 0 ? .sameUser : .otherUser,
+                       "the short BSD probe can read launchd's UID across users")
+    }
+
+    func testScalarMetadataBeforeTypeIsNotConfusedWithPayloadTypes() {
+        typealias Tracker = AgentTranscriptActivity.CodexTurnTracker
+        let output = #"{"ordinal":-7,"note":"escaped \"quote\" and { brace","timestamp":"2026-11-28T00:00:00Z","type":"response_item","payload":{"type":"task_started""#
+        XCTAssertFalse(Tracker.discardedRecordAffectsTurn(Data(output.utf8)))
+        XCTAssertTrue(Tracker.discardedRecordAffectsTurn(Data(event("task_complete", message: "partial").utf8)))
+        XCTAssertFalse(Tracker.discardedRecordAffectsTurn(Data(event("token_count").utf8)))
+        let unreadableName = AgentActivityMonitor.parse("59611 1 codex            /fixture/AI Tools/codex app-server",
+            argv: { _ in nil }, processStatus: { _ in .sameUser })
+        XCTAssertNil(unreadableName.running.count(.codex), "a live Codex row stays unknown even when ps cannot delimit its path")
     }
 
 }

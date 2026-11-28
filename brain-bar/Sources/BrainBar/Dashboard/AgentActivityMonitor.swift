@@ -290,8 +290,7 @@ final class AgentActivityMonitor: Sendable {
             let arguments = argv?(row.pid)
             let invocation = Invocation(command: row.command, kernelPath: row.executablePath,
                                         actualArgv0: argv0(row.pid), actualArguments: arguments)
-            if invocation.binary == "codex", argv != nil, arguments == nil {
-                guard row.executablePath != nil else { continue }
+            if argv != nil, arguments == nil, invocation.binary == "codex" || row.executable == "codex" {
                 switch processStatus(row.pid) {
                 case .gone, .otherUser: continue
                 case .sameUser, .unknown: running.codexArgumentsReadable = false
@@ -483,10 +482,10 @@ final class AgentActivityMonitor: Sendable {
     /// A stale ps row or another user's process must not invalidate our Codex count.
     static func kernelProcessStatus(_ pid: Int32) -> ProcessStatus {
         if kill(pid, 0) != 0, errno == ESRCH { return .gone }
-        var info = proc_bsdinfo()
-        let size = Int32(MemoryLayout<proc_bsdinfo>.size)
-        guard proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, size) == size else { return .unknown }
-        return info.pbi_uid == getuid() ? .sameUser : .otherUser
+        var info = proc_bsdshortinfo()
+        let size = Int32(MemoryLayout<proc_bsdshortinfo>.size)
+        guard proc_pidinfo(pid, PROC_PIDT_SHORTBSDINFO, 0, &info, size) == size else { return .unknown }
+        return info.pbsi_uid == getuid() ? .sameUser : .otherUser
     }
 
     /// KERN_PROCARGS2 stores argc, then the exec path, NUL padding, and the original

@@ -333,10 +333,10 @@ enum AgentTranscriptActivity {
             return Data((previous().suffix(headLength - data.count) + data).suffix(headLength))
         }
 
-        // Recognize the usual rollout header before its (possibly enormous) payload. An
+        // Scalar metadata (including timestamp and ordinal) can precede type in the rollout header before its (possibly enormous) payload. An
         // unfamiliar/truncated header stays unknown; nested payload type/text cannot impersonate the top-level type.
         private static let recordHeader = try! NSRegularExpression(pattern:
-            #"^\s*\{\s*(?:"timestamp"\s*:\s*"(?:[^"\\]|\\.)*"\s*,\s*)?"type"\s*:\s*"([a-z_]+)"\s*[,}]"#)
+            #"^\s*\{\s*(?:"[a-z_]+"\s*:\s*(?:"(?:[^"\\]|\\.)*"|-?\d+)\s*,\s*)*"type"\s*:\s*"([a-z_]+)"\s*[,}]"#)
         private static let eventPayloadHeader = try! NSRegularExpression(pattern:
             #"^\s*"payload"\s*:\s*\{\s*"type"\s*:\s*"([a-z_]+)"\s*[,}]"#)
 
