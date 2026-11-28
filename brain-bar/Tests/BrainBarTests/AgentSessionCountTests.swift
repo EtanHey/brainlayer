@@ -459,7 +459,8 @@ final class AgentSessionCountTests: XCTestCase {
 
     func test_procargs2_argv0_is_read_after_exec_path_and_padding() {
         var bytes: [UInt8] = [1, 0, 0, 0]
-        bytes += Array("/opt/homebrew/bin/claude".utf8) + [0, 0, 0]
+        bytes += Array("/opt/homebrew/bin/claude".utf8) + [0]
+        while (bytes.count - MemoryLayout<Int32>.size) % 8 != 0 { bytes.append(0) }
         bytes += Array("/Users/u/AI Tools/claude".utf8) + [0]
         bytes += Array("remote-control".utf8) + [0]
         XCTAssertEqual(AgentActivityMonitor.argv0(fromProcessArgs: bytes), "/Users/u/AI Tools/claude")

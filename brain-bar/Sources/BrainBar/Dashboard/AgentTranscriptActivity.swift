@@ -189,6 +189,7 @@ enum AgentTranscriptActivity {
             var stamp: [Int] = [] // nanosecond mtime/ctime at the last sample
             var tail = Data()      // consumed bytes immediately before offset, checked even on growth
             var discardingRecord = false
+            var discardedPrefix = Data() // only the first 4 KiB survives an oversized record
             var head = Data()      // the first `headLength` bytes read, compared on every sample (K4)
             var offset: UInt64 = 0 // bytes consumed: complete lines read, plus `pending`
             var pending = Data()   // a line still without its newline, carried to the next read (K2)
@@ -208,6 +209,7 @@ enum AgentTranscriptActivity {
         static let headLength = 256
         /// Retained bytes per record. Supports the >1 MiB completion fixture while bounding malformed input.
         static let recordLimit = 2 << 20
+        static let discardedPrefixLimit = 4 << 10
 
         init(openFiles: @escaping @Sendable (Int32) -> [HeldFile]?, sampleBudget: Int = defaultSampleBudget) {
             self.openFiles = openFiles
@@ -292,7 +294,7 @@ enum AgentTranscriptActivity {
                     next.head.append(data.prefix(Self.headLength - next.head.count))
                 }
                 next.offset += UInt64(data.count)
-                next.tail = Data((next.tail + data).suffix(Self.headLength))
+                next.tail = Self.consumedTail(data: data, previous: next.tail)
                 // Frame only the new chunk. Never search an ever-growing pending buffer again.
                 var start = data.startIndex
                 while start < data.endIndex {
@@ -300,9 +302,11 @@ enum AgentTranscriptActivity {
                     let end = newline ?? data.endIndex
                     if !next.discardingRecord {
                         if end - start > Self.recordLimit - next.pending.count {
+                            next.discardedPrefix = Data(next.pending.prefix(Self.discardedPrefixLimit))
+                            next.discardedPrefix.append(data[start..<end].prefix(Self.discardedPrefixLimit - next.discardedPrefix.count))
                             next.pending.removeAll(keepingCapacity: false)
                             next.discardingRecord = true
-                            next.turn = .unknown
+                            if Self.discardedRecordAffectsTurn(next.discardedPrefix) { next.turn = .unknown }
                             if next.kind == .pending { next.kind = .unknown }
                         } else {
                             next.pending.append(data[start..<end])
@@ -315,12 +319,36 @@ enum AgentTranscriptActivity {
                     }
                     next.pending.removeAll(keepingCapacity: false)
                     next.discardingRecord = false
+                    next.discardedPrefix.removeAll(keepingCapacity: false)
                     start = newline + 1
                 }
             }
             next.caughtUp = next.offset == size
             entries[path] = next
             return next
+        }
+
+        static func consumedTail(data: Data, previous: @autoclosure () -> Data) -> Data {
+            if data.count >= headLength { return Data(data.suffix(headLength)) }
+            return Data((previous().suffix(headLength - data.count) + data).suffix(headLength))
+        }
+
+        // Recognize the usual rollout header before its (possibly enormous) payload. An
+        // unfamiliar/truncated header stays unknown; nested payload type/text cannot impersonate the top-level type.
+        private static let recordHeader = try! NSRegularExpression(pattern:
+            #"^\s*\{\s*(?:"timestamp"\s*:\s*"(?:[^"\\]|\\.)*"\s*,\s*)?"type"\s*:\s*"([a-z_]+)"\s*[,}]"#)
+        private static let eventPayloadHeader = try! NSRegularExpression(pattern:
+            #"^\s*"payload"\s*:\s*\{\s*"type"\s*:\s*"([a-z_]+)"\s*[,}]"#)
+
+        static func discardedRecordAffectsTurn(_ prefix: Data) -> Bool {
+            // The cap can split a UTF-8 character in tool output after an already recognizable header.
+            let text = String(decoding: prefix, as: UTF8.self)
+            let string = text as NSString
+            guard let header = recordHeader.firstMatch(in: text, range: NSRange(location: 0, length: string.length)) else { return true }
+            guard string.substring(with: header.range(at: 1)) == "event_msg" else { return false }
+            let rest = string.substring(from: header.range.upperBound)
+            guard let payload = eventPayloadHeader.firstMatch(in: rest, range: NSRange(location: 0, length: (rest as NSString).length)) else { return true }
+            return ["task_started", "task_complete", "turn_aborted"].contains((rest as NSString).substring(with: payload.range(at: 1)))
         }
 
         /// K5: the session record decides the kind; one whose originator cannot be read is unknown, never hosted.

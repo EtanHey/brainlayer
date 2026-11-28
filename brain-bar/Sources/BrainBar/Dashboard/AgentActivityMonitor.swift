@@ -190,6 +190,8 @@ struct AgentActivitySnapshot: Sendable, Equatable {
 final class AgentActivityMonitor: Sendable {
     private let snapshotProvider: @Sendable () -> String?
     private let executablePathResolver: @Sendable (Int32) -> String?
+    enum ProcessStatus: Sendable, Equatable { case sameUser, otherUser, gone, unknown }
+    private let processStatusResolver: @Sendable (Int32) -> ProcessStatus
     private let argumentsResolver: (@Sendable (Int32) -> [String]?)?
     private let argv0Resolver: @Sendable (Int32) -> String?
     private let transcriptSessions: @Sendable () -> [AgentFamily: Int]
@@ -200,6 +202,7 @@ final class AgentActivityMonitor: Sendable {
     init(
         snapshotProvider: @escaping @Sendable () -> String?,
         executablePathResolver: @escaping @Sendable (Int32) -> String?,
+        processStatusResolver: @escaping @Sendable (Int32) -> ProcessStatus = { _ in .sameUser },
         argumentsResolver: (@Sendable (Int32) -> [String]?)? = nil,
         argv0Resolver: @escaping @Sendable (Int32) -> String? = { _ in nil },
         transcriptSessions: @escaping @Sendable () -> [AgentFamily: Int] = { [:] },
@@ -207,6 +210,7 @@ final class AgentActivityMonitor: Sendable {
     ) {
         self.snapshotProvider = snapshotProvider
         self.executablePathResolver = executablePathResolver
+        self.processStatusResolver = processStatusResolver
         self.argumentsResolver = argumentsResolver
         self.argv0Resolver = argv0Resolver
         self.transcriptSessions = transcriptSessions
@@ -218,6 +222,7 @@ final class AgentActivityMonitor: Sendable {
     static let live = AgentActivityMonitor(
         snapshotProvider: AgentActivityMonitor.captureProcessSnapshot,
         executablePathResolver: AgentActivityMonitor.kernelExecutablePath,
+        processStatusResolver: AgentActivityMonitor.kernelProcessStatus,
         argumentsResolver: AgentActivityMonitor.kernelArguments,
         transcriptSessions: { liveTranscriptSessions.counts() },
         hostedCodexThreads: { liveCodexTurns.runningThreads(hosts: $0) }
@@ -232,8 +237,10 @@ final class AgentActivityMonitor: Sendable {
 
     func sample() -> AgentActivitySnapshot {
         guard let snapshot = snapshotProvider() else { return .unavailable("ps capture failed") }
-        let parsed = Self.parse(snapshot, executablePath: executablePathResolver, argv0: argv0Resolver, argv: argumentsResolver)
+        let parsed = Self.parse(snapshot, executablePath: executablePathResolver, argv0: argv0Resolver, argv: argumentsResolver, processStatus: processStatusResolver)
             .merging(transcriptSessions: transcriptSessions())
+        // An unreadable host census cannot establish which cached files should be evicted.
+        guard parsed.running.codexArgumentsReadable else { return parsed }
         // An empty host list evicts the previous hosts' cached records without listing any fd.
         let hosted = hostedCodexThreads(parsed.running.codexHosts)
         return parsed.running.codexHostAlive ? parsed.withHostedCodexThreads(hosted) : parsed
@@ -266,7 +273,8 @@ final class AgentActivityMonitor: Sendable {
         _ snapshot: String,
         executablePath: (Int32) -> String? = { _ in nil },
         argv0: (Int32) -> String? = { _ in nil },
-        argv: ((Int32) -> [String]?)? = nil
+        argv: ((Int32) -> [String]?)? = nil,
+        processStatus: (Int32) -> ProcessStatus = { _ in .sameUser }
     ) -> AgentActivitySnapshot {
         let rows = snapshot.split(whereSeparator: \.isNewline).compactMap(parseRow)
         var parentByPID: [Int32: Int32] = [:]
@@ -283,8 +291,12 @@ final class AgentActivityMonitor: Sendable {
             let invocation = Invocation(command: row.command, kernelPath: row.executablePath,
                                         actualArgv0: argv0(row.pid), actualArguments: arguments)
             if invocation.binary == "codex", argv != nil, arguments == nil {
-                running.codexArgumentsReadable = false
-                continue  // kernel argv could not be read; ps words cannot prove this process's role
+                guard row.executablePath != nil else { continue }
+                switch processStatus(row.pid) {
+                case .gone, .otherUser: continue
+                case .sameUser, .unknown: running.codexArgumentsReadable = false
+                }
+                continue  // only an unreadable relevant process makes our count unknown
             }
             // A Codex app server (T3 Code's, or the Codex app's own bundled one) hosts threads without processes.
             if invocation.binary == "codex", codexRole(invocation) == "app-server" { running.codexHosts.append(row.pid) }
@@ -321,7 +333,7 @@ final class AgentActivityMonitor: Sendable {
 
         init(command: String, kernelPath: String?, actualArgv0: String? = nil, actualArguments: [String]? = nil) {
             if let actualArguments, let first = actualArguments.first {
-                argv0 = first.lowercased()
+                argv0 = (first.isEmpty ? kernelPath ?? "" : first).lowercased()
                 arguments = actualArguments.dropFirst().map { $0.lowercased() }
                 return
             }
@@ -468,6 +480,15 @@ final class AgentActivityMonitor: Sendable {
         return String(decoding: buffer.prefix(Int(length)).map { UInt8(bitPattern: $0) }, as: UTF8.self)
     }
 
+    /// A stale ps row or another user's process must not invalidate our Codex count.
+    static func kernelProcessStatus(_ pid: Int32) -> ProcessStatus {
+        if kill(pid, 0) != 0, errno == ESRCH { return .gone }
+        var info = proc_bsdinfo()
+        let size = Int32(MemoryLayout<proc_bsdinfo>.size)
+        guard proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, size) == size else { return .unknown }
+        return info.pbi_uid == getuid() ? .sameUser : .otherUser
+    }
+
     /// KERN_PROCARGS2 stores argc, then the exec path, NUL padding, and the original
     /// NUL-terminated argv strings. argv[0] preserves a symlink launcher path.
     static func kernelArgv0(_ pid: Int32) -> String? { kernelArguments(pid)?.first }
@@ -497,8 +518,12 @@ final class AgentActivityMonitor: Sendable {
         guard argc > 0, Int(argc) <= size - MemoryLayout<Int32>.size else { return nil }
         var offset = MemoryLayout<Int32>.size
         guard let execEnd = bytes[offset..<size].firstIndex(of: 0) else { return nil }
-        offset = execEnd
-        while offset < size && bytes[offset] == 0 { offset += 1 }
+        offset = execEnd + 1
+        // XNU exec_extract_strings aligns the string area (excluding argc) to the target
+        // pointer width. Supported macOS processes are 64-bit. Scanning NULs would eat empty argv[0].
+        let padding = (8 - (offset - MemoryLayout<Int32>.size) % 8) % 8
+        guard offset + padding <= size, bytes[offset..<(offset + padding)].allSatisfy({ $0 == 0 }) else { return nil }
+        offset += padding
         var result: [String] = []
         for _ in 0..<argc {
             guard offset < size, let end = bytes[offset..<size].firstIndex(of: 0),
