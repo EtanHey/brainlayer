@@ -120,10 +120,15 @@ enum AgentTranscriptActivity {
         codexFirstLine(url).range(of: codexSubagentMarker) != nil
     }
 
-    /// A rollout's first line (its `session_meta`), up to `codexFirstLineCap`.
+    /// A rollout's first line (its `session_meta`), up to `codexFirstLineCap`. Opened non-blocking and read only
+    /// when it is a regular file, so a FIFO at a rollout path cannot stall the sample (same guard as `advance`).
     static func codexFirstLine(_ url: URL) -> Data {
-        guard let handle = try? FileHandle(forReadingFrom: url) else { return Data() }
+        let fd = open(url.path, O_RDONLY | O_CLOEXEC | O_NONBLOCK)
+        guard fd >= 0 else { return Data() }
+        let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
         defer { try? handle.close() }
+        var st = stat()
+        guard fstat(fd, &st) == 0, st.st_mode & S_IFMT == S_IFREG else { return Data() }
         var line = Data()
         while line.count < codexFirstLineCap,
               let chunk = try? handle.read(upToCount: min(16 * 1024, codexFirstLineCap - line.count)),
@@ -135,6 +140,13 @@ enum AgentTranscriptActivity {
             line.append(chunk)
         }
         return line
+    }
+
+    /// Identity of the descriptor the host actually holds, captured with its pathname.
+    struct HeldFile: Hashable, Sendable {
+        let path: String
+        let device: UInt64
+        let inode: UInt64
     }
 
     // MARK: running hosted Codex threads (#1899 R1, R2)
@@ -178,6 +190,11 @@ enum AgentTranscriptActivity {
 
         private struct Entry {
             var identity: Identity
+            var observedSize: UInt64 = 0
+            var stamp: [Int] = [] // nanosecond mtime/ctime at the last sample
+            var tail = Data()      // consumed bytes immediately before offset, checked even on growth
+            var discardingRecord = false
+            var discardedPrefix = Data() // only the first 4 KiB survives an oversized record
             var head = Data()      // the first `headLength` bytes read, compared on every sample (K4)
             var offset: UInt64 = 0 // bytes consumed: complete lines read, plus `pending`
             var pending = Data()   // a line still without its newline, carried to the next read (K2)
@@ -188,15 +205,18 @@ enum AgentTranscriptActivity {
 
         private let lock = NSLock()
         private var entries: [String: Entry] = [:]
-        private let openFiles: @Sendable (Int32) -> [String]?
+        private let openFiles: @Sendable (Int32) -> [HeldFile]?
         private let sampleBudget: Int
         /// Bytes per read.
         static let chunk = 1 << 20
         /// K2: bytes read per sample, across every held file; a file further behind resumes on the next sample.
         static let defaultSampleBudget = 8 << 20
         static let headLength = 256
+        /// Retained bytes per record. Supports the >1 MiB completion fixture while bounding malformed input.
+        static let recordLimit = 2 << 20
+        static let discardedPrefixLimit = 4 << 10
 
-        init(openFiles: @escaping @Sendable (Int32) -> [String]?, sampleBudget: Int = defaultSampleBudget) {
+        init(openFiles: @escaping @Sendable (Int32) -> [HeldFile]?, sampleBudget: Int = defaultSampleBudget) {
             self.openFiles = openFiles
             self.sampleBudget = sampleBudget
         }
@@ -211,25 +231,28 @@ enum AgentTranscriptActivity {
         func runningThreads(hosts: [Int32]) -> Int? {
             lock.lock()
             defer { lock.unlock() }
-            var held: Set<String> = []
+            var held: Set<HeldFile> = []
             // K3: whatever happens below, keep state only for files a live host holds.
-            defer { entries = entries.filter { held.contains($0.key) } }
+            defer {
+                let paths = Set(held.map(\.path))
+                entries = entries.filter { paths.contains($0.key) }
+            }
             for pid in hosts {
                 guard let files = openFiles(pid) else { return nil }
-                held.formUnion(files.filter(Self.isRollout))
+                held.formUnion(files.filter { Self.isRollout($0.path) })
             }
             var budget = sampleBudget
             var proven = true
             var running: Set<String> = []
-            for path in held.sorted() {
-                guard let entry = advance(path, budget: &budget), entry.caughtUp else {
+            for file in held.sorted(by: { $0.path < $1.path }) {
+                guard let entry = advance(file, budget: &budget), entry.caughtUp else {
                     proven = false  // unreadable, or still catching up: keep reading the others
                     continue
                 }
                 switch (entry.kind, entry.turn) {
                 case (.pending, _), (.notHosted, _): continue
                 case (.unknown, _), (.hosted, .unknown): proven = false
-                case (.hosted, .started): running.insert(AgentTranscriptActivity.sessionID(URL(fileURLWithPath: path)))
+                case (.hosted, .started): running.insert(AgentTranscriptActivity.sessionID(URL(fileURLWithPath: file.path)))
                 case (.hosted, .none), (.hosted, .finished): continue
                 }
             }
@@ -243,22 +266,30 @@ enum AgentTranscriptActivity {
 
         /// Reads, within `budget`, what the file gained since the last sample (from the start for a new or different
         /// file); nil when it cannot be opened, measured or read.
-        private func advance(_ path: String, budget: inout Int) -> Entry? {
+        private func advance(_ file: HeldFile, budget: inout Int) -> Entry? {
+            let path = file.path
             // K4: open first, then measure the open file, so the bytes read are the bytes measured.
-            let fd = open(path, O_RDONLY | O_CLOEXEC)
+            let fd = open(path, O_RDONLY | O_CLOEXEC | O_NONBLOCK | O_NOFOLLOW)
             guard fd >= 0 else { return nil }
             let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
             var st = stat()
-            guard fstat(fd, &st) == 0 else { return nil }
+            guard fstat(fd, &st) == 0, st.st_mode & S_IFMT == S_IFREG,
+                  UInt64(UInt32(bitPattern: st.st_dev)) == file.device, UInt64(st.st_ino) == file.inode else { return nil }
             let size = UInt64(max(0, st.st_size))
             let identity = Identity(device: UInt64(UInt32(bitPattern: st.st_dev)), inode: UInt64(st.st_ino), born: st.st_birthtimespec)
+            let stamp = [st.st_mtimespec.tv_sec, st.st_mtimespec.tv_nsec, st.st_ctimespec.tv_sec, st.st_ctimespec.tv_nsec]
             var next = Entry(identity: identity)
-            if let kept = entries[path], kept.identity == identity, kept.offset <= size {
+            if let kept = entries[path], kept.identity == identity, kept.offset <= size,
+               !(size <= kept.observedSize && stamp != kept.stamp) {
                 if kept.head.isEmpty { next = kept } else {
                     guard (try? handle.seek(toOffset: 0)) != nil, let head = try? handle.read(upToCount: kept.head.count) else { return nil }
-                    if head == kept.head { next = kept }
+                    guard (try? handle.seek(toOffset: kept.offset - UInt64(kept.tail.count))) != nil,
+                          let tail = try? handle.read(upToCount: kept.tail.count) else { return nil }
+                    if head == kept.head, tail == kept.tail { next = kept }
                 }
             }
+            next.observedSize = size
+            next.stamp = stamp
             while next.offset < size, budget > 0 {
                 let want = Int(min(UInt64(Self.chunk), size - next.offset, UInt64(budget)))
                 guard (try? handle.seek(toOffset: next.offset)) != nil,
@@ -268,17 +299,61 @@ enum AgentTranscriptActivity {
                     next.head.append(data.prefix(Self.headLength - next.head.count))
                 }
                 next.offset += UInt64(data.count)
-                next.pending.append(data)
-                guard let lastNewline = next.pending.lastIndex(of: UInt8(ascii: "\n")) else { continue }
-                for line in next.pending[next.pending.startIndex..<lastNewline].split(separator: UInt8(ascii: "\n"),
-                                                                                     omittingEmptySubsequences: false) {
-                    if next.kind == .pending { next.kind = Self.kind(line) } else { next.turn = Self.turn(after: next.turn, line: line) }
+                next.tail = Self.consumedTail(data: data, previous: next.tail)
+                // Frame only the new chunk. Never search an ever-growing pending buffer again.
+                var start = data.startIndex
+                while start < data.endIndex {
+                    let newline = data[start...].firstIndex(of: UInt8(ascii: "\n"))
+                    let end = newline ?? data.endIndex
+                    if !next.discardingRecord {
+                        if end - start > Self.recordLimit - next.pending.count {
+                            next.discardedPrefix = Data(next.pending.prefix(Self.discardedPrefixLimit))
+                            next.discardedPrefix.append(data[start..<end].prefix(Self.discardedPrefixLimit - next.discardedPrefix.count))
+                            next.pending.removeAll(keepingCapacity: false)
+                            next.discardingRecord = true
+                            if Self.discardedRecordAffectsTurn(next.discardedPrefix) { next.turn = .unknown }
+                            if next.kind == .pending { next.kind = .unknown }
+                        } else {
+                            next.pending.append(data[start..<end])
+                        }
+                    }
+                    guard let newline else { break }
+                    if !next.discardingRecord {
+                        if next.kind == .pending { next.kind = Self.kind(next.pending) }
+                        else { next.turn = Self.turn(after: next.turn, line: next.pending) }
+                    }
+                    next.pending.removeAll(keepingCapacity: false)
+                    next.discardingRecord = false
+                    next.discardedPrefix.removeAll(keepingCapacity: false)
+                    start = newline + 1
                 }
-                next.pending = Data(next.pending[(lastNewline + 1)...])
             }
             next.caughtUp = next.offset == size
             entries[path] = next
             return next
+        }
+
+        static func consumedTail(data: Data, previous: @autoclosure () -> Data) -> Data {
+            if data.count >= headLength { return Data(data.suffix(headLength)) }
+            return Data((previous().suffix(headLength - data.count) + data).suffix(headLength))
+        }
+
+        // Scalar metadata (including timestamp and ordinal) can precede type in the rollout header before its (possibly enormous) payload. An
+        // unfamiliar/truncated header stays unknown; nested payload type/text cannot impersonate the top-level type.
+        private static let recordHeader = try! NSRegularExpression(pattern:
+            #"^\s*\{\s*(?:"[a-z_]+"\s*:\s*(?:"(?:[^"\\]|\\.)*"|-?\d+)\s*,\s*)*"type"\s*:\s*"([a-z_]+)"\s*[,}]"#)
+        private static let eventPayloadHeader = try! NSRegularExpression(pattern:
+            #"^\s*"payload"\s*:\s*\{\s*"type"\s*:\s*"([a-z_]+)"\s*[,}]"#)
+
+        static func discardedRecordAffectsTurn(_ prefix: Data) -> Bool {
+            // The cap can split a UTF-8 character in tool output after an already recognizable header.
+            let text = String(decoding: prefix, as: UTF8.self)
+            let string = text as NSString
+            guard let header = recordHeader.firstMatch(in: text, range: NSRange(location: 0, length: string.length)) else { return true }
+            guard string.substring(with: header.range(at: 1)) == "event_msg" else { return false }
+            let rest = string.substring(from: header.range.upperBound)
+            guard let payload = eventPayloadHeader.firstMatch(in: rest, range: NSRange(location: 0, length: (rest as NSString).length)) else { return true }
+            return ["task_started", "task_complete", "turn_aborted"].contains((rest as NSString).substring(with: payload.range(at: 1)))
         }
 
         /// K5: the session record decides the kind; one whose originator cannot be read is unknown, never hosted.
@@ -311,11 +386,11 @@ enum AgentTranscriptActivity {
     }
     static let listRetries = 4
 
-    /// The paths of the files a live process holds open, from the kernel (`proc_pidinfo` / `proc_pidfdinfo`); nil when the
+    /// The paths and descriptor identities of files a live process holds open, from the kernel (`proc_pidinfo` / `proc_pidfdinfo`); nil when the
     /// list cannot be read whole. K1: a list that fills its buffer may be cut short, so it is read again into a buffer
     /// twice the size, at most `listRetries` times, then nil. An fd closed between the list and its read is skipped; any
     /// other failure is nil.
-    static func openFilePaths(_ pid: Int32, listFDs: ListFDs = kernelListFDs) -> [String]? {
+    static func openFilePaths(_ pid: Int32, listFDs: ListFDs = kernelListFDs) -> [HeldFile]? {
         let needed = listFDs(pid, nil, 0)
         guard needed > 0 else { return nil }
         let stride = MemoryLayout<proc_fdinfo>.stride
@@ -329,7 +404,7 @@ enum AgentTranscriptActivity {
                 capacity *= 2
                 continue
             }
-            var paths: [String] = []
+            var paths: [HeldFile] = []
             for fd in fds.prefix(Int(used) / stride) where fd.proc_fdtype == UInt32(PROX_FDTYPE_VNODE) {
                 var info = vnode_fdinfowithpath()
                 let size = Int32(MemoryLayout<vnode_fdinfowithpath>.size)
@@ -341,7 +416,9 @@ enum AgentTranscriptActivity {
                 let path = withUnsafeBytes(of: &info.pvip.vip_path) { raw in
                     String(cString: raw.bindMemory(to: CChar.self).baseAddress!)
                 }
-                paths.append(path)
+                paths.append(HeldFile(path: path,
+                                      device: UInt64(info.pvip.vip_vi.vi_stat.vst_dev),
+                                      inode: UInt64(info.pvip.vip_vi.vi_stat.vst_ino)))
             }
             return paths
         }
