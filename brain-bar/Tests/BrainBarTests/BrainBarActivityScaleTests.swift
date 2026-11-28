@@ -49,6 +49,29 @@ import SwiftUI
         XCTAssertFalse(try XCTUnwrap(NDActivitySection.scaleTicks(after).first { $0.half == .up }).setByAgentReads)
     }
 
+    /// Final pass on 4f74d09a: reads by agents turn unavailable on the very sample that shifts their only peak out.
+    /// The leaving 9 is still on screen, so the shared scale holds at 9 until it has gone.
+    func testALeavingAgentReadPeakHoldsTheScaleWhenReadsTurnUnavailable() {
+        let width = 60.0
+        let t0 = Date(timeIntervalSinceReferenceDate: width * 1_000)
+        let before = NDWave(saves: [1, 1], reads: [2, 2], agentReads: [9, 1], readable: true, endsAt: t0)
+            .linked(after: nil, minutes: 2)
+        let shifting = NDWave(saves: [1, 1], reads: [2, 2], agentReads: nil, readable: true,
+                              endsAt: t0.addingTimeInterval(width))
+            .linked(after: before, minutes: 2)
+        XCTAssertNotNil(shifting.outgoing, "a one-bucket shift")
+        XCTAssertEqual(shifting.outgoingAgentReads, 9)
+        XCTAssertEqual(NDWaveform.upPeak(shifting), 9, "the leaving peak still sets the scale")
+        XCTAssertEqual(NDWaveform.savedHeight(shifting, saves: 1, size: .hero),
+                       NDWaveform.savedHeight(before, saves: 1, size: .hero), accuracy: 0.001)
+        // With no reads at all on screen or leaving, there is no reads peak.
+        let gone = NDWave(saves: [1, 1], reads: [2, 2], agentReads: nil, readable: true,
+                          endsAt: t0.addingTimeInterval(2 * width))
+            .linked(after: shifting, minutes: 2)
+        XCTAssertNil(gone.agentReadsPeak)
+        XCTAssertEqual(NDWaveform.upPeak(gone), 1)
+    }
+
     func testOneSaveAndOneAgentReadDrawTheSameHeightWhateverEachSeriesPeaks() {
         let wave = ownerWave()
         let canvas = NDActivitySection.canvas

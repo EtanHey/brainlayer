@@ -135,8 +135,12 @@ struct NDWave: Equatable, Sendable {
     var readsTotal: Int { reads.reduce(0, +) }
     var savesPeak: Int { max(saves.max() ?? 0, outgoing?.saves ?? 0) }
     var readsPeak: Int { max(reads.max() ?? 0, outgoing?.reads ?? 0) }
-    /// Nil when reads by agents are unavailable; otherwise the largest count on screen, the leaving bucket included.
-    var agentReadsPeak: Int? { agentReads.map { max($0.max() ?? 0, outgoingAgentReads ?? 0) } }
+    /// Nil only when no reads by agents are on screen or leaving; otherwise the largest count, the leaving bucket
+    /// included. A leaving count survives a sample whose reads turned unavailable, so the scale holds until it has gone.
+    var agentReadsPeak: Int? {
+        guard agentReads != nil || outgoingAgentReads != nil else { return nil }
+        return max(agentReads?.max() ?? 0, outgoingAgentReads ?? 0)
+    }
     var count: Int { max(saves.count, reads.count) }
 
     /// The bucket grid index of a wave ending at `end` with `count` buckets over `minutes`.
