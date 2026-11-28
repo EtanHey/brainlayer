@@ -16,6 +16,16 @@ final class BrainBarActivityScaleRenderTests: XCTestCase {
 
         var range: NDRange { self == .busyDay ? .day : .hour }
         var hover: Int { self == .busyDay ? 48 : 40 }
+
+        /// R2 (Cursor C3): each half's expected cue: (count, set by reads by agents) above, count below.
+        var expectedUp: (count: Int, byReads: Bool) {
+            switch self {
+            case .ownerCase: (1, false)  // a 1-1 tie between saves and reads is the saves'
+            case .sharedUp: (8, true)
+            case .busyDay: (288, true)
+            }
+        }
+        var expectedDown: Int { self == .busyDay ? 1_511 : 30 }
     }
 
     @MainActor
@@ -51,9 +61,27 @@ final class BrainBarActivityScaleRenderTests: XCTestCase {
     func testRenderActivityScaleProof() throws {
         NSApplication.shared.setActivationPolicy(.prohibited)
         let output = ProcessInfo.processInfo.environment["BRAINBAR_ACTIVITY_SCALE_PROOF_DIR"]
+        let canvas = NDActivitySection.canvas
+        let cy = NDWaveform.plot(canvas, nowTick: true).cy
+        let axis = NDWaveform.baseline(canvas, nowTick: true).midY
+        let (up, down) = NDWaveform.halves(.hero)
         for c in Case.allCases {
             let store = NDStore(fixture: Self.inputs(c), page: .overview)
             store.range = c.range
+            // R2 (Cursor C3): the wave actually hosted below carries the expected cues and heights.
+            let wave = try XCTUnwrap(store.inputs.heroWaves[c.range], c.rawValue)
+            XCTAssertEqual(NDActivitySection.scaleTicks(wave),
+                           [.init(half: .up, count: c.expectedUp.count, y: cy - 0.5 - up, setByAgentReads: c.expectedUp.byReads),
+                            .init(half: .down, count: c.expectedDown, y: cy + 0.5 + down)], c.rawValue)
+            let saves = wave.saves[c.hover]
+            let expected = saves == 0 ? 0 : max(NDWaveform.minVisible(.hero), CGFloat(saves) / CGFloat(c.expectedUp.count) * up)
+            XCTAssertEqual(NDWaveform.savedHeight(wave, saves: saves, size: .hero), expected, accuracy: 0.001, c.rawValue)
+            XCTAssertEqual(NDWaveform.columnTop(wave, index: c.hover, canvas: canvas, nowTick: true, size: .hero),
+                           cy - 0.5 - expected, accuracy: 0.001, "\(c.rawValue): the readout sits on the drawn bar")
+            if let calls = wave.agentReads, calls[c.hover] == saves {
+                XCTAssertEqual(axis - NDActivitySection.agentReadY(count: calls[c.hover], peak: NDWaveform.upPeak(wave), canvas: canvas),
+                               expected, accuracy: 0.001, "\(c.rawValue): equal counts above the line, equal heights")
+            }
             for (name, appearance) in NDRenderHarness.appearances {
                 for (mode, hover) in [("rest", nil), ("hover", c.hover)] as [(String, Int?)] {
                     let rep = try NDRenderHarness.host(

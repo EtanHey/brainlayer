@@ -13,6 +13,42 @@ import SwiftUI
         NDWave(saves: saves, reads: lines, agentReads: calls, readable: true)
     }
 
+    /// R2 (Cursor C1): the shared upper peak keeps a leaving agent-read bucket for as long as `outgoing` holds it, so save
+    /// heights, the upper number, its colour and its dashed line do not jump while that bucket slides out. Uses only API
+    /// that existed before the fix, so it fails on 6636a59c (the peak fell to 1 the moment the 9 left).
+    func testALeavingAgentReadPeakKeepsTheSharedScaleUntilItHasLeft() throws {
+        let width = 60.0
+        let t0 = Date(timeIntervalSinceReferenceDate: width * 1_000)
+        func sample(_ calls: [Int], saves: [Int], at k: Double) -> NDWave {
+            NDWave(saves: saves, reads: Array(repeating: 2, count: calls.count), agentReads: calls, readable: true,
+                   endsAt: t0.addingTimeInterval(k * width))
+        }
+        // On screen: the only 9 reads are in the leftmost bucket; saves never exceed 1.
+        let before = sample([9, 1, 1, 0], saves: [1, 1, 0, 1], at: 0).linked(after: nil, minutes: 4)
+        XCTAssertEqual(NDWaveform.upPeak(before), 9)
+        // One bucket later: the 9 is the outgoing bucket sliding out under the clip.
+        let shifting = sample([1, 1, 0, 1], saves: [1, 0, 1, 1], at: 1).linked(after: before, minutes: 4)
+        XCTAssertNotNil(shifting.outgoing, "a one-bucket shift")
+        XCTAssertEqual(NDWaveform.upPeak(shifting), 9, "the leaving peak still sets the scale")
+        XCTAssertEqual(NDWaveform.savedHeight(shifting, saves: 1, size: .hero), up / 9, accuracy: 0.001)
+        let tick = try XCTUnwrap(NDActivitySection.scaleTicks(shifting).first { $0.half == .up })
+        XCTAssertEqual(tick.count, 9)
+        XCTAssertTrue(tick.setByAgentReads, "still teal: the reads set it")
+        XCTAssertEqual(tick, NDActivitySection.scaleTicks(before).first { $0.half == .up }, "number, colour and line hold")
+        // The heights are the wave's, not the animation phase's: every strip position draws the same save height.
+        let pitch = NDActivitySection.plotWidth / 4
+        for offset in [pitch, pitch / 2, 1, 0] {
+            for item in NDWaveform.strip(shifting, width: NDActivitySection.plotWidth, size: .hero, offset: offset)
+            where item.bucket.saves == 1 {
+                XCTAssertEqual(NDWaveform.savedHeight(shifting, saves: item.bucket.saves, size: .hero), up / 9, accuracy: 0.001)
+            }
+        }
+        // Once the next sample has no outgoing 9, the scale follows what is on screen.
+        let after = sample([1, 0, 1, 1], saves: [0, 1, 1, 1], at: 2).linked(after: shifting, minutes: 4)
+        XCTAssertEqual(NDWaveform.upPeak(after), 1)
+        XCTAssertFalse(try XCTUnwrap(NDActivitySection.scaleTicks(after).first { $0.half == .up }).setByAgentReads)
+    }
+
     func testOneSaveAndOneAgentReadDrawTheSameHeightWhateverEachSeriesPeaks() {
         let wave = ownerWave()
         let canvas = NDActivitySection.canvas

@@ -119,7 +119,7 @@ struct NDWaveform: View {
     /// read draw the same height. The dropdown draws no reads-by-agents line, so there saves scale alone. The
     /// outgoing bucket counts, so no bar changes height as it leaves.
     static func upPeak(_ wave: NDWave, size: Size = .hero) -> Int {
-        size == .hero ? max(wave.savesPeak, wave.agentReads?.max() ?? 0) : wave.savesPeak
+        size == .hero ? max(wave.savesPeak, wave.agentReadsPeak ?? 0) : wave.savesPeak
     }
 
     /// w315: the count the lower half's full height stands for: session lines ingested, scaled apart from the upper half.

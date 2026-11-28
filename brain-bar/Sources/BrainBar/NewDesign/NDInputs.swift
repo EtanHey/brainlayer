@@ -121,6 +121,10 @@ struct NDWave: Equatable, Sendable {
     /// Review B1: the bucket that left on the left edge when this sample is exactly one bucket later than the one it
     /// replaced. The moving layer keeps it, sliding out under the plot's clip, so no hole opens.
     var outgoing: Bucket? = nil
+    /// w315 R2: the outgoing bucket's reads by agents (nil with no outgoing bucket, or when the previous sample had none),
+    /// so the window's shared upper scale keeps it while it slides out, exactly as the saves' and lines' peaks keep theirs.
+    /// Beside `Bucket`, not in it: a bar's identity stays its saves and lines.
+    var outgoingAgentReads: Int? = nil
 
     struct Bucket: Equatable, Sendable {
         var saves: Int
@@ -131,6 +135,8 @@ struct NDWave: Equatable, Sendable {
     var readsTotal: Int { reads.reduce(0, +) }
     var savesPeak: Int { max(saves.max() ?? 0, outgoing?.saves ?? 0) }
     var readsPeak: Int { max(reads.max() ?? 0, outgoing?.reads ?? 0) }
+    /// Nil when reads by agents are unavailable; otherwise the largest count on screen, the leaving bucket included.
+    var agentReadsPeak: Int? { agentReads.map { max($0.max() ?? 0, outgoingAgentReads ?? 0) } }
     var count: Int { max(saves.count, reads.count) }
 
     /// The bucket grid index of a wave ending at `end` with `count` buckets over `minutes`.
@@ -146,11 +152,13 @@ struct NDWave: Equatable, Sendable {
     func linked(after previous: NDWave?, minutes: Int) -> NDWave {
         var next = self
         next.outgoing = nil
+        next.outgoingAgentReads = nil
         next.sequence = Self.sequence(endsAt: endsAt, minutes: minutes, count: count)
         guard readable, let seq = next.sequence, let previous, previous.readable, previous.count == count,
               (previous.sequence ?? Self.sequence(endsAt: previous.endsAt, minutes: minutes, count: count)) == seq - 1
         else { return next }
         next.outgoing = Bucket(saves: previous.saves.first ?? 0, reads: previous.reads.first ?? 0)
+        next.outgoingAgentReads = previous.agentReads?.first
         return next
     }
 }
