@@ -1,0 +1,7 @@
+slow swipe 0→1: max pill step 2.23 pt (limit 26.67), max content step 19.3 pt (limit 300), rest 0.383 s
+slow swipe 1→2: max pill step 2.23 pt (limit 26.67), max content step 19.3 pt (limit 300), rest 0.383 s
+slow swipe back 2→1: max pill step 2.23 pt (limit 26.67), max content step 19.3 pt (limit 300), rest 0.383 s
+fast flick 0→1: max pill step 5.95 pt (limit 26.67), max content step 51.5 pt (limit 300), rest 0.433 s
+click far tab 0→2: max pill step 13.33 pt (limit 26.67), max content step 115.3 pt (limit 300), rest 0.483 s
+click during a settle 0→2 then 0: max pill step 13.33 pt (limit 26.67), max content step 115.3 pt (limit 300), rest 0.475 s
+swipe during a settle 0→1, on to 2: max pill step 7.96 pt (limit 26.67), max content step 68.9 pt (limit 300), rest 0.450 s
