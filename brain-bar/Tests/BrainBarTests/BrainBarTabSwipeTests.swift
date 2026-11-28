@@ -3,79 +3,56 @@ import SwiftUI
 import XCTest
 @testable import BrainBar
 
-/// Phase 14 tab swipe: a two-finger sideways swipe moves to the neighbouring page with VoiceBar's History rules.
+/// Tab swipe: a two-finger sideways swipe moves the pages and the tabs' pill with the fingers (VoiceBar's axis rules) and
+/// the release settles on a tab by position plus projected velocity, one tab at most (the shared tab-swipe spec).
 /// Pure models and offscreen hosting views only; nothing is attached to a window, menu or status item.
 @MainActor
 final class BrainBarTabSwipeTests: XCTestCase {
-    // MARK: The pager (VoiceBar's NotchHistoryCategoryPager rules)
+    // MARK: The axis (VoiceBar's NotchHistoryCategoryPager rules)
 
-    func testASidewaysGestureMovesOnePageAndAVerticalOneNever() {
+    func testASidewaysGestureIsHandedOverWholeAndAVerticalOneNever() {
         var pager = NDPagePager()
         pager.begin()
-        XCTAssertFalse(pager.move(dx: -3, dy: 0), "inside the 6 pt slop no axis is chosen")
-        XCTAssertTrue(pager.move(dx: -60, dy: 4))
-        pager.move(dx: -40, dy: 0)
-        XCTAssertEqual(pager.end(), 1, "fingers moving left go to the next page")
+        XCTAssertNil(pager.move(dx: -3, dy: 0), "inside the 6 pt slop no axis is chosen")
+        XCTAssertEqual(pager.move(dx: -60, dy: 4), -63, "the step that decides hands over the whole travel so far")
+        XCTAssertEqual(pager.move(dx: -40, dy: 0), -40, "then each step as it comes")
+        XCTAssertTrue(pager.end(), "a page swipe ended: release")
 
         pager.begin()
-        XCTAssertTrue(pager.move(dx: 100, dy: 0))
-        XCTAssertEqual(pager.end(), -1, "fingers moving right go to the previous page")
+        XCTAssertNil(pager.move(dx: 5, dy: -30), "a vertical gesture is the page's own scroll")
+        XCTAssertNil(pager.move(dx: -300, dy: -5), "and stays vertical however far it then wanders sideways")
+        XCTAssertFalse(pager.end())
 
         pager.begin()
-        XCTAssertFalse(pager.move(dx: 5, dy: -30), "a vertical gesture is the page's own scroll")
-        XCTAssertFalse(pager.move(dx: -300, dy: -5), "and stays vertical however far it then wanders sideways")
-        XCTAssertEqual(pager.end(), 0)
-
-        pager.begin()
-        XCTAssertFalse(pager.move(dx: -20, dy: 18), "a diagonal is not clearly sideways")
-        pager.move(dx: -200, dy: 0)
-        XCTAssertEqual(pager.end(), 0)
+        XCTAssertNil(pager.move(dx: -20, dy: 18), "a diagonal is not clearly sideways")
+        XCTAssertNil(pager.move(dx: -200, dy: 0))
+        XCTAssertFalse(pager.end())
     }
 
-    func testTheThresholdIsVoiceBarsAndAFlickMovesOnHoweverShort() {
-        XCTAssertEqual(NDPagePager.travelWidth * NDPagePager.commitFraction, 88, accuracy: 0.001,
-                       "0.22 of VoiceBar's 400 pt History list")
-        var pager = NDPagePager()
-        pager.begin()
-        for _ in 0..<8 { pager.move(dx: -11, dy: 0) } // 88 pt, every step slow
-        XCTAssertEqual(pager.end(), 0, "88 pt is not past the threshold and was not a flick")
-
-        pager.begin()
-        for _ in 0..<8 { pager.move(dx: -11, dy: 0) }
-        pager.move(dx: -1, dy: 0)
-        XCTAssertEqual(pager.end(), 1, "89 pt is")
-
-        pager.begin()
-        pager.move(dx: -20, dy: 0)
-        pager.move(dx: -16, dy: 0)
-        XCTAssertEqual(pager.end(), 1, "a flick moves on however short")
-
-        pager.begin()
-        pager.move(dx: -60, dy: 0)
-        pager.move(dx: 15, dy: 0)
-        XCTAssertEqual(pager.end(), 0, "a fast step back against the swipe is not a flick toward it")
+    func testTheReleasePicksByPositionPlusProjectedVelocity() {
+        // 88 pt slowly (one 8.8 pt step every 50 ms): neither far enough nor fast enough.
+        XCTAssertEqual(settle(from: .overview, steps: Array(repeating: -8.8, count: 10), every: 0.05), .overview)
+        // Past half the page slowly: position alone moves on.
+        XCTAssertEqual(settle(from: .overview, steps: Array(repeating: -50, count: 10), every: 0.2), .backups)
+        // A short fast flick (36 pt in 17 ms): the projected velocity moves on, however short.
+        XCTAssertEqual(settle(from: .overview, steps: [-20, -16], every: 1.0 / 120), .backups)
+        // A fast step back against the swipe is not a flick toward it.
+        XCTAssertEqual(settle(from: .overview, steps: [-60, 15, 15], every: 1.0 / 120), .overview)
+        // Fingers that stop before lifting carry no velocity: 300 pt then a 150 ms rest stays.
+        XCTAssertEqual(settle(from: .overview, steps: Array(repeating: -30, count: 10), every: 1.0 / 120, restBeforeLift: 0.15),
+                       .overview)
     }
 
     func testOneGestureMovesAtMostOnePageHoweverLong() {
-        let store = NDStore(fixture: BrainBarDesignFixture.inputs(.calm), page: .overview)
-        var swipe = NDPageSwipe()
-        let steps = gesture(&swipe, dx: -3000, store: store)
-        XCTAssertEqual(steps, [1], "one step, taken on release")
-        XCTAssertEqual(store.page, .backups, "never two pages")
+        XCTAssertEqual(settle(from: .overview, steps: Array(repeating: -300, count: 10), every: 1.0 / 120), .backups,
+                       "never two pages")
+        XCTAssertEqual(settle(from: .jobs, steps: Array(repeating: 300, count: 10), every: 1.0 / 120), .backups)
     }
 
     func testTheEndsStopAndNeverWrap() {
-        XCTAssertEqual(NDPage.jobs.neighbour(1), .jobs)
-        XCTAssertEqual(NDPage.overview.neighbour(-1), .overview)
-        XCTAssertEqual(NDPage.overview.neighbour(1), .backups)
-        XCTAssertEqual(NDPage.jobs.neighbour(-1), .backups)
-        let store = NDStore(fixture: BrainBarDesignFixture.inputs(.calm), page: .jobs)
-        var swipe = NDPageSwipe()
-        gesture(&swipe, dx: -200, store: store)
-        XCTAssertEqual(store.page, .jobs, "past Jobs stays on Jobs")
-        store.page = .overview
-        gesture(&swipe, dx: 200, store: store)
-        XCTAssertEqual(store.page, .overview, "before Overview stays on Overview")
+        XCTAssertEqual(settle(from: .jobs, steps: Array(repeating: -40, count: 10), every: 1.0 / 120), .jobs, "past Jobs stays on Jobs")
+        XCTAssertEqual(settle(from: .overview, steps: Array(repeating: 40, count: 10), every: 1.0 / 120), .overview,
+                       "before Overview stays on Overview")
     }
 
     // MARK: Event routing (phases, momentum, precedence)
@@ -84,11 +61,12 @@ final class BrainBarTabSwipeTests: XCTestCase {
         var swipe = NDPageSwipe()
         XCTAssertEqual(swipe.route(.init(phase: .began)), .init(), "the axis is not known yet: the page sees it")
         XCTAssertEqual(swipe.route(.init(phase: .changed, dx: -4)), .init(), "still inside the slop")
-        XCTAssertEqual(swipe.route(.init(phase: .changed, dx: -12)), .init(swallow: true), "now sideways: kept from the page")
-        for _ in 0..<8 { XCTAssertTrue(swipe.route(.init(phase: .changed, dx: -12)).swallow) }
-        XCTAssertEqual(swipe.route(.init(phase: .ended)), .init(swallow: false, step: 1),
-                       "the step is taken on release, and the page's scroll view sees its gesture end")
-        // The trackpad's momentum after a swipe: never another page, never a page scroll.
+        XCTAssertEqual(swipe.route(.init(phase: .changed, dx: -12)), .init(swallow: true, drive: .grab(-16)),
+                       "now sideways: kept from the page, and the pages take hold with the travel so far")
+        for _ in 0..<8 { XCTAssertEqual(swipe.route(.init(phase: .changed, dx: -12)), .init(swallow: true, drive: .move(-12))) }
+        XCTAssertEqual(swipe.route(.init(phase: .ended)), .init(swallow: false, drive: .release),
+                       "released at the end, and the page's scroll view sees its gesture end")
+        // The trackpad's momentum after a swipe: never moves the pages, never a page scroll.
         XCTAssertEqual(swipe.route(.init(momentumPhase: .began, dx: -40)), .init(swallow: true))
         for _ in 0..<10 { XCTAssertEqual(swipe.route(.init(momentumPhase: .changed, dx: -40)), .init(swallow: true)) }
         XCTAssertEqual(swipe.route(.init(momentumPhase: .ended)), .init(swallow: true))
@@ -97,17 +75,14 @@ final class BrainBarTabSwipeTests: XCTestCase {
     }
 
     func testAVerticalScrollReachesThePageAndNeverChangesPage() {
-        let store = NDStore(fixture: BrainBarDesignFixture.inputs(.calm), page: .backups)
         var swipe = NDPageSwipe()
         var decisions = [swipe.route(.init(phase: .began))]
         decisions += (0..<12).map { i in swipe.route(.init(phase: .changed, dx: i % 2 == 0 ? -9 : 9, dy: -20)) }
         decisions += (0..<6).map { _ in swipe.route(.init(phase: .changed, dx: -40, dy: 0)) } // wanders sideways later
         decisions.append(swipe.route(.init(phase: .ended)))
         decisions += (0..<5).map { _ in swipe.route(.init(momentumPhase: .changed, dy: -30)) }
-        for d in decisions { store.swipePage(d.step) }
         XCTAssertTrue(decisions.allSatisfy { !$0.swallow }, "every event of a vertical scroll reaches the page")
-        XCTAssertTrue(decisions.allSatisfy { $0.step == 0 })
-        XCTAssertEqual(store.page, .backups)
+        XCTAssertTrue(decisions.allSatisfy { $0.drive == nil }, "and never moves the pages")
     }
 
     func testAPlainMouseWheelIsLeftAlone() {
@@ -126,11 +101,11 @@ final class BrainBarTabSwipeTests: XCTestCase {
         // Precedence: a gesture that begins over a view that scrolls sideways is that view's for its whole length.
         _ = swipe.route(.init(phase: .began, overSidewaysScroller: true))
         for _ in 0..<10 { XCTAssertEqual(swipe.route(.init(phase: .changed, dx: -30)), .init(), "the scroller gets every event") }
-        XCTAssertEqual(swipe.route(.init(phase: .ended)), .init(), "and no page changes")
+        XCTAssertEqual(swipe.route(.init(phase: .ended)), .init(), "and no page moves")
         XCTAssertEqual(swipe.route(.init(momentumPhase: .changed, dx: -30)), .init(), "nor is its momentum taken")
 
         // The next gesture over the pages swipes again.
-        XCTAssertEqual(swipeSteps(&swipe, dx: -120), [1])
+        XCTAssertEqual(swipeDirections(&swipe, dx: -120), [1])
     }
 
     func testSidewaysScrollersAreRecognisedAndVerticalOnesAreNot() {
@@ -194,7 +169,7 @@ final class BrainBarTabSwipeTests: XCTestCase {
             let host = NSHostingView(rootView: NDWindowRoot(store: store, drawsTrafficLights: true))
             host.appearance = NSAppearance(named: appearance)
             func draw(_ name: String) throws {
-                let size = NSSize(width: NDGrid.windowWidth, height: NDPageHeight.window(store, page: store.page, screen: nil))
+                let size = NSSize(width: NDGrid.windowWidth, height: NDPageHeight.fitted(store, page: store.page, screen: nil))
                 host.frame = NSRect(origin: .zero, size: size)
                 host.layoutSubtreeIfNeeded()
                 RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
@@ -205,8 +180,7 @@ final class BrainBarTabSwipeTests: XCTestCase {
                 try NDRenderHarness.write(rep, name: "\(name)-\(suffix)", in: output)
             }
             try draw("swipe-0-start-overview")
-            let control = try XCTUnwrap(segmentedControl(in: host), "the drawn title bar holds the tabs")
-            XCTAssertEqual(control.selectedSegment, 0)
+            XCTAssertEqual(store.tabs.selection, 0)
             var swipe = NDPageSwipe()
             for step in script {
                 laidOut.removeAll()
@@ -214,8 +188,8 @@ final class BrainBarTabSwipeTests: XCTestCase {
                 try draw("swipe-\(step.name)")
                 let index = try XCTUnwrap(NDPage.allCases.firstIndex(of: step.page))
                 XCTAssertEqual(store.page, step.page, step.name)
-                XCTAssertEqual(control.selectedSegment, index, "\(step.name): the drawn selected tab names the page")
-                XCTAssertEqual(segmentedControl(in: host), control, "\(step.name): the same control, updated in place")
+                XCTAssertEqual(store.tabs.selection, index, "\(step.name): the selected tab names the page")
+                XCTAssertEqual(store.tabs.progress, Double(index), "\(step.name): the pill and the pages rest on it")
                 XCTAssertEqual(store.shownPage, step.page, "\(step.name): the page the root draws")
                 if laidOut.isEmpty {
                     XCTAssertTrue(step.name.hasSuffix("stops"), "\(step.name): the root laid out a new page")
@@ -236,9 +210,16 @@ final class BrainBarTabSwipeTests: XCTestCase {
         let probe = try XCTUnwrap(monitor(in: host), "the root installs the swipe monitor")
         XCTAssertEqual(probe.frame.width, NDGrid.windowWidth, accuracy: 0.5, "it covers the window's width")
         XCTAssertNil(probe.hitTest(NSPoint(x: 10, y: 10)), "it never takes a click")
-        probe.onStep?(1)
+        // Not in a window, so nothing is live: each release lands at once.
+        probe.onDrive?(.grab(-300), 1.0, NDGrid.windowWidth)
+        XCTAssertEqual(store.tabs.progress, 300 / NDGrid.windowWidth, accuracy: 1e-9, "the pages follow the fingers 1:1")
+        XCTAssertEqual(store.page, .overview, "nothing is selected until the release")
+        probe.onDrive?(.move(-200), 1.0 + 1.0 / 120, NDGrid.windowWidth)
+        probe.onDrive?(.release, 1.0 + 2.0 / 120, NDGrid.windowWidth)
         XCTAssertEqual(store.page, .backups)
-        probe.onStep?(-1)
+        XCTAssertEqual(store.tabs.progress, 1)
+        probe.onDrive?(.grab(600), 2.0, NDGrid.windowWidth)
+        probe.onDrive?(.release, 2.2, NDGrid.windowWidth)
         XCTAssertEqual(store.page, .overview)
     }
 
@@ -297,14 +278,14 @@ final class BrainBarTabSwipeTests: XCTestCase {
         XCTAssertEqual(registry.active, 0, "and a detached view no longer follows the window")
     }
 
-    /// A swipe in progress when the window closes is dropped: after reopening, its end moves no page, its momentum is not
-    /// taken, and a fresh gesture works.
+    /// A swipe in progress when the window closes is let go (released, so the pages settle on a tab): after reopening,
+    /// its end moves nothing, its momentum is not taken, and a fresh gesture works.
     func testAPendingSwipeIsNotCarriedAcrossClose() throws {
         let registry = CountingMonitors()
         let probe = NDPageSwipeMonitor.Probe(frame: NSRect(x: 0, y: 0, width: 900, height: 600))
         probe.monitors = registry
-        var steps: [Int] = []
-        probe.onStep = { steps.append($0) }
+        var drives: [NDPageSwipe.Drive] = []
+        probe.onDrive = { drive, _, _ in drives.append(drive) }
         let window = NSObject()
         var visible = true
         let center = NotificationCenter()
@@ -320,15 +301,17 @@ final class BrainBarTabSwipeTests: XCTestCase {
         center.post(name: NSWindow.willCloseNotification, object: window)
         visible = false
         XCTAssertFalse(probe.swipe.pager.isSwiping, "closing drops the gesture")
+        XCTAssertEqual(drives.last, .release, "and lets the pages go, so they settle on a tab")
+        drives.removeAll()
         visible = true
         center.post(name: NSWindow.didBecomeKeyNotification, object: window)
 
         XCTAssertFalse(probe.route(try scroll(phase: .ended), in: window, at: at))
         XCTAssertFalse(probe.route(try scroll(momentum: .changed, dx: -30), in: window, at: at), "its momentum is the page's")
-        XCTAssertEqual(steps, [], "the old gesture's end moved no page")
+        XCTAssertEqual(drives, [], "the old gesture's end moved nothing")
 
         for event in try gestureEvents(dx: -120) { _ = probe.route(event, in: window, at: at) }
-        XCTAssertEqual(steps, [1], "a fresh gesture after reopening swipes")
+        XCTAssertEqual(directions(drives), [1], "a fresh gesture after reopening swipes")
     }
 
     // MARK: The adapter reads real scroll events (NSEvent from CGEvent, no window)
@@ -336,8 +319,13 @@ final class BrainBarTabSwipeTests: XCTestCase {
     func testTheAdapterReadsPhasesMomentumAndDeltasFromRealScrollEvents() throws {
         let probe = NDPageSwipeMonitor.Probe(frame: NSRect(x: 0, y: 0, width: 900, height: 600))
         probe.monitors = CountingMonitors()
-        var steps: [Int] = []
-        probe.onStep = { steps.append($0) }
+        var drives: [NDPageSwipe.Drive] = []
+        var times: [Double] = []
+        probe.onDrive = { drive, time, width in
+            drives.append(drive)
+            times.append(time)
+            XCTAssertEqual(width, 900, "the travel is a share of the probe's (the window's) width")
+        }
         let window = NSObject()
         probe.attach(to: window, isVisible: { true })
         let at = NSPoint(x: 450, y: 300)
@@ -353,17 +341,20 @@ final class BrainBarTabSwipeTests: XCTestCase {
         XCTAssertEqual(kept.filter { $0 }.count, 10, "every changed step is kept from the page (the first 12 pt step already passes the 6 pt slop)")
         XCTAssertFalse(kept.first!, "began reaches the page")
         XCTAssertFalse(kept.last!, "ended reaches the page")
-        XCTAssertEqual(steps, [1])
+        XCTAssertEqual(directions(drives), [1])
+        XCTAssertEqual(drives.first, .grab(-12), "the first sideways step takes hold")
+        XCTAssertEqual(drives.dropFirst().dropLast(), Array(repeating: .move(-12), count: 9), "then moves step by step")
+        XCTAssertTrue(times.allSatisfy { $0 > 0 }, "each step carries its event's own time")
         let momentum = try scroll(momentum: .changed, dx: -40)
         XCTAssertFalse(momentum.momentumPhase.isEmpty, "the momentum phase field reaches NSEvent.momentumPhase")
         XCTAssertTrue(probe.route(try scroll(momentum: .began, dx: -40), in: window, at: at))
         XCTAssertTrue(probe.route(momentum, in: window, at: at))
         XCTAssertTrue(probe.route(try scroll(momentum: .ended), in: window, at: at))
-        XCTAssertEqual(steps, [1], "momentum never moves a page")
+        XCTAssertEqual(directions(drives), [1], "momentum never moves a page")
 
         // Right: back one page.
         for event in try gestureEvents(dx: 120) { _ = probe.route(event, in: window, at: at) }
-        XCTAssertEqual(steps, [1, -1])
+        XCTAssertEqual(directions(drives), [1, -1])
 
         // Vertical: every event reaches the page, no step.
         let vertical = try gestureEvents(dx: 0, dy: -200).map { probe.route($0, in: window, at: at) }
@@ -376,7 +367,7 @@ final class BrainBarTabSwipeTests: XCTestCase {
         // Another window's events, or a gesture that begins outside the probe: not a swipe.
         for event in try gestureEvents(dx: -120) { XCTAssertFalse(probe.route(event, in: NSObject(), at: at)) }
         for event in try gestureEvents(dx: -120) { XCTAssertFalse(probe.route(event, in: window, at: NSPoint(x: 2000, y: 300))) }
-        XCTAssertEqual(steps, [1, -1])
+        XCTAssertEqual(directions(drives), [1, -1])
     }
 
     private final class CountingMonitors: NDScrollEventMonitoring {
@@ -411,19 +402,63 @@ final class BrainBarTabSwipeTests: XCTestCase {
 
     // MARK: Helpers
 
-    /// A trackpad gesture of 10 equal steps (began, changed ×10, ended) through the router, applied to `store`.
-    @discardableResult
-    private func gesture(_ swipe: inout NDPageSwipe, dx: CGFloat, dy: CGFloat = 0, store: NDStore) -> [Int] {
-        let steps = swipeSteps(&swipe, dx: dx, dy: dy)
-        for step in steps { store.swipePage(step) }
-        return steps
+    /// A trackpad gesture of 10 equal steps, 1/120 s apart (began, changed ×10, ended), through the router into `store`'s
+    /// pages. Not live (no window), so the release lands at once.
+    private func gesture(_ swipe: inout NDPageSwipe, dx: CGFloat, dy: CGFloat = 0, store: NDStore) {
+        var time = 100.0
+        func feed(_ event: NDPageSwipe.Event) {
+            if let drive = swipe.route(event).drive { store.drivePages(drive, at: time, width: NDGrid.windowWidth) }
+            time += 1.0 / 120
+        }
+        feed(.init(phase: .began))
+        for _ in 0..<10 { feed(.init(phase: .changed, dx: dx / 10, dy: dy / 10)) }
+        feed(.init(phase: .ended))
     }
 
-    private func swipeSteps(_ swipe: inout NDPageSwipe, dx: CGFloat, dy: CGFloat = 0) -> [Int] {
+    /// The direction of each released swipe: +1 for fingers that moved left (the next page), -1 for right.
+    private func directions(_ drives: [NDPageSwipe.Drive]) -> [Int] {
+        var travel: CGFloat = 0
+        var out: [Int] = []
+        for drive in drives {
+            switch drive {
+            case .grab(let dx): travel = dx
+            case .move(let dx): travel += dx
+            case .release: out.append(travel < 0 ? 1 : -1)
+            }
+        }
+        return out
+    }
+
+    private func swipeDirections(_ swipe: inout NDPageSwipe, dx: CGFloat) -> [Int] {
         var decisions = [swipe.route(.init(phase: .began))]
-        decisions += (0..<10).map { _ in swipe.route(.init(phase: .changed, dx: dx / 10, dy: dy / 10)) }
+        decisions += (0..<10).map { _ in swipe.route(.init(phase: .changed, dx: dx / 10)) }
         decisions.append(swipe.route(.init(phase: .ended)))
-        return decisions.map(\.step).filter { $0 != 0 }
+        return directions(decisions.compactMap(\.drive))
+    }
+
+    /// A live swipe of `steps` (points, one changed event each, `every` seconds apart) from `page`, then the clock runs
+    /// at 120 Hz until the pager rests: the page it settles on.
+    private func settle(from page: NDPage, steps: [CGFloat], every interval: Double, restBeforeLift: Double = 0) -> NDPage {
+        let store = NDStore(fixture: BrainBarDesignFixture.inputs(.calm), page: page)
+        store.tabs.isLive = { true }
+        var swipe = NDPageSwipe()
+        var time = 10.0
+        func feed(_ event: NDPageSwipe.Event) {
+            if let drive = swipe.route(event).drive { store.drivePages(drive, at: time, width: NDGrid.windowWidth) }
+        }
+        feed(.init(phase: .began))
+        for dx in steps {
+            time += interval
+            feed(.init(phase: .changed, dx: dx))
+        }
+        time += max(restBeforeLift, 1.0 / 120)
+        feed(.init(phase: .ended))
+        for _ in 0..<240 where store.tabs.phase != .resting {
+            time += 1.0 / 120
+            store.tabs.tick(at: time)
+        }
+        XCTAssertEqual(store.tabs.phase, .resting, "settled within 2 s")
+        return store.page
     }
 
     private func segmentedControl(in view: NSView) -> NSSegmentedControl? {

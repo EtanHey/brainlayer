@@ -1,0 +1,69 @@
+# Recorder cadence — w300, M1 Pro 14" (ProMotion, NSScreen.maximumFramesPerSecond = 120), macOS 26.5.1
+# 2026-11-27 23:47 IST
+
+## Power: mains (charger attached; battery behaviour not measured)
+  Now drawing from 'AC Power'
+   -InternalBattery-0 (id=23461987)	47%; AC attached; not charging present: true
+  "ExternalConnected" = Yes
+  "IsCharging" = No
+
+## The evidence recordings (ScreenCaptureKit, minimumFrameInterval 1/240 s, region 620x764 pt @2x, reference strip in frame)
+### before.mov  ffprobe:
+  width=1240
+  height=1528
+  r_frame_rate=120/1
+  avg_frame_rate=79760/667
+  duration=33.350000
+  nb_frames=3988
+  frame times (host clock, from the recorder):
+  frames 3988 span 33.342 s avg fps 119.58
+  dt ms p5/25/50/75/95/99 [8.33 8.33 8.33 8.33 8.33 8.33] max 25.0
+  interval histogram (frames of 8.33 ms): {'1': 3975, '2': 10, '3': 2}
+  reference strip: step == recorded interval on 3971 of 3987 intervals; total advance 4001 vs 4001 frame periods
+### after.mov  ffprobe:
+  width=1240
+  height=1528
+  r_frame_rate=120/1
+  avg_frame_rate=478440/3997
+  duration=33.308333
+  nb_frames=3987
+  frame times (host clock, from the recorder):
+  frames 3987 span 33.300 s avg fps 119.70
+  dt ms p5/25/50/75/95/99 [8.33 8.33 8.33 8.33 8.33 8.33] max 41.7
+  interval histogram (frames of 8.33 ms): {'1': 3979, '2': 6, '5': 1}
+  reference strip: step == recorded interval on 3980 of 3986 intervals; total advance 3996 vs 3996 frame periods
+
+  ffprobe avg_frame_rate: before 79760/667 = 119.58 fps, after 478440/3997 = 119.70 fps; r_frame_rate is the nominal
+  120/1. The interval histogram is the recorder's real cadence: an interval of 2+ frames is a vsync the recorder (or
+  compositor) did not deliver (the reference strip changes every frame, so the region always changed).
+  Recorder misses inside a measured motion window: before g6 at 1686.9 ms (2 frames).
+
+## Why not ffmpeg avfoundation (the brief's command)
+ffmpeg -f avfoundation -capture_cursor 1 -framerate 120 -i "1:none" ... delivered 77-80 fps on this Mac in every variant:
+### trial t1
+  frames 876 span 10.999 s avg fps 79.55
+  dt ms p5/25/50/75/95/99 [11. 11. 11. 12. 22. 23.] max 56.0
+### trial c1
+  frames 463 span 5.997 s avg fps 77.04
+  dt ms p5/25/50/75/95/99 [11. 11. 11. 12. 23. 23.] max 190.0
+### trial c2
+  frames 474 span 5.997 s avg fps 78.87
+  dt ms p5/25/50/75/95/99 [11. 11. 11. 12. 22. 23.] max 23.0
+### trial c3
+  frames 476 span 5.985 s avg fps 79.37
+  dt ms p5/25/50/75/95/99 [11. 11. 11. 12. 22. 23.] max 23.0
+### trial c4
+  frames 483 span 5.996 s avg fps 80.39
+  dt ms p5/25/50/75/95/99 [11. 11. 11. 12. 22. 23.] max 23.0
+  (t1: full screen 3024x1964 libx264 ultrafast; c1: nv12 + h264_videotoolbox; c2: nv12 + crop 1240x1484 + libx264;
+   c3: 0rgb + crop + libx264; c4: nv12 + crop + libx264 with -capture_cursor 0). Medians of 11-12 ms between frames.
+
+## ScreenCaptureKit minimumFrameInterval, reference strip only (a render-server animation that changes every frame)
+### 1/120 s
+  frames 437 intervals 436
+  interval(frames) histogram: {np.float64(1.0): np.int64(392), np.float64(2.0): np.int64(44)}
+  ref step == interval: 436  step < interval (ref missed): 0  step > interval: 0
+### 1/240 s
+  frames 499 intervals 498
+  interval(frames) histogram: {np.float64(1.0): np.int64(498)}
+  ref step == interval: 498  step < interval (ref missed): 0  step > interval: 0
