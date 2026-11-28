@@ -132,101 +132,6 @@ struct NDTitleBar: View {
     }
 }
 
-/// The native segmented control with its labels drawn by us (t1 Medium selected, t2 otherwise, each segment as wide as
-/// its Medium label), and a label with a count carries a 16 pt count pill after it. Selection, keyboard and VoiceOver
-/// stay native. Only the range switch uses it now; the page tabs are `NDPageTabs`.
-struct NDSegments: NSViewRepresentable {
-    let titles: [String]
-    var counts: [Int] = []
-    @Binding var selection: Int
-    var accessibilityLabel: String
-    var fontSize: CGFloat = 13
-    var padding: CGFloat = 14
-    var controlSize: NSControl.ControlSize = .regular
-
-    final class Coordinator: NSObject {
-        var selection: Binding<Int>
-        init(selection: Binding<Int>) { self.selection = selection }
-        @MainActor @objc func changed(_ sender: NSSegmentedControl) {
-            if selection.wrappedValue != sender.selectedSegment { selection.wrappedValue = sender.selectedSegment }
-        }
-    }
-
-    func makeCoordinator() -> Coordinator { Coordinator(selection: $selection) }
-
-    func makeNSView(context: Context) -> NSSegmentedControl {
-        let control = NSSegmentedControl(labels: titles, trackingMode: .selectOne,
-                                         target: context.coordinator, action: #selector(Coordinator.changed(_:)))
-        control.segmentStyle = .automatic
-        control.controlSize = controlSize
-        control.setAccessibilityLabel(accessibilityLabel)
-        update(control)
-        return control
-    }
-
-    func updateNSView(_ control: NSSegmentedControl, context: Context) {
-        context.coordinator.selection = $selection
-        update(control)
-    }
-
-    @MainActor private func update(_ control: NSSegmentedControl) {
-        for (index, title) in titles.enumerated() {
-            let count = index < counts.count ? counts[index] : 0
-            let image = Self.labelImage(title, count: count, selected: index == selection, size: fontSize)
-            control.setLabel("", forSegment: index)
-            control.setImage(image, forSegment: index)
-            control.setImageScaling(.scaleNone, forSegment: index)
-            control.setWidth(image.size.width + 2 * padding, forSegment: index)
-        }
-        control.selectedSegment = selection
-    }
-
-    /// R1.12 (§ D): the badge is a neutral count, not a red mark: two problems draw 4 red marks, not 7. It still says
-    /// where the problem lives.
-    static let badgeFill = NDColor.badge
-    static let badgeText = NDColor.t1
-
-    /// "Backups ①": the label, then a 16 pt neutral count pill, 6 pt after it. Drawn at display time, so the colours
-    /// follow the control's appearance.
-    @MainActor static func labelImage(_ title: String, count: Int, selected: Bool, size: CGFloat = NDScale.body) -> NSImage {
-        let font = NSFont.systemFont(ofSize: size, weight: selected ? .medium : .regular)
-        let label = NSAttributedString(string: title, attributes: [.font: font])
-        let countFont = NSFont.monospacedDigitSystemFont(ofSize: NDScale.caption, weight: .semibold)
-        let numeral = NSAttributedString(string: String(count), attributes: [.font: countFont])
-        let pill = max(16, ceil(numeral.size().width) + 8)
-        // The width is always the SELECTED (Medium) label's, the label centred in it: a selection never changes a
-        // segment's width, so nothing beside it moves (tab-swipe spec 4).
-        let medium = NSAttributedString(string: title, attributes: [.font: NSFont.systemFont(ofSize: size, weight: .medium)])
-        let width = ceil(medium.size().width + (count > 0 ? 6 + pill : 0))
-        let drawn = label.size().width + (count > 0 ? 6 + pill : 0)
-        let height = max(16, ceil(label.size().height))
-        let image = NSImage(size: NSSize(width: width, height: height), flipped: false) { rect in
-            let y = (rect.height - label.size().height) / 2
-            let x = (rect.width - drawn) / 2
-            NSAttributedString(string: title, attributes: [.font: font, .foregroundColor: selected ? NDColor.t1 : NDColor.t2])
-                .draw(at: NSPoint(x: x, y: y))
-            if count > 0 {
-                let box = NSRect(x: x + label.size().width + 6, y: (rect.height - 16) / 2, width: pill, height: 16)
-                badgeFill.setFill()
-                NSBezierPath(roundedRect: box, xRadius: 8, yRadius: 8).fill()
-                NSAttributedString(string: String(count), attributes: [.font: countFont, .foregroundColor: badgeText])
-                    .draw(at: NSPoint(x: box.midX - numeral.size().width / 2, y: box.midY - numeral.size().height / 2))
-            }
-            return true
-        }
-        image.isTemplate = false
-        image.accessibilityDescription = spokenLabel(title, count: count)
-        return image
-    }
-
-    /// "Backups, 2 things need you": what VoiceOver says for a tab with a count.
-    static func spokenLabel(_ title: String, count: Int) -> String {
-        count > 0
-            ? "\(title), \(count == 1 ? BrainBarMenuPresenter.Say.countOne.text : BrainBarMenuPresenter.SurfaceSay.thingsNeedYou(count))"
-            : title
-    }
-}
-
 /// The window's page tabs: Overview, Backups, Jobs, each with its count of problems, on the glass pill that follows the
 /// pages (`GlassTabBar`). Slots are fixed at the selected weight, so nothing but the pill moves when the selection does.
 struct NDPageTabs: View {
@@ -242,16 +147,27 @@ struct NDPageTabs: View {
     /// against the dark track).
     static let colors = GlassTabColors(text: ND.t2, selectedText: ND.t1, track: Color(nsColor: NDColor.control),
                                        pill: Color(nsColor: pillFill), pillRim: Color(nsColor: pillRim),
-                                       countFill: Color(nsColor: NDSegments.badgeFill),
-                                       countText: Color(nsColor: NDSegments.badgeText))
+                                       countFill: Color(nsColor: badgeFill), countText: Color(nsColor: badgeText))
     static let pillFill = NDColor.dynamic("tabs.pill", dark: NSColor(white: 1, alpha: 0.26), light: NSColor(white: 1, alpha: 1))
     static let pillRim = NDColor.dynamic("tabs.rim", dark: NSColor(white: 1, alpha: 0.22), light: NSColor(white: 0, alpha: 0.10))
+
+    /// R1.12 (§ D): the badge is a neutral count, not a red mark: two problems draw 4 red marks, not 7. It still says
+    /// where the problem lives.
+    static let badgeFill = NDColor.badge
+    static let badgeText = NDColor.t1
 
     static func tabs(_ r1: NDR1) -> [GlassTab] {
         NDPage.allCases.map { page in
             let count = [NDPage.backups: r1.backupsBadge, .jobs: r1.jobsBadge][page] ?? 0
-            return GlassTab(title: page.title, count: count, spokenLabel: NDSegments.spokenLabel(page.title, count: count))
+            return GlassTab(title: page.title, count: count, spokenLabel: spokenLabel(page.title, count: count))
         }
+    }
+
+    /// "Backups, 2 things need you": what VoiceOver says for a tab with a count.
+    static func spokenLabel(_ title: String, count: Int) -> String {
+        count > 0
+            ? "\(title), \(count == 1 ? BrainBarMenuPresenter.Say.countOne.text : BrainBarMenuPresenter.SurfaceSay.thingsNeedYou(count))"
+            : title
     }
 }
 
@@ -847,16 +763,27 @@ struct NDReadoutPlacement: Layout {
     }
 }
 
-/// The range switch (1 h, 3 h, 24 h): the system's small segmented control.
+/// The range switch (1 h, 3 h, 24 h): the page tabs' glass pill (`GlassTabBar`) at the heading's size, so the window has
+/// one selection style. Same track, pill and rim tokens and the same spring as the tabs; fixed slots, so the pill is the
+/// only thing that moves. A picker to VoiceOver ("Range"), arrows on the keyboard. A pick reaches `store.range` when the
+/// pill comes to rest (`NDStore.rangeTabs`).
 struct NDRangeControl: View {
-    @ObservedObject var store: NDStore
-    var body: some View {
-        NDSegments(titles: NDRange.allCases.map(\.label),
-                   selection: Binding(get: { NDRange.allCases.firstIndex(of: store.range) ?? 0 },
-                                      set: { store.range = NDRange.allCases[max(0, min($0, NDRange.allCases.count - 1))] }),
-                   accessibilityLabel: "Range", fontSize: 11, padding: 10, controlSize: .small)
-            .fixedSize()
+    let store: NDStore
+    var bar: GlassTabBar {
+        GlassTabBar(pager: store.rangeTabs, tabs: Self.tabs, accessibilityLabel: "Range", metrics: Self.metrics,
+                    colors: NDPageTabs.colors)
     }
+
+    var body: some View {
+        bar
+            .fixedSize()
+            // The settle's frames, from the display, only while the pill moves.
+            .background(GlassTabPagerClock(pager: store.rangeTabs))
+    }
+
+    /// The heading's 22 pt row: 11 pt labels, 10 pt sides (the small control it replaces).
+    static let metrics = GlassTabMetrics(fontSize: 11, padding: 10, height: 22)
+    static let tabs = NDRange.allCases.map { GlassTab(title: $0.label, spokenLabel: $0.label) }
 }
 
 // MARK: - Buttons (§ 3.3)
@@ -894,9 +821,12 @@ struct NDButtonStyle: ButtonStyle {
     var filled = false
     var small = false
     var compact = false
+    /// w303: 2 lets the label wrap onto a second line, centred, the button taking the width it is given. Only a panel
+    /// too narrow for its one-line label asks for it (the Nightly check-up's panel, 160 pt beside its station).
+    var lines = 1
 
     func makeBody(configuration: Configuration) -> some View {
-        NDButtonBody(configuration: configuration, filled: filled, small: small, compact: compact)
+        NDButtonBody(configuration: configuration, filled: filled, small: small, compact: compact, lines: lines)
     }
 
     /// R1.13.1 hygiene: the padded button label has a rectangular hit area, including its corners.
@@ -910,6 +840,7 @@ struct NDButtonStyle: ButtonStyle {
         let filled: Bool
         let small: Bool
         var compact = false
+        var lines = 1
         @State private var hovering = false
         /// D8.2: while the button leaves for the waiting line it keeps its pressed look: no rest frame after the press.
         @Environment(\.ndHeldPressed) private var held
@@ -918,12 +849,17 @@ struct NDButtonStyle: ButtonStyle {
             let pressed = configuration.isPressed || held
             let fill: Color = filled ? (pressed ? ND.accentPressed : hovering ? ND.accentHover : ND.accent)
                 : (pressed ? ND.buttonPressed : hovering ? ND.buttonHover : ND.button)
+            let height: CGFloat = compact ? 20 : small ? 22 : 24
             configuration.label
                 .font(NDType.bodyMedium)
                 .foregroundStyle(filled ? Color.white : ND.t1)
-                .lineLimit(1)
+                .lineLimit(lines)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: lines > 1)
                 .padding(.horizontal, small || compact ? 10 : 12)
-                .frame(height: compact ? 20 : small ? 22 : 24)
+                .padding(.vertical, lines > 1 ? 3 : 0)
+                .frame(maxWidth: lines > 1 ? .infinity : nil)
+                .frame(minHeight: height, maxHeight: lines > 1 ? nil : height)
                 .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(fill))
                 // R1.1 change 22: hover adds a 0.5 pt inner highlight (filled) or a 0.5 pt t3 inner stroke (bordered);
                 // nothing scales, the size never changes.

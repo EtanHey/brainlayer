@@ -1,0 +1,27 @@
+Test Case '-[BrainBarTests.BrainBarKeptSafeWidthTests testKeptSafeIsOnlyAsWideAsItsWidestWords]' passed (0.050 seconds).
+	 Executed 1 test, with 0 failures (0 unexpected) in 0.050 (0.050) seconds
+BrainBarPipelineLineLabelTests.swift:90: error: -[BrainBarTests.BrainBarPipelineLineLabelTests testCaptionsAreDrawnOnTheirLines] : XCTAssertEqualWithAccuracy failed: ("215.0") is not equal to ("384.375") +/- ("0.75") - dark Session backups: words centred on the run
+BrainBarPipelineLineLabelTests.swift:100: error: -[BrainBarTests.BrainBarPipelineLineLabelTests testCaptionsAreDrawnOnTheirLines] : XCTAssertEqualWithAccuracy failed: ("3.704274844118783") is not equal to ("8.0") +/- ("0.5") - dark Session backups: its capital's centre 3.704274844118783 on the line 8.0
+BrainBarPipelineLineLabelTests.swift:105: error: -[BrainBarTests.BrainBarPipelineLineLabelTests testCaptionsAreDrawnOnTheirLines] : XCTAssertFalse failed - dark Session backups: no line inside
+BrainBarPipelineLineLabelTests.swift:90: error: -[BrainBarTests.BrainBarPipelineLineLabelTests testCaptionsAreDrawnOnTheirLines] : XCTAssertEqualWithAccuracy failed: ("215.0") is not equal to ("348.0") +/- ("0.75") - dark Search answers: words centred on the run
+BrainBarPipelineLineLabelTests.swift:100: error: -[BrainBarTests.BrainBarPipelineLineLabelTests testCaptionsAreDrawnOnTheirLines] : XCTAssertEqualWithAccuracy failed: ("243.71077991093134") is not equal to ("248.0") +/- ("0.5") - dark Search answers: its capital's centre 243.71077991093134 on the line 248.0
+BrainBarPipelineLineLabelTests.swift:105: error: -[BrainBarTests.BrainBarPipelineLineLabelTests testCaptionsAreDrawnOnTheirLines] : XCTAssertFalse failed - dark Search answers: no line inside
+BrainBarPipelineLineLabelTests.swift:90: error: -[BrainBarTests.BrainBarPipelineLineLabelTests testCaptionsAreDrawnOnTheirLines] : XCTAssertEqualWithAccuracy failed: ("215.0") is not equal to ("384.375") +/- ("0.75") - light Session backups: words centred on the run
+BrainBarPipelineLineLabelTests.swift:100: error: -[BrainBarTests.BrainBarPipelineLineLabelTests testCaptionsAreDrawnOnTheirLines] : XCTAssertEqualWithAccuracy failed: ("3.7059123921924697") is not equal to ("8.0") +/- ("0.5") - light Session backups: its capital's centre 3.7059123921924697 on the line 8.0
+BrainBarPipelineLineLabelTests.swift:105: error: -[BrainBarTests.BrainBarPipelineLineLabelTests testCaptionsAreDrawnOnTheirLines] : XCTAssertFalse failed - light Session backups: no line inside
+BrainBarPipelineLineLabelTests.swift:90: error: -[BrainBarTests.BrainBarPipelineLineLabelTests testCaptionsAreDrawnOnTheirLines] : XCTAssertEqualWithAccuracy failed: ("215.0") is not equal to ("348.0") +/- ("0.75") - light Search answers: words centred on the run
+BrainBarPipelineLineLabelTests.swift:100: error: -[BrainBarTests.BrainBarPipelineLineLabelTests testCaptionsAreDrawnOnTheirLines] : XCTAssertEqualWithAccuracy failed: ("243.71378105237693") is not equal to ("248.0") +/- ("0.5") - light Search answers: its capital's centre 243.71378105237693 on the line 248.0
+BrainBarPipelineLineLabelTests.swift:105: error: -[BrainBarTests.BrainBarPipelineLineLabelTests testCaptionsAreDrawnOnTheirLines] : XCTAssertFalse failed - light Search answers: no line inside
+Test Case '-[BrainBarTests.BrainBarPipelineLineLabelTests testCaptionsAreDrawnOnTheirLines]' failed (1.653 seconds).
+BrainBarPipelineLineLabelTests.swift:54: error: -[BrainBarTests.BrainBarPipelineLineLabelTests testEachCaptionIsCentredOnItsOwnLine] : XCTAssertEqualWithAccuracy failed: ("215.0") is not equal to ("384.375") +/- ("0.5") - Session backups: centred on the straight run
+BrainBarPipelineLineLabelTests.swift:54: error: -[BrainBarTests.BrainBarPipelineLineLabelTests testEachCaptionIsCentredOnItsOwnLine] : XCTAssertEqualWithAccuracy failed: ("215.0") is not equal to ("348.0") +/- ("0.5") - Search answers: centred on the straight run
+Test Case '-[BrainBarTests.BrainBarPipelineLineLabelTests testEachCaptionIsCentredOnItsOwnLine]' failed (0.001 seconds).
+BrainBarPipelineLineLabelTests.swift:156: error: -[BrainBarTests.BrainBarPipelineLineLabelTests testNotConfirmedCaptionIsDrawnOnTheRail] : XCTAssertEqualWithAccuracy failed: ("6.531867588932811") is not equal to ("8.0") +/- ("0.5") - dark: the digits' centre 6.531867588932811 on the rail 8.0
+BrainBarPipelineLineLabelTests.swift:156: error: -[BrainBarTests.BrainBarPipelineLineLabelTests testNotConfirmedCaptionIsDrawnOnTheRail] : XCTAssertEqualWithAccuracy failed: ("6.560721632958404") is not equal to ("8.0") +/- ("0.5") - light: the digits' centre 6.560721632958404 on the rail 8.0
+Test Case '-[BrainBarTests.BrainBarPipelineLineLabelTests testNotConfirmedCaptionIsDrawnOnTheRail]' failed (0.831 seconds).
+Test Case '-[BrainBarTests.BrainBarPipelineLineLabelTests testRenderRequestedLineLabels]' passed (0.000 seconds).
+	 Executed 4 tests, with 16 failures (0 unexpected) in 2.485 (2.485) seconds
+	 Executed 5 tests, with 16 failures (0 unexpected) in 2.535 (2.535) seconds
+	 Executed 5 tests, with 16 failures (0 unexpected) in 2.535 (2.536) seconds
+	 Executed 0 tests, with 0 failures (0 unexpected) in 0.000 (0.000) seconds
+	 Executed 0 tests, with 0 failures (0 unexpected) in 0.000 (0.001) seconds

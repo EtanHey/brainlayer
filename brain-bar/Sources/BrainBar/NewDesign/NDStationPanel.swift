@@ -30,6 +30,8 @@ struct NDStationPanelBody: View {
     }
 
     /// Widening also reflows the readouts; a vertical stack has a minimum height even at the widest width.
+    /// w303: only Read's panel may still take it. Local copy and Google Drive open upward over the Activity card as
+    /// ordinary 320 pt popovers (NDPipelineLayout.copyPanels), so they never need the one-row strip.
     private var wideBody: some View {
         HStack(alignment: .top, spacing: 12) {
             heading.frame(width: 220, alignment: .topLeading)
@@ -86,13 +88,27 @@ struct NDStationPanelBody: View {
                     Text(line.label).font(NDType.panelBody).foregroundStyle(ND.t2).fixedSize(horizontal: false, vertical: true)
                     Spacer(minLength: line.value.isEmpty ? 0 : 12)
                     if !line.value.isEmpty {
-                        Text(line.value).font(NDType.panelValue)
-                            .foregroundStyle(line.tone == .fault ? ND.redText : line.tone == .warn ? ND.orangeText : ND.t1)
+                        Text(line.value).font(line.quiet ? NDType.panelBody : NDType.panelValue)
+                            .foregroundStyle(line.tone == .fault ? ND.redText : line.tone == .warn ? ND.orangeText
+                                             : line.quiet ? ND.t2 : ND.t1)
                     }
                 }
                 .frame(minHeight: Self.rowHeight)
             }
         }
+    }
+
+    /// w303 review: a label set on two lines, broken at the space that makes the longer line shortest (13 pt Medium), so
+    /// "Copy a report for your agent" reads "Copy a report / for your agent" rather than leaving "your agent" alone.
+    static func twoLines(_ label: String) -> String {
+        let words = label.split(separator: " ").map(String.init)
+        guard words.count > 1 else { return label }
+        func width(_ s: String) -> CGFloat { NDPipelineLayout.textWidth(s, size: 13, weight: .medium) }
+        let best = (1..<words.count).min { a, b in
+            max(width(words[..<a].joined(separator: " ")), width(words[a...].joined(separator: " ")))
+                < max(width(words[..<b].joined(separator: " ")), width(words[b...].joined(separator: " ")))
+        }!
+        return words[..<best].joined(separator: " ") + "\n" + words[best...].joined(separator: " ")
     }
 
     /// R1.7 item 10: a row at 12 pt is 18 pt high.
@@ -136,10 +152,20 @@ struct NDStationPanelBody: View {
 
     @ViewBuilder private func actionButton(_ action: BrainBarMenuPresentation.Action) -> some View {
         if action.kind == .copyReport {
-            HStack {
-                Spacer()
-                NDCopyReportButton(label: NDPipelineChart.shortLabel(action), spoken: action.label) { perform(action.kind) }
-                    .focused($actionFocused)
+            // w303: "Copy a report for your agent" is never cut short. Where the panel is too narrow for it on one line
+            // (the Nightly check-up's, 160 pt beside its station, boxed in by Memory, Save queue and Weekly clean's words),
+            // the button takes the panel's width and its label takes two centred lines, broken between its phrases
+            // ("Copy a report / for your agent"); the spoken label stays whole.
+            ViewThatFits(in: .horizontal) {
+                HStack {
+                    Spacer()
+                    NDCopyReportButton(label: NDPipelineChart.shortLabel(action), spoken: action.label) { perform(action.kind) }
+                        .focused($actionFocused)
+                }
+                NDCopyReportButton(label: Self.twoLines(NDPipelineChart.shortLabel(action)), spoken: action.label, lines: 2) {
+                    perform(action.kind)
+                }
+                .focused($actionFocused)
             }
         } else {
             // R1.8 item 6: the waiting line takes the whole footer, left-aligned, 13 pt secondary, a small spinner first;
@@ -176,6 +202,8 @@ struct NDCopyReportButton: View {
     typealias Say = BrainBarMenuPresenter.SurfaceSay
     let label: String
     let spoken: String
+    /// w303: 2 where the panel is too narrow for the label on one line.
+    var lines = 1
     let action: () -> Void
     @State private var copied = false
     @State private var faceOpacity: Double = 1
@@ -225,7 +253,7 @@ struct NDCopyReportButton: View {
                 .opacity(faceOpacity)
             }
         }
-        .buttonStyle(NDButtonStyle(small: true))
+        .buttonStyle(NDButtonStyle(small: true, lines: lines))
         .focusable(false)  // R1.8 item 4: one stop, the wrapper's
         .ndKeyboardFocus { action() }
         .accessibilityLabel(Text(copied ? Say.copiedLabel : spoken))

@@ -136,6 +136,8 @@ import SwiftUI
             ND.bg
             NDActivitySection(store: store)
                 .environment(\.ndPreviewHover, hover)
+                // `cacheDisplay` cannot capture Liquid Glass: the range switch's pill is drawn as its solid stand-in.
+                .environment(\.glassTabSolidPill, true)
                 .frame(width: NDGrid.windowWidth - 2 * NDGrid.pageSide)
                 .offset(x: NDGrid.pageSide, y: 60)
         }

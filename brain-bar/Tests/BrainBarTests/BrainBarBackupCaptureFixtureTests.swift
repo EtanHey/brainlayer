@@ -30,7 +30,8 @@ import SwiftUI
             let chart = NDPipelineChart(state: r1.pipeline, memories: store.model.memories, items: r1.stationItems)
             let panel = chart.panel(.drive, content: AnyView(NDStationPopover(store: store, station: .drive)))
             print("backup panel \(name): top=\(panel.outer.minY) title=\(model.title) lines=\(model.lines)")
-            XCTAssertGreaterThanOrEqual(panel.outer.minY, NDPipelineLayout.activityLabelsBottom)
+            // w303: Drive's panel opens over the Activity card's plot, never above it.
+            XCTAssertGreaterThanOrEqual(panel.outer.minY, NDPipelineLayout.activityPlotTop)
         }
     }
 

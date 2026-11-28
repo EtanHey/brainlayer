@@ -111,6 +111,25 @@ enum NDColor {
     /// 4.5 : 1 everywhere; dark words are white, the most the material allows (3.95 : 1 over a white desktop).
     static let menuText1 = dynamic("menu.t1", dark: rgb(0xFFFFFF), light: rgb(0x000000))
     static let menuText2 = dynamic("menu.t2", dark: rgb(0xE6E6EA), light: rgb(0x1E1E21))
+
+    /// w307: a harness with running agents is drawn in its own colour, its icon and its count, in the Pipeline's agents
+    /// column. Claude keeps its brand coral and Codex takes OpenAI's green; Cursor and Antigravity have no colour of their
+    /// own, so each gets a distinct tint (orchid, cyan) clear of the fault red, the notice amber and the focus blue. Every
+    /// value holds 4.5 : 1 or more on the card in its appearance, so one colour serves the icon (3 : 1 needed) and the
+    /// number (4.5 : 1); `testHarnessColoursHoldTheirContrast` measures them.
+    static let harnessClaude = dynamic("harness.claude", dark: rgb(0xE8876A), light: rgb(0xB4532F))
+    static let harnessCodex = dynamic("harness.codex", dark: rgb(0x4CC38A), light: rgb(0x1B7F4B))
+    static let harnessCursor = dynamic("harness.cursor", dark: rgb(0xD58AE6), light: rgb(0x9A3FB0))
+    static let harnessAntigravity = dynamic("harness.antigravity", dark: rgb(0x4FC3E8), light: rgb(0x0A6E8C))
+
+    static func harness(_ family: AgentFamily) -> NSColor {
+        switch family {
+        case .claude: harnessClaude
+        case .codex: harnessCodex
+        case .cursor: harnessCursor
+        case .gemini: harnessAntigravity
+        }
+    }
 }
 
 /// SwiftUI handles of the same colours.
@@ -138,6 +157,7 @@ enum ND {
     static let read = Color(nsColor: NDColor.read)
     static let readText = Color(nsColor: NDColor.readText)
     static let agentRead = Color(nsColor: NDColor.agentRead)
+    static func harness(_ family: AgentFamily) -> Color { Color(nsColor: NDColor.harness(family)) }
     static let red = Color(nsColor: NDColor.red)
     static let redText = Color(nsColor: NDColor.redText)
     static let redTint = Color(nsColor: NDColor.redTint)

@@ -99,9 +99,9 @@ final class BrainBarNewDesignR112Tests: XCTestCase {
         XCTAssertEqual(stationMarks, 2, "each station's one fault treatment (L29)")
         XCTAssertEqual(r1.problemRows.count + stationMarks, 4)
         XCTAssertEqual(r1.backupsBadge + r1.jobsBadge, 2, "the tabs still say where each problem lives")
-        XCTAssertEqual(NDSegments.badgeFill, NDColor.badge, "a neutral pill, not red")
-        XCTAssertNotEqual(NDSegments.badgeFill, NDColor.red)
-        XCTAssertEqual(NDSegments.badgeText, NDColor.t1)
+        XCTAssertEqual(NDPageTabs.badgeFill, NDColor.badge, "a neutral pill, not red")
+        XCTAssertNotEqual(NDPageTabs.badgeFill, NDColor.red)
+        XCTAssertEqual(NDPageTabs.badgeText, NDColor.t1)
         // The row's glyph is its station's: a drawn moon for the nightly check-up, the cloud for Google Drive.
         XCTAssertEqual(NDPipelineLayout.symbols[.drive], "icloud")
     }
