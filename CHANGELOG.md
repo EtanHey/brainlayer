@@ -40,6 +40,21 @@
 - Search: hybrid RRF reranking now incorporates importance and recency signals
 - Embeddings: deferred from synchronous to async pipeline
 
+## [1.6.14] - 2026-11-28
+
+### BrainBar's tabs now follow your fingers on the trackpad and settle on one spring; the Pipeline's line captions sit on their lines and the Drive and Local copy panels fit their content; the Pipeline shows how many agents are running per harness; the Activity range switch uses the same glass selector; BrainBar's watchdog and health check no longer restart it during an update
+
+- health check: do not restart BrainBar after a failed search check while the Mac is under memory pressure (#1887)
+- BrainBar tells a client its tool list changed after expand_palette (#1888)
+- Let waiting M1 backups reserve the next heavy-work slot (#1890)
+- fix(brainbar): keep supervisor revival out of update custody (#1891)
+- fix(health): defer BrainBar heals while the updater holds custody (#1895)
+- fix(backup): report clone corruption only for SQLite corruption errors (#1893)
+- fix(setup): report MCP bridge exits instead of BrokenPipeError (#1892)
+- Health heal holds no longer exhaust the circuit breaker (#1894)
+- BrainBar's tabs follow the fingers (#1896)
+- BrainBar release integration: captions, popovers, agents, range switch (#1902)
+
 ## [1.6.13] - 2026-11-27
 
 ### BrainBar's in-app update now stops BrainBar itself before replacing it and comes back serving (the 1.6.12 update could leave memory down), and the Pipeline's Google Drive node shows a running upload cleanly in every state
