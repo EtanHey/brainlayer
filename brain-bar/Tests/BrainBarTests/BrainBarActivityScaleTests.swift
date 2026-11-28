@@ -46,7 +46,11 @@ import SwiftUI
         let canvas = NDActivitySection.canvas
         let cy = NDWaveform.plot(canvas, nowTick: true).cy
         let ticks = NDActivitySection.scaleTicks(ownerWave())
-        XCTAssertEqual(ticks, [.init(half: .up, count: 8, y: cy - 0.5 - up), .init(half: .down, count: 30, y: cy + 0.5 + down)])
+        XCTAssertEqual(ticks, [.init(half: .up, count: 8, y: cy - 0.5 - up, setByAgentReads: true),
+                               .init(half: .down, count: 30, y: cy + 0.5 + down)])
+        // R1 (N1): the upper number is the reads' colour only when reads by agents set the shared peak.
+        XCTAssertFalse(NDActivitySection.scaleTicks(ownerWave(calls: [1, 0], saves: [8, 0]))[0].setByAgentReads, "saves set it")
+        XCTAssertFalse(NDActivitySection.scaleTicks(ownerWave(calls: [4, 0], saves: [4, 0]))[0].setByAgentReads, "a tie is the saves'")
         // The tallest bar in each half ends exactly at its tick.
         XCTAssertEqual(cy - 0.5 - NDWaveform.savedHeight(ownerWave(calls: [1, 0], saves: [8, 0]), saves: 8, size: .hero), ticks[0].y)
         XCTAssertEqual(cy + 0.5 + NDWaveform.readHeight(ownerWave(), reads: 30, size: .hero), ticks[1].y)

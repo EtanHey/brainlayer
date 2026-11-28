@@ -607,8 +607,10 @@ struct NDActivitySection: View {
                 Text(Say.sessionLinesWord).font(NDType.captionMedium).foregroundStyle(ND.readText)
                     .frame(width: Self.gutter, alignment: .leading).position(x: Self.gutter / 2, y: 72)
                 // w315: each half's full-height count, level with its dashed line, so a height reads without hovering.
+                // Teal when reads by agents set the shared upper scale.
                 ForEach(Self.scaleTicks(wave, known: known), id: \.half) { tick in
-                    Text(NDFormat.integer(tick.count)).font(NDType.captionNumber).foregroundStyle(ND.t3)
+                    Text(NDFormat.integer(tick.count)).font(NDType.captionNumber)
+                        .foregroundStyle(tick.setByAgentReads ? ND.agentRead : ND.t3)
                         .lineLimit(1).minimumScaleFactor(0.7)
                         .frame(width: Self.gutter - 6, alignment: .leading)
                         .position(x: (Self.gutter - 6) / 2, y: tick.y)
@@ -618,10 +620,13 @@ struct NDActivitySection: View {
                 // rule is drawn from (before, an offset moved the drawing but not the hit area, 52 pt apart).
                 NDWaveform(wave: wave, size: .hero, nowTick: true, hover: shown(wave, cut: cut), noDataFrom: cut)
                     .frame(width: Self.plotWidth, height: Self.plotHeight + 8)
-                    .background { scaleGuides(wave, known: known).allowsHitTesting(false) }
-                    .overlay {
-                        agentReadPlot(wave, cut: cut)
-                            .allowsHitTesting(false)
+                    // w315 R1 (N5): the reads-by-agents line sits under the bars, so a save bar is never crossed by it.
+                    .background {
+                        ZStack {
+                            scaleGuides(wave, known: known)
+                            agentReadPlot(wave, cut: cut)
+                        }
+                        .allowsHitTesting(false)
                     }
                     .contentShape(Rectangle())
                     .onContinuousHover(coordinateSpace: .local) { phase in
@@ -753,6 +758,8 @@ struct NDActivitySection: View {
         let half: Half
         let count: Int
         let y: CGFloat
+        /// The upper half's peak came from reads by agents (more than any bucket's saves), so its number is theirs.
+        var setByAgentReads = false
     }
 
     /// w315: one tick per half that has anything in it: the upper half's (saves and reads by agents, one scale) at the
@@ -764,7 +771,9 @@ struct NDActivitySection: View {
         let (up, down) = NDWaveform.halves(.hero)
         var ticks: [ScaleTick] = []
         let upPeak = NDWaveform.upPeak(wave), downPeak = NDWaveform.downPeak(wave)
-        if upPeak > 0 { ticks.append(ScaleTick(half: .up, count: upPeak, y: cy - 0.5 - up)) }
+        if upPeak > 0 {
+            ticks.append(ScaleTick(half: .up, count: upPeak, y: cy - 0.5 - up, setByAgentReads: upPeak > wave.savesPeak))
+        }
         if downPeak > 0 { ticks.append(ScaleTick(half: .down, count: downPeak, y: cy + 0.5 + down)) }
         return ticks
     }
