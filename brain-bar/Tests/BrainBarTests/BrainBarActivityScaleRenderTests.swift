@@ -4,8 +4,9 @@ import SwiftUI
 
 /// w315: the Activity chart's heights read honestly. The before renders committed under
 /// `brain-bar/docs/ui-renders/2026-11-28-activity-scale/` came from round 0 of this file, which used only API on main.
-/// Since round 2 the per-case assertions also call branch-only API (`scaleTicks`, `minVisible`, `upPeak`), so this file
-/// no longer compiles on main; re-rendering a "before" needs those assertions removed first.
+/// Since round 2 the per-case verification block (from the `R2 (Cursor C3)` comment down to the end of its
+/// `if let calls` check, including `let wave` and `let expected`) calls branch-only API (`scaleTicks`, `minVisible`,
+/// `upPeak`, `agentReadY`), so this file no longer compiles on main; re-rendering a "before" needs that whole block removed.
 final class BrainBarActivityScaleRenderTests: XCTestCase {
     enum Case: String, CaseIterable {
         /// The owner's moment: one save, one read by an agent and three session lines in one bucket (index 40), with
