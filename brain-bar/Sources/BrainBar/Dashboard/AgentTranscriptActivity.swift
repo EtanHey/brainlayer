@@ -120,10 +120,15 @@ enum AgentTranscriptActivity {
         codexFirstLine(url).range(of: codexSubagentMarker) != nil
     }
 
-    /// A rollout's first line (its `session_meta`), up to `codexFirstLineCap`.
+    /// A rollout's first line (its `session_meta`), up to `codexFirstLineCap`. Opened non-blocking and read only
+    /// when it is a regular file, so a FIFO at a rollout path cannot stall the sample (same guard as `advance`).
     static func codexFirstLine(_ url: URL) -> Data {
-        guard let handle = try? FileHandle(forReadingFrom: url) else { return Data() }
+        let fd = open(url.path, O_RDONLY | O_CLOEXEC | O_NONBLOCK)
+        guard fd >= 0 else { return Data() }
+        let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
         defer { try? handle.close() }
+        var st = stat()
+        guard fstat(fd, &st) == 0, st.st_mode & S_IFMT == S_IFREG else { return Data() }
         var line = Data()
         while line.count < codexFirstLineCap,
               let chunk = try? handle.read(upToCount: min(16 * 1024, codexFirstLineCap - line.count)),

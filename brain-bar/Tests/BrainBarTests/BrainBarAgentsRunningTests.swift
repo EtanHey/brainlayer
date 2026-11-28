@@ -397,6 +397,26 @@ import XCTest
         XCTAssertLessThan(Date().timeIntervalSince(start), 0.25, "must not wait for the rescue writer")
     }
 
+    /// CodeRabbit on #1904 (outside the diff): the recent-session count reads each rollout's first line through a
+    /// second open path, which blocked on a FIFO until a writer appeared.
+    func testAFIFOAtARolloutPathDoesNotBlockTheFirstLineRead() throws {
+        let path = home.appendingPathComponent("rollout-fifo-first-line.jsonl").path
+        XCTAssertEqual(mkfifo(path, 0o600), 0)
+        let rescued = DispatchSemaphore(value: 0)
+        let release = DispatchSemaphore(value: 0)
+        DispatchQueue.global().asyncAfter(deadline: .now() + 0.3) {
+            let fd = open(path, O_RDWR | O_NONBLOCK)
+            if fd >= 0 { _ = write(fd, "\n", 1) }
+            rescued.signal()
+            _ = release.wait(timeout: .now() + 2)
+            if fd >= 0 { close(fd) }
+        }
+        defer { release.signal(); _ = rescued.wait(timeout: .now() + 3) }
+        let start = Date()
+        XCTAssertEqual(AgentTranscriptActivity.codexFirstLine(URL(fileURLWithPath: path)), Data())
+        XCTAssertLessThan(Date().timeIntervalSince(start), 0.25, "must not wait for the rescue writer")
+    }
+
     func testSameSizeRewriteBeyondTheHeadInvalidatesTheTurn() throws {
         let padding = String(repeating: " ", count: 512)
         let path = try rollout(102, lines: [padding, event("task_started")])
