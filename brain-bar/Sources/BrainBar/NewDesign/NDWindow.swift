@@ -522,13 +522,27 @@ struct NDActivitySection: View {
                     .frame(width: Self.gutter, alignment: .leading).position(x: Self.gutter / 2, y: 53)
                 Text(Say.sessionLinesWord).font(NDType.captionMedium).foregroundStyle(ND.readText)
                     .frame(width: Self.gutter, alignment: .leading).position(x: Self.gutter / 2, y: 72)
+                // w315: each half's full-height count, level with its dashed line, so a height reads without hovering.
+                // Teal when reads by agents set the shared upper scale.
+                ForEach(Self.scaleTicks(wave, known: known), id: \.half) { tick in
+                    Text(NDFormat.integer(tick.count)).font(NDType.captionNumber)
+                        .foregroundStyle(tick.setByAgentReads ? ND.agentRead : ND.t3)
+                        .lineLimit(1).minimumScaleFactor(0.7)
+                        .frame(width: Self.gutter - 6, alignment: .leading)
+                        .position(x: (Self.gutter - 6) / 2, y: tick.y)
+                }
+                .transaction { $0.animation = nil }
                 // Council r2a finding 3: the hover reads the pointer in the plot's own coordinates, the same origin the
                 // rule is drawn from (before, an offset moved the drawing but not the hit area, 52 pt apart).
                 NDWaveform(wave: wave, size: .hero, nowTick: true, hover: shown(wave, cut: cut), noDataFrom: cut)
                     .frame(width: Self.plotWidth, height: Self.plotHeight + 8)
-                    .overlay {
-                        agentReadPlot(wave, cut: cut)
-                            .allowsHitTesting(false)
+                    // w315 R1 (N5): the reads-by-agents line sits under the bars, so a save bar is never crossed by it.
+                    .background {
+                        ZStack {
+                            scaleGuides(wave, known: known)
+                            agentReadPlot(wave, cut: cut)
+                        }
+                        .allowsHitTesting(false)
                     }
                     .contentShape(Rectangle())
                     .onContinuousHover(coordinateSpace: .local) { phase in
@@ -587,7 +601,8 @@ struct NDActivitySection: View {
             .padding(.top, 14)
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(NDModel.waveAccessibility(wave, minutes: store.range.minutes) + " "
-                + Say.agentReadsAccessibility(wave?.agentReads.map { $0.reduce(0, +) }))
+                + Say.agentReadsAccessibility(wave?.agentReads.map { $0.reduce(0, +) })
+                + Self.scaleAccessibility(wave, known: known))
             let axis = store.range.axis
             ZStack {
                 HStack {
@@ -645,16 +660,65 @@ struct NDActivitySection: View {
         return Say.upTo(NDFormat.integer(peak), minutes: max(1, minutes / counts.count))
     }
 
+    /// A reads-by-agents point's y: on the upper half's shared scale (`peak` is `NDWaveform.upPeak`), through the same
+    /// count-to-height rule as the bars, so one read stands exactly as high as one save.
     static func agentReadY(count: Int, peak: Int, canvas: CGSize) -> CGFloat {
         let axis = NDWaveform.baseline(canvas, nowTick: true).midY
-        return axis - CGFloat(count) / CGFloat(max(1, peak)) * NDWaveform.halves(.hero).up
+        return axis - NDWaveform.scaledHeight(count, peak: peak, extent: NDWaveform.halves(.hero).up,
+                                              minVisible: NDWaveform.minVisible(.hero))
     }
 
-    /// Read calls use a separate scale and a line, so they cannot be mistaken for ingested session lines.
+    /// w315: a half's scale cue: the count its full height stands for, and the y of that height in the canvas.
+    struct ScaleTick: Equatable {
+        enum Half: Equatable { case up, down }
+        let half: Half
+        let count: Int
+        let y: CGFloat
+        /// The upper half's peak came from reads by agents (more than any bucket's saves), so its number is theirs.
+        var setByAgentReads = false
+    }
+
+    /// w315: one tick per half that has anything in it: the upper half's (saves and reads by agents, one scale) at the
+    /// top of the tallest possible bar, the lower half's (session lines, scaled apart) at its foot. None while the
+    /// counts are not known; none for an empty half.
+    static func scaleTicks(_ wave: NDWave?, known: Bool = true, canvas: CGSize = NDActivitySection.canvas) -> [ScaleTick] {
+        guard known, let wave, wave.readable else { return [] }
+        let cy = NDWaveform.plot(canvas, nowTick: true).cy
+        let (up, down) = NDWaveform.halves(.hero)
+        var ticks: [ScaleTick] = []
+        let upPeak = NDWaveform.upPeak(wave), downPeak = NDWaveform.downPeak(wave)
+        if upPeak > 0 {
+            ticks.append(ScaleTick(half: .up, count: upPeak, y: cy - 0.5 - up, setByAgentReads: upPeak > wave.savesPeak))
+        }
+        if downPeak > 0 { ticks.append(ScaleTick(half: .down, count: downPeak, y: cy + 0.5 + down)) }
+        return ticks
+    }
+
+    static func scaleAccessibility(_ wave: NDWave?, known: Bool) -> String {
+        let ticks = scaleTicks(wave, known: known)
+        guard !ticks.isEmpty else { return "" }
+        return " " + Say.activityScaleAccessibility(up: ticks.first { $0.half == .up }.map { NDFormat.integer($0.count) },
+                                                     down: ticks.first { $0.half == .down }.map { NDFormat.integer($0.count) })
+    }
+
+    /// w315: a 1 pt dashed line at each half's full height, the line its gutter number names. Not confirmed (`known`
+    /// false, as whenever the plot is hatched), there are no numbers and no lines.
+    private func scaleGuides(_ wave: NDWave?, known: Bool) -> some View {
+        Canvas { context, size in
+            for tick in Self.scaleTicks(wave, known: known, canvas: size) {
+                var path = Path()
+                path.move(to: CGPoint(x: 0, y: tick.y))
+                path.addLine(to: CGPoint(x: size.width, y: tick.y))
+                context.stroke(path, with: .color(ND.hair2), style: StrokeStyle(lineWidth: 1, dash: [2, 3]))
+            }
+        }
+    }
+
+    /// Reads by agents are a line, so they cannot be mistaken for ingested session lines; they share the saves' scale.
     private func agentReadPlot(_ wave: NDWave?, cut: CGFloat?) -> some View {
         Canvas { context, size in
             guard let wave, wave.readable, let counts = wave.agentReads, !counts.isEmpty else { return }
-            let peak = max(1, counts.max() ?? 0)
+            let peak = NDWaveform.upPeak(wave)
             let pitch = size.width / CGFloat(counts.count)
             var path = Path()
             for (index, count) in counts.enumerated() {
