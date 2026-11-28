@@ -34,15 +34,7 @@ final class BrainBarTabsFollowFingersTests: XCTestCase {
             let medium = NSAttributedString(string: tab.title, attributes: [.font: NSFont.systemFont(ofSize: 13, weight: .medium)])
             XCTAssertGreaterThanOrEqual(frame.width, medium.size().width + 2 * metrics.padding, tab.title)
         }
-        // The range switch (still the system control) gets the same rule: one width per label, whatever is selected.
-        for title in NDRange.allCases.map(\.label) {
-            XCTAssertEqual(NDSegments.labelImage(title, count: 0, selected: true, size: 11).size.width,
-                           NDSegments.labelImage(title, count: 0, selected: false, size: 11).size.width, title)
-        }
-        for title in NDPage.allCases.map(\.title) {
-            XCTAssertEqual(NDSegments.labelImage(title, count: 2, selected: true, size: 13).size.width,
-                           NDSegments.labelImage(title, count: 2, selected: false, size: 13).size.width, title)
-        }
+        // The range switch is a GlassTabBar now too: BrainBarRangeSwitchGlassTests pins its slots.
     }
 
     /// Spec 1 and 2: between slots the pill's frame interpolates; at rest it is the slot's frame exactly.

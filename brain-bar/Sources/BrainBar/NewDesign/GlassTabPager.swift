@@ -69,8 +69,9 @@ struct GlassTabSpring: Equatable {
     /// Whether frames are being drawn now (a visible window). When not, a change of selection lands at once.
     var isLive: () -> Bool = { false }
     /// A selection the user made here (click, release, keyboard, dragged pill), delivered when the pill and pages come
-    /// to REST on it, never mid-motion: whatever the app does on a selection (publish, rebuild, refit) can never cost
-    /// a frame of the motion. Not called for `follow` (the app already has that selection).
+    /// to REST on it (or, with a `commitDistance`, as the settling pill arrives within it), never while it travels:
+    /// whatever the app does on a selection (publish, rebuild, refit) can never cost a frame of the motion. Not called
+    /// for `follow` (the app already has that selection).
     var onSelect: ((Int) -> Void)?
     /// The selection the app last has (reported through `onSelect`, or given by `follow`).
     private(set) var committed: Int
@@ -90,10 +91,17 @@ struct GlassTabSpring: Equatable {
     private var samples: [(time: Double, raw: Double)] = []
     private var lastTick: Double = 0
 
-    init(count: Int, selection: Int = 0, spring: GlassTabSpring = .standard) {
+    /// How close (in tabs) the settling pill must be to its target before `onSelect` hands the selection to the app.
+    /// nil (the default): only at rest. A plain selector whose app work is light (BrainBar's range switch) passes a
+    /// small distance, so the app answers as the pill visibly arrives, not ~0.2 s later when the spring's tail
+    /// reaches `restDistance`; nothing is handed over while the pill is still travelling. `onRest` stays at true rest.
+    let commitDistance: Double?
+
+    init(count: Int, selection: Int = 0, spring: GlassTabSpring = .standard, commitDistance: Double? = nil) {
         precondition(count > 0)
         self.count = count
         self.spring = spring
+        self.commitDistance = commitDistance
         let index = min(max(selection, 0), count - 1)
         self.selection = index
         committed = index
@@ -198,10 +206,19 @@ struct GlassTabSpring: Equatable {
         } else {
             progress = target + next.offset
             velocity = next.velocity
+            commitOnArrival()
         }
     }
 
     // MARK: Private
+
+    /// With a `commitDistance`: the settling pill has arrived (within it of the target), so the app gets the selection
+    /// now; the rest in `setPhase` then finds it already committed.
+    private func commitOnArrival() {
+        guard let commitDistance, selection != committed, abs(progress - Double(selection)) < commitDistance else { return }
+        committed = selection
+        onSelect?(selection)
+    }
 
     private func settle(to index: Int, velocity v: Double, at time: Double) {
         if phase == .resting { motionOrigin = selection }
@@ -435,11 +452,16 @@ struct GlassTabBar: View {
         .onAppear { pager.reduceMotion = reduceMotion }
         .onChange(of: reduceMotion) { _, value in pager.reduceMotion = value }
         .accessibilityRepresentation {
-            Picker(accessibilityLabel, selection: Binding(get: { pager.selection }, set: { pager.select($0, at: now()) })) {
+            Picker(accessibilityLabel, selection: accessibilitySelection) {
                 ForEach(tabs.indices, id: \.self) { i in Text(tabs[i].spokenLabel).tag(i) }
             }
             .pickerStyle(.segmented)
         }
+    }
+
+    /// What VoiceOver's picker reads and sets: the pager's selection; a pick goes through `select`, like a click.
+    var accessibilitySelection: Binding<Int> {
+        Binding(get: { pager.selection }, set: { pager.select($0, at: now()) })
     }
 
     @ViewBuilder private func glassPill(_ pill: CGRect) -> some View {
